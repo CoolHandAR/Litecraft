@@ -11,13 +11,14 @@
 #include "lc_block_defs.h"
 
 #include "perlin_noise/noise1234.h"
+#include "render/r_renderer.h"
 
 
 #define VERTICES_PER_CUBE 36
 #define FACES_PER_CUBE 6
 
 static unsigned global_vbo;
-
+static unsigned s_copy_vbo;
 
 static const vec3 CUBE_POSITION_VERTICES[] = 
 {
@@ -162,7 +163,6 @@ Vertex* genCubeVertices(LC_Chunk* const chunk)
 	bool drawn_faces[LC_CHUNK_WIDTH][LC_CHUNK_HEIGHT][LC_CHUNK_LENGTH][6];
 	memset(&drawn_faces, 0, sizeof(drawn_faces));
 
-
 	size_t vert_index = 0;
 
 	for (size_t x = 0; x < LC_CHUNK_WIDTH; x++)
@@ -192,15 +192,42 @@ Vertex* genCubeVertices(LC_Chunk* const chunk)
 
 
 				vec3 position;
-				position[0] = x + (float)chunk->global_position[0];
-				position[1] = y + (float)chunk->global_position[1];
-				position[2] = z + (float)chunk->global_position[2];
+				position[0] = x + chunk->global_position[0];
+				position[1] = y + chunk->global_position[1];
+				position[2] = z + chunk->global_position[2];
 
 				size_t max_x = x;
 				size_t max_y = y;
 				size_t max_z = z;
 
+				if (chunk->blocks[x][y][z].type == LC_BT__GLOWSTONE)
+				{
+					R_LightData light_data;
+					light_data.color[0] = 1;
+					light_data.color[1] = 0.84;
+					light_data.color[2] = 0;
 
+					light_data.constant = 0.4;
+					light_data.diffuse_intesity = 0.1;
+					light_data.linear = 0.09f;
+					light_data.quadratic = 0.032f;
+					light_data.ambient_intesity = 0.1;
+					light_data.position[0] = position[0] - 1;
+					light_data.position[1] = position[1] - 1;
+					light_data.position[2] = position[2] - 1;
+					light_data.radius = 777;
+
+					light_data.light_type = LT__POINT;
+
+					r_registerLightSource(light_data);
+
+				}
+				
+				/*
+				*~~~~~~~~~~~~~~
+				*MERGE FACES
+				*~~~~~~~~~~~~~~
+				*/
 				//Check if we need to find max y
 				if (!skip_back || !skip_front || !skip_left || !skip_right)
 				{
@@ -674,7 +701,6 @@ Vertex* genCubeVertices(LC_Chunk* const chunk)
 		}
 	}
 	
-	chunk->flags |= LC_CF__LOADED_VERTEX_DATA;
 	chunk->vertex_count = vert_index;
 
 	return vertices;
@@ -741,7 +767,7 @@ void LC_Chunk_CreateEmpty(int p_gX, int p_gY, int p_gZ, LC_Chunk* chunk)
 	chunk->global_position[2] = p_gZ;
 }
 
-void LC_Chunk_Generate(int p_gX, int p_gY, int p_gZ, struct osn_context* osn_ctx, LC_Chunk* chunk, int chunk_index, unsigned vbo, unsigned* vertex_count)
+void LC_Chunk_Generate(int p_gX, int p_gY, int p_gZ, struct osn_context* osn_ctx, LC_Chunk* chunk, int chunk_index, unsigned vbo, unsigned coby_vbo, unsigned* vertex_count)
 {
 	LC_Chunk_CreateEmpty(p_gX, p_gY, p_gZ, chunk);
 
@@ -766,6 +792,25 @@ void LC_Chunk_Generate(int p_gX, int p_gY, int p_gZ, struct osn_context* osn_ctx
 					chunk->alive_blocks++;
 				}
 				
+				if (chunk->blocks[x][y][z].type == LC_BT__GLOWSTONE)
+				{
+					R_LightData light_data;
+					light_data.color[0] = 1;
+					light_data.color[1] = 1;
+					light_data.color[2] = 1;
+
+					light_data.constant = 1;
+					light_data.diffuse_intesity = 0.1;
+					light_data.linear = 0;
+					light_data.ambient_intesity = 1;
+					light_data.position[0] = x + p_gX;
+					light_data.position[1] = y + p_gY;
+					light_data.position[2] = z + p_gZ;
+
+					light_data.light_type = LT__POINT;
+
+					r_registerLightSource(light_data);
+				}
 				
 
 			}
@@ -775,20 +820,18 @@ void LC_Chunk_Generate(int p_gX, int p_gY, int p_gZ, struct osn_context* osn_ctx
 		}
 	}
 
+	if (chunk->alive_blocks == 0)
+		return;
+
 	Vertex* vertices = genCubeVertices(chunk);
 
 	//glBindVertexArray(chunk->vao);
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
-	//Vertex* buffer = glMapBufferRange(GL_ARRAY_BUFFER, *vertex_count * sizeof(Vertex), sizeof(Vertex) * chunk->vertex_count, GL_MAP_WRITE_BIT);
-
-	//memcpy(buffer, vertices, sizeof(Vertex) * chunk->vertex_count);
 
 	global_vbo = vbo;
+	s_copy_vbo = coby_vbo;
 
-	//glFlushMappedBufferRange(GL_ARRAY_BUFFER, 0, sizeof(Vertex) * chunk->vertex_count);
-	
-	//glUnmapBuffer(GL_ARRAY_BUFFER);
 
 	glBufferSubData(GL_ARRAY_BUFFER, *vertex_count * sizeof(Vertex), sizeof(Vertex) * chunk->vertex_count, vertices);
 
@@ -803,10 +846,6 @@ void LC_Chunk_Generate(int p_gX, int p_gY, int p_gZ, struct osn_context* osn_ctx
 
 void LC_Chunk_Update(LC_Chunk* const p_chunk, int* last_index)
 {
-	//Np need to update
-	//if (!p_chunk->dirty_bit)
-	//	return;
-
 	size_t prev_vertex_count = p_chunk->vertex_count;
 
 	Vertex* vertices = genCubeVertices(p_chunk);
@@ -820,21 +859,23 @@ void LC_Chunk_Update(LC_Chunk* const p_chunk, int* last_index)
 	if (prev_vertex_count == 0 && p_chunk->vertex_start == 0)
 	{
 		glNamedBufferSubData(global_vbo, *last_index * sizeof(Vertex), p_chunk->vertex_count * sizeof(Vertex), vertices);
-		glCopyNamedBufferSubData(global_vbo, 2, *last_index * sizeof(Vertex), *last_index * sizeof(Vertex), p_chunk->vertex_count * sizeof(Vertex));
+		//copy to copy vbo
+		glCopyNamedBufferSubData(global_vbo, s_copy_vbo, *last_index * sizeof(Vertex), *last_index * sizeof(Vertex), p_chunk->vertex_count * sizeof(Vertex));
 		p_chunk->vertex_start = *last_index;
 		*last_index += p_chunk->vertex_count;
 	}
 	//else we update the data
 	else
 	{
-		int size_to_move = (*last_index - (p_chunk->vertex_start + prev_vertex_count)) * sizeof(Vertex);
+		int64_t size_to_move = (*last_index - (p_chunk->vertex_start + prev_vertex_count)) * sizeof(Vertex);
 
 		assert(size_to_move >= 0);
 		
 		//move the data of the others chunks forward or backward
 		if (prev_vertex_count != p_chunk->vertex_count)
 		{
-			glCopyNamedBufferSubData(2, global_vbo, (p_chunk->vertex_start + prev_vertex_count) * sizeof(Vertex), (p_chunk->vertex_start + p_chunk->vertex_count) * sizeof(Vertex), size_to_move);
+			//copy from copy vbo to the main vbo
+			glCopyNamedBufferSubData(s_copy_vbo, global_vbo, (p_chunk->vertex_start + prev_vertex_count) * sizeof(Vertex), (p_chunk->vertex_start + p_chunk->vertex_count) * sizeof(Vertex), size_to_move);
 			
 			if (prev_vertex_count > p_chunk->vertex_count)
 			{
@@ -846,32 +887,16 @@ void LC_Chunk_Update(LC_Chunk* const p_chunk, int* last_index)
 				unsigned remaineder = p_chunk->vertex_count - prev_vertex_count;
 				*last_index += remaineder;
 			}
-			glCopyNamedBufferSubData(global_vbo, 2, (p_chunk->vertex_start + p_chunk->vertex_count) * sizeof(Vertex), (p_chunk->vertex_start + p_chunk->vertex_count) * sizeof(Vertex), size_to_move);
+			glCopyNamedBufferSubData(global_vbo, s_copy_vbo, (p_chunk->vertex_start + p_chunk->vertex_count) * sizeof(Vertex), (p_chunk->vertex_start + p_chunk->vertex_count) * sizeof(Vertex), size_to_move);
 		}
 		//update the vertex data
 		glNamedBufferSubData(global_vbo, p_chunk->vertex_start * sizeof(Vertex), p_chunk->vertex_count * sizeof(Vertex), vertices);
-		glNamedBufferSubData(2, p_chunk->vertex_start * sizeof(Vertex), p_chunk->vertex_count * sizeof(Vertex), vertices);
+		glNamedBufferSubData(s_copy_vbo, p_chunk->vertex_start * sizeof(Vertex), p_chunk->vertex_count * sizeof(Vertex), vertices);
 	
 	}
-
-	//glBindVertexArray(p_chunk->vao);
-	//glBindBuffer(GL_ARRAY_BUFFER, p_chunk->vbo);
-
-	//glBufferData(GL_ARRAY_BUFFER, p_chunk->vertex_count * sizeof(Vertex), &vertices[0], GL_STATIC_DRAW);
-
 	free(vertices);
 }
 
-void LC_Chunk_LoadVertexData(LC_Chunk* p_chunk)
-{
-
-
-}
-
-void LC_Chunk_UnloadVertexData(LC_Chunk* p_chunk)
-{
-	
-}
 
 void LC_Chunk_Destroy(LC_Chunk* chunk)
 {

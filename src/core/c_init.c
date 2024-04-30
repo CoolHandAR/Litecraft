@@ -6,9 +6,10 @@
 
 #include "c_console.h"
 #include "c_cvars.h"
+#include "render/r_renderer.h"
 
-static int INIT_WINDOW_WIDTH = 800;
-static int INIT_WINDOW_HEIGHT = 600;
+static int INIT_WINDOW_WIDTH = 1024;
+static int INIT_WINDOW_HEIGHT = 720;
 static const char* WINDOW_NAME = "My window";
 
 extern int s_InitSoundEngine();
@@ -47,6 +48,7 @@ bool C_initGlfw()
 	glfwSetKeyCallback(window, C_kbCallback);
 	glfwSetCharCallback(window, C_charCallback);
 	glfwSwapInterval(1); //vsync;
+	
 
 	glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
@@ -87,6 +89,7 @@ bool C_init()
 	if (!C_initGlad()) return false;
 	if (!s_InitSoundEngine()) return false;
 	if(!C_CvarCoreInit()) return false;
+	if (!r_Init()) return false;
 
 	C_ConsoleInit();
 

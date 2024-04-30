@@ -7,6 +7,8 @@
 	Hardcoded block data. Used for rendering, collisions. 
 	Isn't very practical, but pretty scalable and error free :)
 	The arrays are index by the order of the LC_BlockType Enums
+	LiteCraft only supports blocks that are singular cuboids
+	So no custom types like chairs or beds
 */
 
 #define LC_BLOCK_ATLAS_WIDTH 1024
@@ -26,7 +28,8 @@ typedef enum LC_BlockType
 	LC_BT__TREELEAVES,
 	LC_BT__WATER,
 	LC_BT__GLASS,
-	LC_BT__FLOWER
+	LC_BT__FLOWER,
+	LC_BT__GLOWSTONE
 
 } LC_BlockType;
 
@@ -133,6 +136,15 @@ static const LC_Block_Texture_Offset_Data LC_BLOCK_TEX_OFFSET_DATA[] =
 	0, 0,
 	0, 0,
 
+	//GLOWSTONE
+	LC_BT__GLOWSTONE,
+	25, 3,
+	25, 3,
+	25, 3,
+	25, 3,
+	25, 3,
+	25, 3,
+
 };
 
 typedef struct LC_Block_Collision_Data
@@ -181,7 +193,11 @@ static const LC_Block_Collision_Data LC_BLOCK_COLLISION_DATA[] =
 
 	//FLOWER
 	LC_BT__FLOWER,
-	false
+	false,
+
+	//GLOWSTONE
+	LC_BT__GLOWSTONE,
+	true,
 };
 
 typedef struct LC_Block_Material_Data

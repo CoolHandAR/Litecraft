@@ -1,6 +1,18 @@
 #include "lc_player.h"
 
 
+#define PLAYER_AABB_WIDTH 1.1
+#define PLAYER_AABB_HEIGHT 3
+#define PLAYER_AABB_LENGTH 1.1
+
+#define PLAYER_MAX_SPEED 100
+#define PLAYER_MAX_DUCK_SPEED 12
+#define PLAYER_ACCEL 1
+#define PLAYER_AIR_ACCEL 100
+#define PLAYER_JUMP_HEIGHT 100
+
+#define PLAYER_ACTION_FREQ 0.4f
+
 static LC_Player s_player;
 R_Camera* cam_ptr;
 
@@ -33,6 +45,18 @@ static void initUiSprites()
 	Sprite_setTextureRegion(&s_uiSprites.hotbar, texture_region);
 	s_uiSprites.hotbar.scale[0] = 2;
 	s_uiSprites.hotbar.scale[1] = 2;
+	vec2 scale;
+	scale[0] = 1.8;
+	scale[1] = 2;
+
+	vec3 position;
+	position[0] = 400;
+	position[1] = 550;
+	position[2] = 23;
+
+	Sprite_setScale(&s_uiSprites.hotbar, scale);
+	Sprite_setPosition(&s_uiSprites.hotbar, position);
+
 
 	Sprite_setTexture(&s_uiSprites.hotbar_highlight, &g_gui_atlas_texture);
 
@@ -51,11 +75,14 @@ static void initUiSprites()
 	texture_region.y = 0;
 	texture_region.width = 176;
 	texture_region.height = 165;
+	position[0] = 454;
+	position[1] = 550;
+	position[2] = 22;
 	s_uiSprites.inventory.scale[0] = 2;
 	s_uiSprites.inventory.scale[1] = 2;
 	s_uiSprites.inventory.flipped_y = true;
 	Sprite_setTextureRegion(&s_uiSprites.inventory, texture_region);
-	
+	Sprite_setPosition(&s_uiSprites.inventory, position);
 }
 
 static void drawGUI()
@@ -64,13 +91,13 @@ static void drawGUI()
 	pos[0] = 240 + (40 * s_player.hotbar_index);
 	pos[1] = 548;
 
-	r_DrawScreenSprite(pos, &s_uiSprites.hotbar_highlight);
+	//r_DrawScreenSprite(&s_uiSprites.hotbar_highlight);
 	
 	R_Sprite sprite;
 	sprite.scale[0] = 2;
 	sprite.scale[1] = 2;
 	sprite.rotation = 0;
-	Sprite_setTexture(&sprite, &g_block_atlas);
+	//Sprite_setTexture(&sprite, &g_block_atlas);
 
 	M_Rect2Di tex_Region;
 	tex_Region.width = 16;
@@ -86,22 +113,19 @@ static void drawGUI()
 
 		tex_Region.x = (tex_data.top_face[0] * 16) + 16;
 		tex_Region.y = -(tex_data.top_face[1] * 16);
-		Sprite_setTextureRegion(&sprite, tex_Region);
+		//Sprite_setTextureRegion(&sprite, tex_Region);
 
-		r_DrawScreenSprite(pos, &sprite);
+		//r_DrawScreenSprite(&sprite);
 
 		pos[0] += 40;
 	}
 
 
-	pos[0] = 400;
-	pos[1] = 550;
 
-	r_DrawScreenSprite(pos, &s_uiSprites.hotbar);
+	//r_DrawScreenSprite(&s_uiSprites.hotbar);
 
-	pos[0] = 400;
-	pos[1] = 250;
-	//r_DrawScreenSprite(pos, &s_uiSprites.inventory);
+
+	//r_DrawScreenSprite(&s_uiSprites.inventory);
 	
 
 }
@@ -211,11 +235,13 @@ void LC_Player_Create(LC_World* world, vec3 pos)
 
 	player.k_body = PhysWorld_AddKinematicBody(world->phys_world, &aabb, player.handle);
 	player.k_body->max_speed = PLAYER_MAX_SPEED;
+	player.k_body->max_ducking_speed = PLAYER_MAX_DUCK_SPEED;
 	player.k_body->accel = PLAYER_ACCEL;
-	player.k_body->gravity_free = true;
+	player.k_body->air_accel = PLAYER_AIR_ACCEL;
 	player.k_body->jump_height = PLAYER_JUMP_HEIGHT;
-	player.k_body->collidable = true;
 	player.k_body->force_update_on_frame = true;
+
+	player.k_body->flags = PF__Collidable | PF__ForceUpdateOnFrame;
 
 	player.free_fly = true;
 	player.held_block_type = LC_BT__STONE;
@@ -228,7 +254,7 @@ void LC_Player_Create(LC_World* world, vec3 pos)
 	player.hotbar_slots[5] = LC_BT__TREELEAVES;
 	player.hotbar_slots[6] = LC_BT__WATER;
 	player.hotbar_slots[7] = LC_BT__GLASS;
-	player.hotbar_slots[8] = LC_BT__FLOWER;
+	player.hotbar_slots[8] = LC_BT__GLOWSTONE;
 	player.hotbar_index = 0;
 
 	initUiSprites();
@@ -250,19 +276,28 @@ void LC_Player_Update(R_Camera* const cam, float delta)
 
 	if (s_player.free_fly)
 	{
-		s_player.k_body->gravity_free = true;
+		s_player.k_body->flags = s_player.k_body->flags & ~PF__AffectedByGravity;
 	}
 	else
 	{
-		s_player.k_body->gravity_free = false;
+		s_player.k_body->flags |= PF__AffectedByGravity;
 	}
 
 	//printf("%f \n", s_player.k_body->box.position[1]);
 
 	//Update Camera position
 	cam->data.position[0] = s_player.k_body->box.position[0] + (float)PLAYER_AABB_WIDTH * 0.5f;
-	cam->data.position[1] = s_player.k_body->box.position[1] + (float)PLAYER_AABB_HEIGHT * 0.5f;
+	cam->data.position[1] = s_player.k_body->box.position[1] + s_player.k_body->box.height * 0.5f;
 	cam->data.position[2] = s_player.k_body->box.position[2] + (float)PLAYER_AABB_LENGTH * 0.5f;
+
+	if (s_player.k_body->flags & PF__Ducking)
+	{
+		s_player.k_body->box.height = (float)PLAYER_AABB_HEIGHT * 0.31f;
+	}
+	else
+	{
+		s_player.k_body->box.height = (float)PLAYER_AABB_HEIGHT;
+	}
 
 	memset(s_player.mouse_click, 0, sizeof(s_player.mouse_click));
 }
@@ -271,6 +306,10 @@ void LC_Player_ProcessInput(GLFWwindow* const window, R_Camera* const cam)
 	float yaw_in_radians = glm_rad(cam->data.yaw);
 	float cos_yaw = cos(yaw_in_radians);
 	float sin_yaw = sin(yaw_in_radians);
+
+	s_player.k_body->view_dir[0] = -cos_yaw;
+	s_player.k_body->view_dir[1] = cam->data.camera_front[1];
+	s_player.k_body->view_dir[2] = -sin_yaw;
 
 	//MOVING
 	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
@@ -337,6 +376,14 @@ void LC_Player_ProcessInput(GLFWwindow* const window, R_Camera* const cam)
 	{
 		s_player.mouse_click[1] = true;
 	}
+	if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
+	{
+		s_player.k_body->flags |= PF__Ducking;
+	}
+	else
+	{
+		//s_player.k_body->flags = s_player.k_body->flags & ~PF__Ducking;
+	}
 	//CHANGE HELD BLOCK TYPE
 	//HOTBAR BUTTONS
 	if (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS)
@@ -389,7 +436,15 @@ void LC_Player_ProcessInput(GLFWwindow* const window, R_Camera* const cam)
 	{
 		s_player.free_fly = !s_player.free_fly;
 	}
-
+	if (glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS)
+	{
+		s_player.k_body->flags |= PF__Collidable;
+	}
+	if (glfwGetKey(window, GLFW_KEY_H) == GLFW_PRESS)
+	{
+		s_player.k_body->flags = s_player.k_body->flags & ~PF__Collidable;
+	}
+	
 }
 
 void LC_Player_getPos(vec3 dest)

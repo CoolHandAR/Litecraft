@@ -30,20 +30,25 @@ R_Mesh Mesh_Init(dynamic_array* p_vertices, dynamic_array* p_indices, dynamic_ar
 	Vertex* data = mesh.vertices->data;
 	uint32_t* indices = mesh.indices->data;
 
-	glBufferData(GL_ARRAY_BUFFER, mesh.vertices->elements_size * sizeof(Vertex), &data[0], GL_STATIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, mesh.vertices->elements_size * sizeof(ModelVertex), &data[0], GL_STATIC_DRAW);
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER, mesh.indices->elements_size * sizeof(uint32_t), &indices[0], GL_STATIC_DRAW);
 
-	const int STRIDE_SIZE = sizeof(Vertex);
+	const int STRIDE_SIZE = sizeof(ModelVertex);
 
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, STRIDE_SIZE, (void*)(offsetof(Vertex, position)));
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, STRIDE_SIZE, (void*)(offsetof(ModelVertex, position)));
 	glEnableVertexAttribArray(0);
 
-	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, STRIDE_SIZE, (void*)(offsetof(Vertex, normal)));
+	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, STRIDE_SIZE, (void*)(offsetof(ModelVertex, normal)));
 	glEnableVertexAttribArray(1);
 
-	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, STRIDE_SIZE, (void*)(offsetof(Vertex, tex_coords)));
+	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, STRIDE_SIZE, (void*)(offsetof(ModelVertex, tex_coords)));
 	glEnableVertexAttribArray(2);
 
+	glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, STRIDE_SIZE, (void*)(offsetof(ModelVertex, tangent)));
+	glEnableVertexAttribArray(3);
+
+	glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, STRIDE_SIZE, (void*)(offsetof(ModelVertex, bitangent)));
+	glEnableVertexAttribArray(4);
 
 	return mesh;
 }

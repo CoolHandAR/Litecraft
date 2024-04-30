@@ -2,7 +2,9 @@
 
 #include <assert.h>
 
-void _updateTexCoords(R_Sprite* sprite)
+#include <string.h>
+
+static void _updateTexCoords(R_Sprite* sprite)
 {
 	 float rect_width = sprite->texture_region.width;
 	 float rect_height = sprite->texture_region.height;
@@ -37,6 +39,26 @@ void _updateTexCoords(R_Sprite* sprite)
 	sprite->texture_coords[3][1] = bottom / texture_height;
 }
 
+static void _updateModelMatrix(R_Sprite* sprite)
+{
+	vec3 scaled_size;
+	Sprite_getSize(sprite, scaled_size);
+	scaled_size[2] = 0;
+
+	Math_Model(sprite->position, scaled_size, sprite->rotation, sprite->model_matrix);
+}
+
+void Sprite_Init(R_Sprite* sprite, vec3 position, vec2 scale, float rotation, R_Texture* tex)
+{
+	memset(sprite, 0, sizeof(R_Sprite));
+
+	Sprite_setTexture(sprite, tex);
+	glm_vec2_copy(scale, sprite->scale);
+	glm_vec3_copy(position, sprite->position);
+
+	_updateModelMatrix(sprite);
+}
+
 void Sprite_setTexture(R_Sprite* sprite, R_Texture* tex)
 {
 	sprite->texture = tex;
@@ -52,11 +74,23 @@ void Sprite_setTexture(R_Sprite* sprite, R_Texture* tex)
 
 void Sprite_setTextureRegion(R_Sprite* sprite, M_Rect2Di tex_region)
 {
-	assert(sprite->texture || sprite->texture->id > 0&& "Sprite Texture must be set \n");
+	assert(sprite->texture && sprite->texture->id > 0 && "Sprite Texture must be set \n");
 
 	sprite->texture_region = tex_region;
 
 	_updateTexCoords(sprite);
+}
+
+void Sprite_setPosition(R_Sprite* sprite, vec3 position)
+{	
+	glm_vec3_copy(position, sprite->position);
+
+	_updateModelMatrix(sprite);
+}
+
+void Sprite_setScale(R_Sprite* sprite, vec2 scale)
+{
+	glm_vec2_copy(scale, sprite->scale);
 }
 
 void Sprite_getSize(R_Sprite* sprite, vec2 dest)

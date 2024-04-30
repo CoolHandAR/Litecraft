@@ -62,6 +62,18 @@ inline void Math_mat4_mulv2(mat4 m, vec2 v, float third, float last, vec2 dest)
 	glm_vec2(res, dest);
 }
 
+inline bool Math_vec3_is_zero(vec3 v)
+{
+	for (int i = 0; i < 3; i++)
+	{
+		if (v[i] != 0)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 void Math_calcLightSpaceMatrix(const float p_cameraFov, const float p_screenWidth, const float p_screenHeight, const float p_nearPlane, const float p_farPlane, const float p_zMult,
 	vec3 p_lightDir, mat4 p_cameraView, mat4 dest);
 

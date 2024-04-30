@@ -6,15 +6,6 @@
 #include <GLFW/glfw3.h>
 #include "render/r_camera.h"
 
-#define PLAYER_AABB_WIDTH 1
-#define PLAYER_AABB_HEIGHT 3
-#define PLAYER_AABB_LENGTH 1
-
-#define PLAYER_MAX_SPEED 300
-#define PLAYER_ACCEL 2000
-#define PLAYER_JUMP_HEIGHT 100
-
-#define PLAYER_ACTION_FREQ 0.4f
 
 #define PLAYER_HOTBAR_SLOTS 9
 #define PLAYER_INVENTORY_SLOTS 27

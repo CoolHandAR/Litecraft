@@ -2,7 +2,6 @@
 
 #include <string.h>
 #include <stdio.h>
-#include "u_gl.h"
 
 static const char* GL_sourceChar(GLenum source)
 {
@@ -64,17 +63,4 @@ void GLmessage_callback(GLenum source, GLenum type, GLuint id, GLenum severity, 
 
 	printf("%s, %s, %s, %i, %s \n", src_buf, type_buf, sever_buf, id, message);
 	
-}
-
-GL_UniformBuffer GL_UBufferCreate(int p_bindingIndex)
-{
-	GL_UniformBuffer ubo;
-
-	glGenBuffers(1, &ubo);
-	glBindBuffer(GL_UNIFORM_BUFFER, ubo);
-	glBufferData(GL_UNIFORM_BUFFER, 1, NULL, GL_STATIC_DRAW);
-	glBindBuffer(GL_UNIFORM_BUFFER, 0);
-	glBindBufferRange(GL_UNIFORM_BUFFER, p_bindingIndex, ubo, 0, 1);
-
-	return ubo;
 }

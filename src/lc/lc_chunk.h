@@ -12,8 +12,6 @@
 
 #define LC_BLOCK_STARTING_HP 7
 
-#define LC_CF__DIRTY_BIT 0x2
-#define LC_CF__LOADED_VERTEX_DATA 0x4
 
 
 typedef struct LC_Block
@@ -41,9 +39,7 @@ typedef struct LC_Chunk
 } LC_Chunk;
 
 void LC_Chunk_CreateEmpty(int p_gX, int p_gY, int p_gZ, LC_Chunk* chunk);
-void LC_Chunk_Generate(int p_gX, int p_gY, int p_gZ, struct osn_context* osn_ctx, LC_Chunk* chunk, int chunk_index, unsigned vbo, unsigned* vertex_count);
+void LC_Chunk_Generate(int p_gX, int p_gY, int p_gZ, struct osn_context* osn_ctx, LC_Chunk* chunk, int chunk_index, unsigned vbo, unsigned coby_vbo, unsigned* vertex_count);
 void LC_Chunk_Update(LC_Chunk* const p_chunk, int* last_index);
-void LC_Chunk_LoadVertexData(LC_Chunk* p_chunk);
-void LC_Chunk_UnloadVertexData(LC_Chunk* p_chunk);
 void LC_Chunk_Destroy(LC_Chunk* chunk);
 

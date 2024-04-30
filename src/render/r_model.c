@@ -89,7 +89,7 @@ static dynamic_array* loadMaterialTextures(R_Model* const p_model, struct aiMate
 
 static R_Mesh processMesh(R_Model* const p_model, struct aiMesh* p_mesh, const struct aiScene* p_scene)
 {
-	dynamic_array* vertices = dA_INIT(Vertex, 0);
+	dynamic_array* vertices = dA_INIT(ModelVertex, 0);
 	dynamic_array* indices = dA_INIT(uint32_t, 0);
 	dynamic_array* textures = dA_INIT(TextureData, 0);
 
@@ -98,7 +98,7 @@ static R_Mesh processMesh(R_Model* const p_model, struct aiMesh* p_mesh, const s
 
 	for (unsigned i = 0; i < p_mesh->mNumVertices; i++)
 	{
-		Vertex vertex;
+		ModelVertex vertex;
 
 		vertex.position[0] = p_mesh->mVertices[i].x;
 		vertex.position[1] = p_mesh->mVertices[i].y;
@@ -122,7 +122,19 @@ static R_Mesh processMesh(R_Model* const p_model, struct aiMesh* p_mesh, const s
 			vertex.tex_coords[0] = 0.0f;
 			vertex.tex_coords[1] = 0.0f;
 		}
-		Vertex* ptr = dA_emplaceBack(vertices);
+		if (p_mesh->mTangents)
+		{
+			vertex.tangent[0] = p_mesh->mTangents[i].x;
+			vertex.tangent[1] = p_mesh->mTangents[i].y;
+			vertex.tangent[2] = p_mesh->mTangents[i].z;
+		}
+		if (p_mesh->mBitangents)
+		{
+			vertex.bitangent[0] = p_mesh->mBitangents[i].x;
+			vertex.bitangent[1] = p_mesh->mBitangents[i].y;
+			vertex.bitangent[2] = p_mesh->mBitangents[i].z;
+		}
+		ModelVertex* ptr = dA_emplaceBack(vertices);
 		*ptr = vertex;
 	}
 
@@ -179,7 +191,7 @@ static R_Mesh processMesh(R_Model* const p_model, struct aiMesh* p_mesh, const s
 
 		*ptr = array[i];
 	}
-
+	
 	//clean up
 	dA_Destruct(diffuseMaps);
 	dA_Destruct(specularMaps);

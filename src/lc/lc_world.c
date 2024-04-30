@@ -3,6 +3,7 @@
 #define STB_PERLIN_IMPLEMENTATION
 #include "stb_perlin/stb_perlin.h"
 
+
 #include <glad/glad.h>
 
 #include "render/r_renderer.h"
@@ -24,6 +25,7 @@ typedef struct LC_ChunksInfo
 
 static void _updateClouds(float delta)
 {
+
 	for (int i = 0; i < LC_WORLD_MAX_CLOUDS; i++)
 	{
 		current_world->clouds[i][0] += 0.01;
@@ -143,6 +145,7 @@ LC_World* LC_World_Generate()
 	
 	//Reserve for faster generation
 	dA_reserve(world->chunks->pool, LC_WORLD_INIT_TOTAL_SIZE);
+	//dA_resize(world->chunks->pool, LC_WORLD_INIT_TOTAL_SIZE);
 
 	current_world = world;
 
@@ -207,20 +210,21 @@ LC_World* LC_World_Generate()
 			y_offset = 0;
 			for (int y = 0; y < LC_WORLD_INIT_HEIGHT; y++)
 			{
-				//emplace the chunk in the array
-				int chunk_index = Object_Pool_Request(world->chunks);
-				LC_Chunk* chunk_array = world->chunks->pool->data;
-				LC_Chunk* chunk = &chunk_array[chunk_index];
-				//set the index
-				world->chunk_indexes[x][y][z] = chunk_index;
+				LC_Chunk stack_chunk;
 
 				//Generate the chunk
-				LC_Chunk_Generate(x_offset, y_offset, z_offset, ctx, chunk, chunk_index, world->vbo, &world->vertex_count_index);
+				LC_Chunk_Generate(x_offset, y_offset, z_offset, ctx, &stack_chunk, 0, world->vbo, world->copy_vbo, &world->vertex_count_index);
 				
-				if (chunk->alive_blocks == 0)
+				if (stack_chunk.alive_blocks > 0)
 				{
-					LC_Chunk_Destroy(chunk);
-					Object_Pool_Free(world->chunks, chunk_index, true);
+					//emplace the chunk in the array
+					int chunk_index = Object_Pool_Request(world->chunks);
+					LC_Chunk* chunk_array = world->chunks->pool->data;
+					LC_Chunk* chunk = &chunk_array[chunk_index];
+					//set the index
+					world->chunk_indexes[x][y][z] = chunk_index;
+
+					*chunk = stack_chunk;
 				}
 
 				y_offset += LC_CHUNK_HEIGHT;
@@ -1040,7 +1044,6 @@ void LC_World_unloadFarAwayChunks(vec3 player_pos, float max_distance)
 
 		float distance = glm_ivec3_distance(p, chunk->global_position);
 
-		int loaded_flag = chunk->flags & LC_CF__LOADED_VERTEX_DATA;
 
 		if (distance < max_distance)
 		{

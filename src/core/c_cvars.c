@@ -4,14 +4,17 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <stdbool.h>
+#include <stdio.h>
+
+#include "utility/u_file.h"
+#include <assert.h>
 
 /*
 	Code inspired by quake3 cvar system
 */
 
-
 #define MAX_CVARS 1024
-
+#define MAX_CVAR_CHAR_SIZE 256
 #define FILE_HASH_SIZE 256
 
 typedef struct C_CvarCore
@@ -21,14 +24,15 @@ typedef struct C_CvarCore
 
 	C_Cvar* hash_table[FILE_HASH_SIZE];
 	C_Cvar* next;
+
+	char* empty_string;
 } C_CvarCore;
 
-static const char* s_empty_string;
-static const char* s_number_string;
 static C_CvarCore s_cvarCore;
 
 static void _updateCvarNumValues(C_Cvar* p_cvar)
 {
+	//check for boolean types
 	if (!_strcmpi(p_cvar->str_value, "true"))
 	{
 		p_cvar->int_value = 1;
@@ -36,13 +40,26 @@ static void _updateCvarNumValues(C_Cvar* p_cvar)
 	}
 	else if (!_strcmpi(p_cvar->str_value, "false"))
 	{
-		p_cvar->int_value = 1;
-		p_cvar->float_value = 1;
+		p_cvar->int_value = 0;
+		p_cvar->float_value = 0;
 	}
 	else
 	{
+		//both of these functions return 0 if they can't convert the values to a number
 		p_cvar->int_value = strtol(p_cvar->str_value, (char**)NULL, 10);
 		p_cvar->float_value = strtod(p_cvar->str_value, (char**)NULL);
+
+		//limit values
+		if (p_cvar->float_value > p_cvar->max_value)
+		{
+			p_cvar->float_value = p_cvar->max_value;
+			p_cvar->int_value = p_cvar->max_value;
+		}
+		else if (p_cvar->float_value < p_cvar->min_value)
+		{
+			p_cvar->float_value = p_cvar->min_value;
+			p_cvar->int_value = p_cvar->min_value;
+		}
 	}
 }
 
@@ -64,6 +81,14 @@ static bool _validateString(const char *p_string)
 	{
 		return false;
 	}
+	if (strchr(p_string, '\n'))
+	{
+		return false;
+	}
+	if (strlen(p_string) >= MAX_CVAR_CHAR_SIZE)
+	{
+		return false;
+	}
 
 	return true;
 }
@@ -74,7 +99,7 @@ static long _genHashValueForCvar(const char *p_string)
 	long hash = 0;
 	char letter = 0;
 
-	while (p_string[i] != '0')
+	while (p_string[i] != '\0')
 	{
 		letter = tolower(p_string[i]);
 		hash += (long)(letter) * (i + 119);
@@ -89,18 +114,10 @@ static char* _safeCopyString(const char* p_source)
 {
 	char* out;
 
-	if (!p_source[0])
+	if (!p_source)
 	{
-		return s_empty_string;
+		return s_cvarCore.empty_string;
 	}
-	//else if (!p_source[1])
-	//{
-	//	if (p_source[0] >= '0' && p_source[0] <= '9')
-	//	{
-	//		return s_number_string;
-	//	}
-	//}
-
 	out = malloc(strlen(p_source) + 1);
 	if (out)
 	{
@@ -108,7 +125,7 @@ static char* _safeCopyString(const char* p_source)
 		return out;
 	}
 
-	return s_empty_string;
+	return s_cvarCore.empty_string;
 }
 
 static C_Cvar* _findCvar(const char* p_cvarName)
@@ -129,7 +146,7 @@ static C_Cvar* _findCvar(const char* p_cvarName)
 	return NULL;
 }
 
-static C_Cvar* _createCvar(const char* p_name, const char* p_value, int p_flags)
+static C_Cvar* _createCvar(const char* p_name, const char* p_value, const char* p_helpText, int p_flags, float p_minValue, float p_maxValue)
 {
 	if (s_cvarCore.index_count >= MAX_CVARS)
 	{
@@ -156,6 +173,11 @@ static C_Cvar* _createCvar(const char* p_name, const char* p_value, int p_flags)
 	var->name = _safeCopyString(p_name);
 	var->str_value = _safeCopyString(p_value);
 	var->default_value = _safeCopyString(p_value);
+	var->help_text = _safeCopyString(p_helpText);
+	var->min_value = p_minValue;
+	var->max_value = p_maxValue;
+	var->modified = false;
+
 	_updateCvarNumValues(var);
 
 	var->next = s_cvarCore.next;
@@ -175,51 +197,42 @@ int C_CvarCoreInit()
 {
 	memset(&s_cvarCore, 0, sizeof(C_CvarCore));
 
-	s_empty_string = malloc(sizeof("EMPTY STRING!"));
+	s_cvarCore.empty_string = malloc(sizeof(""));
 
-	if (!s_empty_string)
-	{
-		C_CvarCoreCleanup();
-		return -1;
-	}
-	s_number_string = malloc(sizeof("0000"));
-	if (!s_number_string)
+	if (!s_cvarCore.empty_string)
 	{
 		C_CvarCoreCleanup();
 		return -1;
 	}
 
-	_createCvar("r_draw", "true", 0);
-	_createCvar("sensitivity", "0.8", 0);
+	memcpy(s_cvarCore.empty_string, "", sizeof(""));
 
 	return 1;
 }
 
 void C_CvarCoreCleanup()
 {
-	if (s_empty_string)
-	{
-		free(s_empty_string);
-	}
-	if (s_number_string)
-	{
-		free(s_number_string);
-	}
-
 	for (int i = 0; i < s_cvarCore.index_count; i++)
 	{
-		if (s_cvarCore.cvars[i].name && s_cvarCore.cvars[i].name != s_empty_string)
+		C_Cvar* cvar = &s_cvarCore.cvars[i];
+
+		if (cvar->name && cvar->name != s_cvarCore.empty_string)
 		{
-			free(s_cvarCore.cvars[i].name);
+			free(cvar->name);
 		}
-		if (s_cvarCore.cvars->str_value && s_cvarCore.cvars[i].name != s_empty_string)
+		if (cvar->str_value && cvar->str_value != s_cvarCore.empty_string)
 		{
-			free(s_cvarCore.cvars[i].str_value);
+			free(cvar->str_value);
 		}
-		if (s_cvarCore.cvars->default_value && s_cvarCore.cvars[i].name != s_empty_string)
+		if (cvar->default_value && cvar->default_value != s_cvarCore.empty_string)
 		{
-			free(s_cvarCore.cvars[i].default_value);
+			free(cvar->default_value);
 		}
+	}
+
+	if (s_cvarCore.empty_string)
+	{
+		free(s_cvarCore.empty_string);
 	}
 }
 
@@ -261,14 +274,160 @@ bool C_setCvarValueDirect(C_Cvar* const p_cvar, const char* p_value)
 
 			return false;
 		}
-	}
 
+		p_cvar->modified = true;
+	}
 	return true;
 }
 
-C_Cvar* C_cvarRegister(const char* p_varName, const char* p_value, int p_flags)
+C_Cvar* C_cvarRegister(const char* p_varName, const char* p_value, const char* p_helpText, int p_flags, float p_minValue, float p_maxValue)
 {
-	return _createCvar(p_varName, p_value, p_flags);
+	return _createCvar(p_varName, p_value, p_helpText, p_flags, p_minValue, p_maxValue);
+}
+
+void C_cvarResetToDefault(const char* p_varName)
+{
+}
+
+void C_cvarResetAllToDefault()
+{
+	for (int i = 0; i < s_cvarCore.index_count; i++)
+	{
+		C_setCvarValueDirect(&s_cvarCore.cvars[i], s_cvarCore.cvars[i].default_value);
+	}
+}
+
+bool C_cvarPrintAllToFile(const char* p_filePath)
+{
+	FILE* out_file = NULL;
+	fopen_s(&out_file, p_filePath, "w");
+	if (!out_file)
+	{
+		printf("Failed to open file!\n");
+		return false;
+	}
+	//use this since since fwrite causes error when using directly
+	const char quote_char = '"';
+
+	for (int i = 0; i < s_cvarCore.index_count; i++)
+	{
+		C_Cvar* cvar = &s_cvarCore.cvars[i];
+		
+		//skip
+		if (!(cvar->flags & CVAR__SAVE_TO_FILE))
+		{
+			continue;
+		}
+		//skip if the value is same as default
+		if (!_strcmpi(cvar->str_value, cvar->default_value))
+		{
+			continue;
+		}
+
+		fwrite(cvar->name, sizeof(char), strlen(cvar->name), out_file);
+		fwrite(" ", sizeof(char), 1, out_file);
+		
+		//wrap the value in quotes
+		fwrite(&quote_char, sizeof(char), 1, out_file);
+		fwrite(cvar->str_value, sizeof(char), strlen(cvar->str_value), out_file);
+		fwrite(&quote_char, sizeof(char), 1, out_file);
+
+		fwrite("\n", sizeof(char), 1, out_file);
+	}
+
+	return fclose(out_file) == 0;
+}
+
+bool C_cvarLoadAllFromFile(const char* p_filePath)
+{
+	//maybe move this to json later
+
+	char* parsed_string = File_ParseString(p_filePath);
+
+	if (!parsed_string)
+	{
+		return false;
+	}
+	const int str_len = strlen(parsed_string);
+
+	char name_buf[MAX_CVAR_CHAR_SIZE];
+	char value_buf[MAX_CVAR_CHAR_SIZE];
+	memset(name_buf, 0, sizeof(name_buf));
+	memset(value_buf, 0, sizeof(value_buf));
+	
+	int str_index = 0;
+	int buf_index = 0;
+	int parse_stage = 1;
+	while (str_index < str_len)
+	{
+		char ch = parsed_string[str_index];
+		str_index++;
+
+		if (ch == ' ')
+		{
+			continue;
+		}
+		if (ch == '\0')
+		{
+			break;
+		}
+		//starting to parse value
+		if (ch == '"')
+		{
+			parse_stage = 2;
+			buf_index = 0;
+			continue;
+		}
+		//new line? validate the string, set the value, then continue to the next line
+		else if (ch == '\n')
+		{
+			if (_validateString(name_buf) && _validateString(value_buf))
+			{
+				C_Cvar* cvar = C_getCvar(name_buf);
+
+				if (cvar)
+				{
+					C_setCvarValueDirect(cvar, value_buf);
+				}
+				else
+				{
+					printf("Invalid cvar %s \n", name_buf);
+				}
+			}
+			else
+			{
+				printf("Failed to read cvar %s from file \n", name_buf);
+			}
+			
+			parse_stage = 1;
+			memset(name_buf, 0, sizeof(name_buf));
+			memset(value_buf, 0, sizeof(value_buf));
+			buf_index = 0;
+			continue;
+		}
+
+		//name stage
+		if (parse_stage == 1)
+		{
+			name_buf[buf_index] = ch;
+			buf_index++;
+		}
+		//value stage
+		else if (parse_stage == 2)
+		{
+			value_buf[buf_index] = ch;
+			buf_index++;
+		}
+
+		if (buf_index >= MAX_CVAR_CHAR_SIZE)
+		{
+			return false;
+		}
+
+	}
+	free(parsed_string);
+
+	return true;
 }
 
 bool C_setCvarValue(const char* p_varName, const char* p_value)

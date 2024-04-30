@@ -1,0 +1,184 @@
+#version 460 core
+
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+struct DrawArraysIndirectCommand
+{
+    uint  count;
+    uint  instanceCount;
+    uint  first;
+    uint  baseInstance;
+};
+
+struct Chunk_info_data
+{
+    vec3 aabb[2];
+    uint vertex_start;
+    uint vertex_count;
+};
+
+layout(std430, binding = 3) readonly restrict buffer SSBO
+{
+    int data_SSBO[];
+};
+
+layout(std430, binding = 4) readonly restrict buffer BOUNDS
+{
+    vec4 bounds[];
+};
+
+layout(std430, binding = 5) readonly restrict buffer CHUNK_INFO
+{
+    Chunk_info_data chunk_data[];
+};
+
+layout(std430, binding = 6) writeonly restrict buffer DRAW_BUFFER_CMDS
+{
+    DrawArraysIndirectCommand cmds[];
+};
+
+layout(binding = 0) uniform atomic_uint atomic_counter;
+
+//camera stuff
+uniform mat4 u_viewProj;
+uniform mat4 u_view;
+uniform mat4 u_proj;
+
+uniform sampler2D HiZBuffer;
+
+
+void main()
+{
+    uint index = gl_WorkGroupID.x;
+
+    if(data_SSBO[index] == 1)
+    {
+        DrawArraysIndirectCommand command;
+        command.count = chunk_data[index].vertex_count;
+        command.first = chunk_data[index].vertex_start;
+        command.instanceCount = 1;
+        command.baseInstance = 0;
+
+        cmds[atomicCounterIncrement(atomic_counter)] = command;
+    }
+
+    /*
+    vec4 Bounds = bounds[index];  
+    
+    if(Bounds.w < 0)
+    {
+        return;
+    }
+
+
+    vec3 view_eye = -vec3(u_view[0].w, u_view[1].w, u_view[2].w);
+
+    float CameraSphereDistance = distance( view_eye, Bounds.xyz );
+ 
+    vec3 viewEyeSphereDirection = view_eye - Bounds.xyz;
+    
+    vec3 viewUp = vec3(u_view[0].y, u_view[1].y, u_view[2].y);
+    vec3 viewDirection = vec3(u_view[0].z, u_view[1].z, u_view[2].z);
+    vec3 viewRight = normalize(cross(viewEyeSphereDirection, viewUp));
+
+    float fRadius = CameraSphereDistance * tan(asin(Bounds.w / CameraSphereDistance));
+
+    // Compute the offsets for the points around the sphere
+    vec3 vUpRadius = viewUp * fRadius;
+    vec3 vRightRadius = viewRight * fRadius;
+
+        // Generate the 4 corners of the sphere in world space.
+    vec4 vCorner0WS = vec4( Bounds.xyz + vUpRadius - vRightRadius, 1 ); // Top-Left
+    vec4 vCorner1WS = vec4( Bounds.xyz + vUpRadius + vRightRadius, 1 ); // Top-Right
+    vec4 vCorner2WS = vec4( Bounds.xyz - vUpRadius - vRightRadius, 1 ); // Bottom-Left
+    vec4 vCorner3WS = vec4( Bounds.xyz - vUpRadius + vRightRadius, 1 ); // Bottom-Right
+
+    // Project the 4 corners of the sphere into clip space
+    vec4 vCorner0CS = u_viewProj * vCorner0WS;
+    vec4 vCorner1CS = u_viewProj * vCorner1WS;
+    vec4 vCorner2CS = u_viewProj * vCorner2WS;
+    vec4 vCorner3CS = u_viewProj * vCorner3WS;
+
+
+    // Convert the corner points from clip space to normalized device coordinates
+    vec2 vCorner0NDC = vCorner0CS.xy / vCorner0CS.w;
+    vec2 vCorner1NDC = vCorner1CS.xy / vCorner1CS.w;
+    vec2 vCorner2NDC = vCorner2CS.xy / vCorner2CS.w;
+    vec2 vCorner3NDC = vCorner3CS.xy / vCorner3CS.w;
+    vCorner0NDC = vec2( 0.5, -0.5 ) * vCorner0NDC + vec2( 0.5, 0.5 );
+    vCorner1NDC = vec2( 0.5, -0.5 ) * vCorner1NDC + vec2( 0.5, 0.5 );
+    vCorner2NDC = vec2( 0.5, -0.5 ) * vCorner2NDC + vec2( 0.5, 0.5 );
+    vCorner3NDC = vec2( 0.5, -0.5 ) * vCorner3NDC + vec2( 0.5, 0.5 );
+
+    // In order to have the sphere covering at most 4 texels, we need to use
+    // the entire width of the rectangle, instead of only the radius of the rectangle,
+    // which was the original implementation in the ATI paper, it had some edge case
+    // failures I observed from being overly conservative.
+    float fSphereWidthNDC = distance( vCorner0NDC, vCorner1NDC );
+
+    // Compute the center of the bounding sphere in screen space
+    vec3 Cv = (u_view * vec4( Bounds.xyz, 1 )).xyz;
+
+    // compute nearest point to camera on sphere, and project it
+    vec3 Pv = Cv - normalize( Cv ) * Bounds.w;
+    vec4 ClosestSpherePoint = u_proj * vec4( Pv, 1 );
+    
+      // Choose a MIP level in the HiZ map.
+        // The original assumed viewport width > height, however I've changed it
+        // to determine the greater of the two.
+        //
+        // This will result in a mip level where the object takes up at most
+        // 2x2 texels such that the 4 sampled points have depths to compare
+        // against.
+    float W = fSphereWidthNDC * max(800, 600);
+    float fLOD = ceil(log2( W ));
+
+      // fetch depth samples at the corners of the square to compare against
+        vec4 vSamples;
+        vSamples.x = textureLod( HiZBuffer, vCorner0NDC, fLOD ).x;
+        vSamples.y = textureLod( HiZBuffer, vCorner1NDC, fLOD ).x;
+        vSamples.z = textureLod( HiZBuffer, vCorner2NDC, fLOD ).x;
+        vSamples.w = textureLod( HiZBuffer, vCorner3NDC, fLOD ).x;
+
+
+   float fMaxSampledDepth = max( max( vSamples.x, vSamples.y ), max( vSamples.z, vSamples.w ) );
+   float fSphereDepth = (ClosestSpherePoint.z / ClosestSpherePoint.w);
+
+    int Visible = 0;
+
+    if(fSphereDepth > fMaxSampledDepth)
+    {
+        Visible = 0;
+    }
+    else
+    {
+        Visible = 1;
+    }
+
+    //data_SSBO[index] = Visible;
+
+   // Visible = 1;
+
+   //memoryBarrierAtomicCounter();
+
+    
+    uint atomic = atomicCounter(atomic_counter);
+
+    if(Visible == 1)
+    {
+        DrawArraysIndirectCommand command;
+        command.count = chunk_data[index].vertex_count;
+        command.first = chunk_data[index].vertex_start;
+        command.instanceCount = 1;
+        command.baseInstance = 0;
+
+       cmds[atomicCounterIncrement(atomic_counter)] = command;
+        
+    }
+   */
+   
+
+   
+
+   
+}

@@ -4,13 +4,13 @@
 
 #include "render/r_renderer.h"
 
-#include "utility/u_gl.h"
 
 #include <glad/glad.h>
 
 #include <GLFW/glfw3.h>
 
 
+#include "utility/dynamic_array.h"
 
 #include "render/r_texture.h"
 
@@ -27,9 +27,10 @@
 
 #include "sound/s_sound.h"
 
+#include <threads.h>
 
-extern void r_startFrame(R_Camera* const p_cam, ivec2 window_size, LC_World* const world);
-extern void r_endFrame();
+#include "core/c_console.h"
+#include "core/c_cvars.h"
 
 typedef struct G_GameData
 {
@@ -59,14 +60,15 @@ extern ivec2 s_windowSize;
 
 extern ma_engine sound_engine;
 
+C_Cvar* mouse_sensitivity;
+C_Cvar* cam_fov;
+
 void LC_Init()
 {
 	s_gameData.camera = Camera_Init();
 	s_gameData.WORLD = LC_World_Generate();
 	//s_gameData.model = Model_Load("assets/backpack/backpack.obj");
 
-	r_Init();
-	
 	vec3 player_pos;
 	player_pos[0] = -5;
 	player_pos[1] = 0;
@@ -85,8 +87,11 @@ void LC_Init()
 	s_gameData.camera.config.zFar = 500;
 	s_gameData.camera.config.zNear = 0.1F;
 
-	
+	C_ConsolePrintf("hello %i \n hello\n", 5);
 
+	mouse_sensitivity = C_cvarRegister("mouse_sensitivity", "0.1", "Mouse sensitivity help text", CVAR__SAVE_TO_FILE, 0.0, 1000);
+	cam_fov = C_cvarRegister("cam_fov", "90", NULL, CVAR__SAVE_TO_FILE, 45, 95);
+	C_setCvarValue("cam_fov", "91");
 
 	vec3 position;
 	position[0] = 0;
@@ -99,7 +104,8 @@ void LC_Init()
 
 	s_LoadSpatialSound(&s_gameData.sound, "assets/sounds/jump.wav", 0, 1, position, direction, NULL);
 	
-
+	C_cvarPrintAllToFile("assets/test.cfg");
+	C_cvarLoadAllFromFile("assets/test.cfg");
 
 	//glDisable(GL_DEPTH_TEST);
 	//glDisable(GL_CULL_FACE);
@@ -126,9 +132,11 @@ void LC_Movement(GLFWwindow* const window)
 	
 }
 
-
 void LC_Loop(float delta)
 {
+	s_gameData.camera.config.mouseSensitivity = mouse_sensitivity->float_value;
+	s_gameData.camera.config.fov = cam_fov->float_value;
+
 	LC_KBupdate(s_Window);
 
 
@@ -138,26 +146,8 @@ void LC_Loop(float delta)
 
 	LC_World_Update(delta);
 
-	r_startFrame(&s_gameData.camera, s_windowSize, s_gameData.WORLD);
-
-	r_endFrame();
 	
-	vec3 player_pos;
-	LC_Player_getPos(player_pos);
-	
-	
-	ma_engine_listener_set_position(&sound_engine, 0, player_pos[0], player_pos[1], player_pos[2]);
-	
-	
-	
-	
-	
-	
-
-
-	
-
-
+	r_Update(&s_gameData.camera, s_gameData.WORLD);
 
 }
 void LC_PhysLoop(float delta)

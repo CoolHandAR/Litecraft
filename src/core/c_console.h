@@ -8,4 +8,6 @@ void C_ToggleConsole();
 void C_DrawConsole();
 void C_UpdateConsole();
 
-void C_ConsolePrint(const char* p_msg, bool p_newLine);
+void C_ConsolePrint(const char* p_msg);
+void C_ConsoleNewline();
+void C_ConsolePrintf(const char* fmt, ...);

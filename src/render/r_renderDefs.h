@@ -12,6 +12,15 @@ typedef struct Vertex
 	float hp;
 } Vertex;
 
+typedef struct ModelVertex
+{
+	vec3 position;
+	vec3 normal;
+	vec2 tex_coords;
+	vec3 tangent;
+	vec3 bitangent;
+}  ModelVertex;
+
 typedef struct LineVertex
 {
 	vec3 position;
@@ -26,7 +35,7 @@ typedef struct TriangleVertex
 
 typedef struct ScreenVertex
 {
-	vec2 position;
+	vec3 position;
 	vec2 tex_coords;
 	float tex_index;
 } ScreenVertex;

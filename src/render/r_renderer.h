@@ -31,8 +31,32 @@ void r_DrawScreenText(const char* p_string, vec2 p_position, vec2 p_size, vec4 p
 void r_DrawScreenText2(const char* p_string, float p_x, float p_y, float p_width, float p_height, float p_r, float p_g, float p_b, float p_a, float h_spacing, float y_spacing);
 void r_DrawChunk(LC_Chunk* const chunk);
 void r_DrawWorldChunks2(LC_World* const world);
-void r_Update(R_Camera* const p_cam, ivec2 window_size);
+void r_Update(R_Camera* const p_cam, LC_World* const world);
 void r_DrawCrosshair();
-void r_DrawScreenSprite(vec2 pos, R_Sprite* sprite);
+void r_DrawScreenSprite(R_Sprite* sprite);
+void r_processCommands();
+
+typedef enum LightType
+{
+    LT__SPOT,
+    LT__POINT
+} LightType;
+
+typedef struct R_LightData
+{
+    LightType light_type;
+    vec3 position;
+
+    vec3 color;
+    float ambient_intesity;
+    float diffuse_intesity;
+
+    float linear;
+    float quadratic;
+    float constant;
+    float radius;
+} R_LightData;
+
+void r_registerLightSource(R_LightData p_lightData);
 
 #endif // !R_RENDERER_H

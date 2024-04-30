@@ -42,7 +42,4 @@ void Camera_ProcessMove(R_Camera* const p_cam, int x, int y);
 void Camera_UpdateMatrices(R_Camera* const p_cam, float screen_width, float screen_height);
 
 
-
-
-
 #endif // !R_CAMERA_H

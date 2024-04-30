@@ -35,6 +35,4 @@ typedef struct Cubemap_Faces_Paths
 	const char* front_face;
 } Cubemap_Faces_Paths;
 
-const char* ds[2];
-
 R_Texture CubemapTexture_Load(Cubemap_Faces_Paths p_facesPathsData);

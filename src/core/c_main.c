@@ -2,11 +2,16 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "lc_core.h"
-#include "i_window.h"
 #include "utility/u_math.h"
 
 #include "c_console.h"
 #include "c_cvars.h"
+
+#include "render/r_renderer.h"
+
+#include <threads.h>
+
+#include <windows.h>
 
 #define MAX_PHYS_STEPS 6
 #define MAX_PHYS_DELTA_TIME 1.0
@@ -19,10 +24,12 @@
 extern bool C_init();
 extern void r_onWindowResize(ivec2 window_size);
 extern void s_SoundEngineCleanup();
+extern void r_startFrame();
+extern void r_endFrame();
 
 typedef struct C_EngineTiming
 {
-	size_t loop_thicks;
+	size_t ticks;
 	size_t phys_ticks;
 	bool phys_in_frame;
 } C_EngineTiming;
@@ -62,6 +69,14 @@ void C_charCallback(GLFWwindow* window, unsigned int codepoint)
 
 void C_Loop()
 {
+	bool use_fps_limit = false;
+
+	const double MAX_FPS = 1.0 / 40;
+
+	int fps = 0;
+	float previous_fps_timed_frame = 0.0f;
+	float frames_per_second = 0.0f;
+
 	//TIMING CONSTANTS. 
 	//It is better to to put them as variables instead of macros since i am afraid of macro casts
 	const float MS_PER_SECOND = PHYS_MS_PER_SECOND;
@@ -71,6 +86,7 @@ void C_Loop()
 	const int MAX_PHYSICS_STEPS = 6;
 
 	float previous_frame = glfwGetTime();
+	float previous_render_frame = 0;
 
 	/*
 	* ~~~~~~~~~~~~~~~~~~
@@ -82,7 +98,6 @@ void C_Loop()
 		if (glfwGetKey(s_Window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
 			glfwSetWindowShouldClose(s_Window, true);
 		
-		C_DrawConsole();
 
 		/*
 		* ~~~~~~~~~~~~~~~~~~
@@ -101,6 +116,22 @@ void C_Loop()
 		* ~~~~~~~~~~~~~~~~~~
 		*/
 		LC_Loop(delta_time);
+
+		/*
+		* ~~~~~~~~~~~~~~~~~~
+		* EXTRAS
+		* ~~~~~~~~~~~~~~~~~~
+		*/
+		C_DrawConsole();
+
+
+		/*
+		* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+		* PROCESS RENDER COMMANDS ON THE RENDER THREAD
+		* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+		*/
+		thrd_t render_thread;
+		thrd_create(&render_thread, r_processCommands, NULL);
 		/*
 		* ~~~~~~~~~~~~~~~~~~
 		* PHYSICS LOOP
@@ -122,8 +153,51 @@ void C_Loop()
 			s_engineTiming.phys_in_frame = false;
 		}
 		
+		/*
+		* ~~~~~~~~~~~~~~~~~~
+		* RENDER
+		* ~~~~~~~~~~~~~~~~~~
+		*/
+		//WAIT FOR THE RENDER THREAD TO COMPLETE
+		thrd_join(render_thread, NULL);
+		//RENDER
+		++frames_per_second;
+		if (use_fps_limit)
+		{
+			if (new_time - previous_render_frame >= MAX_FPS)
+			{
+				r_startFrame();
+				r_endFrame();
 
-		glfwSwapBuffers(s_Window);
+				glfwSwapBuffers(s_Window);
+				previous_render_frame = new_time;
+			}
+		}
+		else
+		{
+			r_startFrame();
+			r_endFrame();
+
+			glfwSwapBuffers(s_Window);
+
+
+			if (new_time - previous_fps_timed_frame > 1.0)
+			{
+				fps = frames_per_second;
+				frames_per_second = 0;
+				previous_fps_timed_frame = new_time;
+			}
+			
+		}
+		
+		
+
+
+		s_engineTiming.ticks++;
+
+		
+
+		
 		glfwPollEvents();
 	}
 }

@@ -5,7 +5,6 @@
 #include "lc_defs.h"
 #include "utility/forward_list.h"
 #include "physics/p_physics_defs.h"
-#include "utility/dynamic_array.h"
 #include "utility/u_object_pool.h"
 #include "lc_block_defs.h"
 

@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <string.h>
 
-
 #define PRINT_AND_FAIL_ON_INVALID_UNIFORM_LOCATION 1
 #define READ_BUFFER_SIZE 20480
 
@@ -264,6 +263,7 @@ R_Shader ComputeShader_CompileFromFile(const char* p_computeShaderPath)
 
 	return compiled_shader;
 }
+
 
 void Shader_SetFloat(R_Shader shader, const char* name, float value)
 {

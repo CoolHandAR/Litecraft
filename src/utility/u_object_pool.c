@@ -40,7 +40,6 @@ unsigned Object_Pool_Request(Object_Pool* const p_pool)
 		return r_index;
 	}
 
-	//we give an index to the reserved size of the object pool
 	unsigned given_index = p_pool->pool->elements_size;
 	r_index = given_index;
 

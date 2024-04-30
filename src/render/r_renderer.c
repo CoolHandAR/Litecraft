@@ -7,14 +7,15 @@
 
 #include "r_renderDefs.h"
 #include "r_mesh.h"
-#include "utility/u_gl.h"
 
 #include "lc/lc_player.h"
 
 #include "render/r_font.h"
 
-#define W_WIDTH 800
-#define W_HEIGHT 600
+#include "core/c_cvars.h"
+
+#define W_WIDTH 1024
+#define W_HEIGHT 720
 
 #define SHADOW_MAP_RESOLUTION 2048
 
@@ -39,6 +40,8 @@ typedef struct DrawArraysIndirectCommand
     unsigned  first;
     unsigned  baseInstance;
 } DrawElementsIndirectCommand;
+
+
 
 typedef struct R_LineDrawData
 {
@@ -98,6 +101,22 @@ typedef struct R_BillboardData
 
 } R_BillboardData;
 
+typedef enum R_SpriteDrawType
+{
+    SDT__SCREEN,
+    SDT__3D,
+    SDT__BILLBOARD
+} R_SpriteDrawType;
+
+typedef struct R_SpriteDrawCommand
+{
+    R_SpriteDrawType draw_type;
+    R_Sprite* sprite_ptr;
+    
+} R_SpriteDrawCommands;
+
+R_SpriteDrawCommands sprite_draw_commands[10];
+int sprite_Draw_cmnds_counter;
 
 typedef struct R_DeferredShadingData
 {
@@ -175,7 +194,7 @@ typedef struct R_DeferredShadingData
 
     unsigned light_depth_maps;
 
-    GL_UniformBuffer light_space_matrixes_ubo;
+   unsigned light_space_matrixes_ubo;
 
     R_Shader skybox_shader;
 
@@ -189,17 +208,22 @@ typedef struct R_DeferredShadingData
 typedef struct R_GeneralRenderData
 {
     mat4 orthoProj;
-    GL_UniformBuffer camera_buffer;
+    unsigned camera_buffer;
     R_Camera* camera;
     vec4 camera_frustrum[6];
     int window_width;
     int window_height;
+    float window_scale_width;
+    float window_scale_height;
 
     unsigned msFBO, FBO;
     unsigned msRBO;
     unsigned color_buffer_multisampled_texture;
     unsigned color_buffer_texture;
     unsigned depth_texture;
+    unsigned hdrFBO;
+    unsigned hdrColorBuffer;
+    unsigned hdrRBO;
 
 } R_GeneralRenderData;
 
@@ -217,11 +241,14 @@ static R_Texture tex_atlas;
 static R_Texture cubemap_texture;
 static R_Texture bitmap_texture;
 static R_Model model;
+LC_World* world_ptr;
 
-typedef struct SimpleVertex
-{
-    vec3 pos;
-} SimpleVertex;
+C_Cvar* r_mssaLevel;
+
+bool use_hdr;
+
+static R_LightData s_lightDataBuffer[32];
+int s_lightDataIndex;
 
 void r_onWindowResize(ivec2 window_size)
 {
@@ -230,16 +257,18 @@ void r_onWindowResize(ivec2 window_size)
 
     //update the ortho proj matrix
     glm_ortho(0.0f, s_RenderData.window_width, s_RenderData.window_height, 0.0f, -1.0f, 1.0f, s_RenderData.orthoProj);
+    s_RenderData.window_scale_width = (float)s_RenderData.window_width / (float)W_WIDTH;
+    s_RenderData.window_scale_height = (float)s_RenderData.window_height / (float)W_HEIGHT;
     
     //Update framebuffer textures
     if (render_settings.mssa_setting != R_MSSA_NONE)
     {
         glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, s_RenderData.color_buffer_multisampled_texture);
-        glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, render_settings.mssa_setting, GL_RGB, s_RenderData.window_width, s_RenderData.window_height, GL_TRUE);
+        glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, r_mssaLevel->int_value, GL_RGB, s_RenderData.window_width, s_RenderData.window_height, GL_TRUE);
         glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
 
         glBindRenderbuffer(GL_RENDERBUFFER, s_RenderData.msRBO);
-        glRenderbufferStorageMultisample(GL_RENDERBUFFER, render_settings.mssa_setting, GL_DEPTH24_STENCIL8, s_RenderData.window_width, s_RenderData.window_height);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, r_mssaLevel->int_value, GL_DEPTH24_STENCIL8, s_RenderData.window_width, s_RenderData.window_height);
     }
    
     glBindTexture(GL_TEXTURE_2D, s_RenderData.color_buffer_texture);
@@ -249,6 +278,14 @@ void r_onWindowResize(ivec2 window_size)
     glBindTexture(GL_TEXTURE_2D, s_RenderData.depth_texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, s_RenderData.window_width, s_RenderData.window_height, 0,
         GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+
+    glUseProgram(s_screenQuadDrawData.shader);
+    Shader_SetVector2f(s_screenQuadDrawData.shader, "u_windowScale", s_RenderData.window_scale_width, s_RenderData.window_scale_height);
+    Shader_SetMatrix4(s_screenQuadDrawData.shader, "u_projection", s_RenderData.orthoProj);
+
+    glUseProgram(s_bitmapTextData.shader);
+    Shader_SetVector2f(s_bitmapTextData.shader, "u_windowScale", s_RenderData.window_scale_width, s_RenderData.window_scale_height);
+    Shader_SetMatrix4(s_bitmapTextData.shader, "u_orthoProjection", s_RenderData.orthoProj);
 }
 
 
@@ -346,7 +383,7 @@ static void _initScreenQuadRenderData()
     }
 
 
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(ScreenVertex), (void*)(offsetof(ScreenVertex, position)));
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ScreenVertex), (void*)(offsetof(ScreenVertex, position)));
     glEnableVertexAttribArray(0);
 
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(ScreenVertex), (void*)(offsetof(ScreenVertex, tex_coords)));
@@ -525,6 +562,8 @@ static void _initGLStates()
 
 static void _initGeneralRenderData()
 {
+    use_hdr = false;
+
     memset(&s_RenderData, 0, sizeof(R_GeneralRenderData));
 
     //CAMERA UBO
@@ -575,6 +614,28 @@ static void _initGeneralRenderData()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s_RenderData.depth_texture, 0);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    {
+        assert(false);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    //HDR
+    glGenFramebuffers(1, &s_RenderData.hdrFBO);
+    glGenRenderbuffers(1, &s_RenderData.hdrRBO);
+    glGenTextures(1, &s_RenderData.hdrColorBuffer);
+    glBindTexture(GL_TEXTURE_2D, s_RenderData.hdrColorBuffer);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, W_WIDTH, W_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.hdrFBO);
+    glBindRenderbuffer(GL_RENDERBUFFER, s_RenderData.hdrRBO);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, W_WIDTH, W_HEIGHT);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_RenderData.hdrColorBuffer, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, s_RenderData.hdrRBO);
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
     {
@@ -994,14 +1055,17 @@ bool r_Init()
     _initDeferredShadingData();
     _initShadowMapData();
    
+    r_mssaLevel = C_cvarRegister("r_mssaLevel", "0", NULL, 0, 0, 8);
         
     ivec2 window_size;
-    window_size[0] = 800;
-    window_size[1] = 600;
+    window_size[0] = W_WIDTH;
+    window_size[1] = W_HEIGHT;
     r_onWindowResize(window_size);
 
+    sprite_Draw_cmnds_counter = 0;
+    memset(sprite_draw_commands, 0, sizeof(sprite_draw_commands));
    
-   
+    world_ptr = NULL;
 
     bitmap_texture = Texture_Load("assets/ui/bigchars.tga", NULL);
 
@@ -1013,9 +1077,12 @@ bool r_Init()
     s_fontData = R_loadFontData("assets/ui/myFont4.json", "assets/ui/myFont4.bmp");
     
 
+  //  model = Model_Load("assets/backpack/backpack.obj");
+
     float z_far = 500;
 
-   
+    memset(s_lightDataBuffer, 0, sizeof(s_lightDataBuffer));
+    s_lightDataIndex = 0;
   
     glUseProgram(s_deferredShadingData.simple_lighting_shader);
     Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, "u_cascadePlaneDistances[0]", s_shadowMapData.shadow_cascade_levels[0]);
@@ -1043,8 +1110,6 @@ static void _drawTextBatch()
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, s_fontData.texture.id);
-
-    Shader_SetMatrix4(s_bitmapTextData.shader, "u_orthoProjection", s_RenderData.orthoProj);
 
     glBindVertexArray(s_bitmapTextData.vao);
 
@@ -1247,6 +1312,7 @@ void _drawSkybox()
     Shader_SetMatrix4(s_deferredShadingData.skybox_shader, "u_view", view_no_translation);
     Shader_SetMatrix4(s_deferredShadingData.skybox_shader, "u_projection", s_RenderData.camera->data.proj_matrix);
 
+
     glBindVertexArray(s_deferredShadingData.light_box_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_deferredShadingData.light_box_vbo);
     glActiveTexture(GL_TEXTURE0);
@@ -1297,7 +1363,6 @@ static void _drawScreenQuadBatch()
 
     glUseProgram(s_screenQuadDrawData.shader);
 
-    Shader_SetMatrix4(s_screenQuadDrawData.shader, "u_projection", s_RenderData.orthoProj);
     
     glBindVertexArray(s_screenQuadDrawData.vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_screenQuadDrawData.vbo);
@@ -1561,6 +1626,7 @@ static void DrawMesh(const R_Mesh* p_mesh, vec3 pos)
         else if (strcmp(array[i].type, "texture_specular") == 0)
         {
             sprintf(number, "%i", specular_nr++);
+           // continue;
         }
         else if (strcmp(array[i].type, "texture_normal") == 0)
         {
@@ -1589,19 +1655,20 @@ static void DrawMesh(const R_Mesh* p_mesh, vec3 pos)
 
     vec3 size;
     memset(size, 16, sizeof(vec3));
-    size[0] = 1;
-    size[1] = 1;
-    size[2] = 1;
+    size[0] = 5;
+    size[1] = 5;
+    size[2] = 5;
 
     Math_Model(pos, size, 0, m);
 
-
+    Shader_SetFloat(s_deferredShadingData.model_shader, "u_heightScale", 1.0);
     Shader_SetMatrix4(s_deferredShadingData.model_shader, "u_model", m);
     Shader_SetVector3f(s_deferredShadingData.model_shader, "u_viewPos", s_RenderData.camera->data.position[0], s_RenderData.camera->data.position[1], s_RenderData.camera->data.position[2]);
+    Shader_SetVector3f(s_deferredShadingData.model_shader, "u_lightPos", s_RenderData.camera->data.position[0], s_RenderData.camera->data.position[1], s_RenderData.camera->data.position[2]);
     glBindVertexArray(p_mesh->vao);
 
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, cubemap_texture.id);
+   // glActiveTexture(GL_TEXTURE1);
+   // glBindTexture(GL_TEXTURE_CUBE_MAP, cubemap_texture.id);
 
     glDrawElements(GL_TRIANGLES, p_mesh->indices->elements_size, GL_UNSIGNED_INT, 0);
     glActiveTexture(GL_TEXTURE0);
@@ -1667,9 +1734,13 @@ void r_DrawWorldChunks2(LC_World* const world)
         glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, chunk_count, sizeof(DrawElementsIndirectCommand));
 
         
-        if (render_settings.mssa_setting != R_MSSA_NONE)
+        if (r_mssaLevel->int_value != 0)
         {
             glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.msFBO);
+        }
+        else if (use_hdr)
+        {
+            glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.hdrFBO);
         }
         else
         {
@@ -1713,8 +1784,10 @@ void r_DrawWorldChunks2(LC_World* const world)
 }
 
 
-void r_Update(R_Camera* const p_cam, ivec2 window_size)
+void r_Update(R_Camera* const p_cam, LC_World* const world)
 {
+    world_ptr = world;
+
     mat4 view_proj;
     glm_mat4_mul(p_cam->data.proj_matrix, p_cam->data.view_matrix, view_proj);
 
@@ -1782,7 +1855,8 @@ void r_DrawCrosshair()
 
 }
 
-void r_DrawScreenSprite(vec2 pos, R_Sprite* sprite)
+
+void r_DrawScreenSpriteInternal(R_Sprite* sprite)
 {
       //draw the current batch??
     if (s_screenQuadDrawData.vertices_count + 4 >= SCREEN_QUAD_VERTICES_BUFFER_SIZE || s_screenQuadDrawData.tex_index >= SCREEN_QUAD_MAX_TEXTURES - 1)
@@ -1810,14 +1884,6 @@ void r_DrawScreenSprite(vec2 pos, R_Sprite* sprite)
 
         s_screenQuadDrawData.tex_index++;
     }
-
-    vec2 sprite_size;
-    Sprite_getSize(sprite, sprite_size);
-
-    //compute the model matrix
-    mat4 model;
-    Math_Model2D(pos, sprite_size, sprite->rotation, model);
-    
     //set up the vertices
     vec3 vertices[] =
     {
@@ -1829,10 +1895,11 @@ void r_DrawScreenSprite(vec2 pos, R_Sprite* sprite)
 
     for (int i = 0; i < 4; i++)
     {
-        glm_mat4_mulv3(model, vertices[i], 1.0f, vertices[i]);
+        glm_mat4_mulv3(sprite->model_matrix, vertices[i], 1.0f, vertices[i]);
         
         s_screenQuadDrawData.screen_quad_vertices[s_screenQuadDrawData.vertices_count + i].position[0] = vertices[i][0];
         s_screenQuadDrawData.screen_quad_vertices[s_screenQuadDrawData.vertices_count + i].position[1] = vertices[i][1];
+        s_screenQuadDrawData.screen_quad_vertices[s_screenQuadDrawData.vertices_count + i].position[2] = sprite->position[2]; //z_index
 
         s_screenQuadDrawData.screen_quad_vertices[s_screenQuadDrawData.vertices_count + i].tex_coords[0] = sprite->texture_coords[i][0];
         s_screenQuadDrawData.screen_quad_vertices[s_screenQuadDrawData.vertices_count + i].tex_coords[1] = sprite->texture_coords[i][1];
@@ -1844,14 +1911,30 @@ void r_DrawScreenSprite(vec2 pos, R_Sprite* sprite)
 }
 
 
-void r_startFrame(R_Camera* const p_cam, ivec2 window_size, LC_World* const world)
+void r_DrawScreenSprite(R_Sprite* sprite)
+{
+    if (sprite_Draw_cmnds_counter >= 10)
+    {
+        return;
+    }
+
+    sprite_draw_commands[sprite_Draw_cmnds_counter].draw_type = SDT__SCREEN;
+    sprite_draw_commands[sprite_Draw_cmnds_counter].sprite_ptr = sprite;
+    sprite_Draw_cmnds_counter++;
+}
+
+void r_startFrame()
 {
     //update camera stuff
-    r_Update(p_cam, window_size);
+   // r_Update(p_cam);
 
-    if (render_settings.mssa_setting != R_MSSA_NONE)
+    if (r_mssaLevel->int_value != 0)
     {
         glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.msFBO);
+    }
+    else if (use_hdr)
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.hdrFBO);
     }
     else
     {
@@ -1863,13 +1946,20 @@ void r_startFrame(R_Camera* const p_cam, ivec2 window_size, LC_World* const worl
     
     //Chunks pass. TODO include other draw calls like models, monsters and so on 
     //that are not part of chunk drawing in between the shadow map pass
-  //  r_DrawWorldChunks2(world);
+    r_DrawWorldChunks2(world_ptr);
+
+    vec3 pos;
+    pos[0] = -20;
+    pos[1] = 0;
+    pos[2] = 0;
+
+   // DrawModel(&model, pos);
 
     //Lines, triangles etc... pass
    // _drawAll();
 
     //Skybox pass
-   // _drawSkybox();
+    _drawSkybox();
 
    // RenderbillboardTexture();
 
@@ -1890,21 +1980,92 @@ void r_startFrame(R_Camera* const p_cam, ivec2 window_size, LC_World* const worl
 
 void r_endFrame()
 {
-    if (render_settings.mssa_setting != R_MSSA_NONE)
+    if (r_mssaLevel->int_value != 0)
     {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, s_RenderData.msFBO);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_RenderData.FBO);
         glBlitFramebuffer(0, 0, s_RenderData.window_width, s_RenderData.window_height, 0, 0, s_RenderData.window_width, s_RenderData.window_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     }
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glClear(GL_COLOR_BUFFER_BIT);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glDisable(GL_DEPTH_TEST);
 
     glUseProgram(s_deferredShadingData.post_process_shader);
+
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, s_RenderData.color_buffer_texture);
+    if (use_hdr)
+    {
+        Shader_SetInteger(s_deferredShadingData.post_process_shader, "u_hdr", 1);
+        Shader_SetFloat(s_deferredShadingData.post_process_shader, "u_exposure", 1.0f);
+        glBindTexture(GL_TEXTURE_2D, s_RenderData.hdrColorBuffer);
+    }
+    else
+    {
+        glBindTexture(GL_TEXTURE_2D, s_RenderData.color_buffer_texture);
+    }
     glBindVertexArray(s_deferredShadingData.screen_quad_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_deferredShadingData.screen_quad_vbo);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
    
+}
+
+void r_processCommands()
+{
+ 
+    if (sprite_Draw_cmnds_counter > 0)
+    {
+        for (int i = 0; i < sprite_Draw_cmnds_counter; i++)
+        {
+            r_DrawScreenSpriteInternal(sprite_draw_commands[i].sprite_ptr);
+        }
+        sprite_Draw_cmnds_counter = 0;
+        memset(sprite_draw_commands, 0, sizeof(sprite_draw_commands));
+    }
+
+    
+
+  
+    
+    
+
+}
+void r_registerLightSource(R_LightData p_lightData)
+{
+    if (s_lightDataIndex + 1 >= 32)
+    {
+        return;
+    }
+    
+    s_lightDataBuffer[s_lightDataIndex] = p_lightData;
+  
+
+    char buffer[1024];
+    memset(buffer, 0, sizeof(buffer));
+
+    sprintf(buffer, "u_pointLights[%i].position", s_lightDataIndex);
+    
+    glUseProgram(s_deferredShadingData.simple_lighting_shader);
+    Shader_SetVector3f(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.position[0], p_lightData.position[1], p_lightData.position[2]);
+
+    sprintf(buffer, "u_pointLights[%i].color", s_lightDataIndex);
+    Shader_SetVector3f(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.color[0], p_lightData.color[1], p_lightData.color[2]);
+
+    sprintf(buffer, "u_pointLights[%i].ambient_intensity", s_lightDataIndex);
+    Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.ambient_intesity);
+
+    sprintf(buffer, "u_pointLights[%i].diffuse_intensity", s_lightDataIndex);
+    Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.diffuse_intesity);
+
+    sprintf(buffer, "u_pointLights[%i].constant", s_lightDataIndex);
+    Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.constant);
+
+    sprintf(buffer, "u_pointLights[%i].linear", s_lightDataIndex);
+    Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.linear);
+
+    sprintf(buffer, "u_pointLights[%i].quadratic", s_lightDataIndex);
+    Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.quadratic);
+
+    s_lightDataIndex++;
+    Shader_SetInteger(s_deferredShadingData.simple_lighting_shader, "u_pointLightCount", s_lightDataIndex);
 }

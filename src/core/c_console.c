@@ -3,6 +3,7 @@
 #include "render/r_texture.h"
 #include "render/r_renderer.h"
 #include <string.h>
+#include <stdarg.h>
 
 #include "c_cvars.h"
 
@@ -24,12 +25,19 @@ typedef struct C_Console
 
 	float text_height;
 
+	bool is_open;
+
 } C_Console;
 
 C_Console s_console;
 
 static void _WriteCharToInputBuffer(char ch)
 {
+	if (!s_console.is_open)
+	{
+		return;
+	}
+
 	s_console.input_position++;
 	if (s_console.input_position >= MAX_INPUT_BUFFER_SIZE)
 	{
@@ -40,6 +48,11 @@ static void _WriteCharToInputBuffer(char ch)
 }
 static void _backSpaceInputBuffer()
 {
+	if (!s_console.is_open)
+	{
+		return;
+	}
+
 	if (s_console.input_buffer[s_console.input_position] == '\n')
 	{
 		return;
@@ -53,16 +66,13 @@ static void _backSpaceInputBuffer()
 	}
 }
 
-
-
-
-static bool _validateChar()
-{
-
-}
-
 static void _submitInput()
 {
+	if (!s_console.is_open)
+	{
+		return;
+	}
+
 	if (s_console.input_position + 2 >= MAX_SCROLL_BACK_BUFFER_SIZE - 1 || s_console.input_position < 0)
 	{
 		return;
@@ -109,22 +119,28 @@ static void _submitInput()
 	//cvar not found?
 	if (!cvar)
 	{
-		C_ConsolePrint(" Variable not found", true);
+		C_ConsolePrint(" Variable not found");
+		C_ConsoleNewline();
 	}
 	else if (cvar->flags & CVAR__CONST)
 	{
-		C_ConsolePrint(" Variable can't be changed", true);
+		C_ConsolePrint(" Variable can't be changed");
+		C_ConsoleNewline();
 	}
 	else if (found_space)
 	{
 		C_setCvarValueDirect(cvar, &value_buffer);
-		C_ConsolePrint(" ", false);
-		C_ConsolePrint(&value_buffer, true);
+		C_ConsolePrint(" ");
+		C_ConsolePrint(&value_buffer);
+		C_ConsoleNewline();
 	}
 	else
 	{
-		C_ConsolePrint(" == ", false);
-		C_ConsolePrint(cvar->str_value, true);
+		C_ConsolePrint(" == ");
+		C_ConsolePrint(cvar->str_value);
+		C_ConsolePrint("  ");
+		C_ConsolePrint(cvar->help_text);
+		C_ConsoleNewline();
 	}
 	
 	memset(s_console.input_buffer, 0, sizeof(s_console.input_buffer));
@@ -138,10 +154,18 @@ void C_ConsoleInit()
 
 	s_console.bg_texture = Texture_Load("assets/ui/console_bg.png", NULL);
 
-	Sprite_setTexture(&s_console.bg_sprite, &s_console.bg_texture);
+	vec3 pos;
+	pos[0] = 400;
+	pos[1] = 0;
+	pos[2] = 0;
 
-	s_console.bg_sprite.scale[0] = 1;
-	s_console.bg_sprite.scale[1] = 1;
+	vec2 scale;
+	scale[0] = 0.6;
+	scale[1] = 2;
+	
+
+	Sprite_Init(&s_console.bg_sprite, pos, scale, 0, &s_console.bg_texture);
+	
 
 	s_console.text_height = 356;
 }
@@ -158,6 +182,11 @@ void C_KB_Input(int uni_code)
 	{
 		_submitInput();
 	}
+	//toggle console
+	else if (uni_code == 96)
+	{
+		s_console.is_open = !s_console.is_open;
+	}
 	else if (uni_code >= 32 && uni_code <= 126)
 	{
 		_WriteCharToInputBuffer(uni_code);
@@ -171,27 +200,24 @@ void C_ToggleConsole()
 
 void C_DrawConsole()
 {
-	//printf("%i \n", s_console.input_position);
-	vec2 pos;
-	pos[0] = 200;
-	pos[1] = 0;
-
+	if (!s_console.is_open)
+		return;
 
 	//draw background
-	r_DrawScreenSprite(pos, &s_console.bg_sprite);
+	r_DrawScreenSprite(&s_console.bg_sprite);
 
 	//draw input
-	r_DrawScreenText2(s_console.input_buffer, 0, 358, 18, 18, 1, 1, 1, 1, 0.0, 0.0);
+	r_DrawScreenText2(s_console.input_buffer, 0, 265, 16, 18, 1, 1, 1, 1, 0.0, 0.0);
 
 	//draw scroll backLines
-	r_DrawScreenText2(s_console.scroll_back_buffer, 0, 345 - (s_console.total_text_lines * 18), 18, 18, 1, 1, 1, 1, 0.0, 0.0);
+	r_DrawScreenText2(s_console.scroll_back_buffer, 0, 210 - (s_console.total_text_lines * 18), 18, 18, 1, 1, 1, 1, 0.0, 0.0);
 }
 
 void C_UpdateConsole()
 {
 }
 
-void C_ConsolePrint(const char* p_msg, bool p_newLine)
+void C_ConsolePrint(const char* p_msg)
 {
 	const int str_len = strlen(p_msg);
 
@@ -201,11 +227,89 @@ void C_ConsolePrint(const char* p_msg, bool p_newLine)
 	}
 
 	strncat(s_console.scroll_back_buffer, p_msg, str_len);
+}
 
-	if (p_newLine)
+void C_ConsoleNewline()
+{
+	char new_line_ch = '\n';
+
+	strncat(s_console.scroll_back_buffer, &new_line_ch, sizeof(char));
+	s_console.total_text_lines++;
+}
+
+static void _printCharToScrollBackBuffer(char ch)
+{
+	if (1 >= MAX_SCROLL_BACK_BUFFER_SIZE)
 	{
-		char new_line_ch = '\n';
-
-		strncat(s_console.scroll_back_buffer, &new_line_ch, sizeof(char));
+		return;
 	}
+	
+	strncat(s_console.scroll_back_buffer, &ch, sizeof(char));
+}
+
+void C_ConsolePrintf(const char* fmt, ...)
+{
+	va_list args;
+	va_start(args, fmt);
+
+	char ch = 0;
+
+	while (*fmt != '\0')
+	{
+		ch = *fmt;
+
+		//look for special characters
+		if (ch == '%')
+		{
+			fmt++;
+			ch = *fmt;
+
+			char num_buf[24];
+			memset(num_buf, 0, sizeof(num_buf));
+
+			switch (ch)
+			{
+			/* FALLTHROUGH */
+			case 'i':
+			case 'd':
+			{
+				int integer = va_arg(args, int);
+				sprintf(num_buf, "%i", integer);
+				C_ConsolePrint(num_buf);
+				break;
+			}
+			case 'u':
+			{
+				unsigned int u_integer = va_arg(args, unsigned int);
+				sprintf(num_buf, "%i", u_integer);
+				C_ConsolePrint(num_buf);
+				break;
+			}
+			/* FALLTHROUGH */
+			case 'f':
+			case 'F':
+			{
+				float floating_point = va_arg(args, float);
+				sprintf(num_buf, "%f", floating_point);
+				C_ConsolePrint(num_buf);
+				break;
+			}
+			case 's':
+			{
+				char* ch = va_arg(args, char*);
+				C_ConsolePrint(ch);
+			}
+			default:
+				break;
+			}
+		}
+		//otherwise we print
+		else
+		{
+			_printCharToScrollBackBuffer(ch);
+		}
+		fmt++;		
+	}
+
+	va_end(args);
 }
