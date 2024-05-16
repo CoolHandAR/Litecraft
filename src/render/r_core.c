@@ -1,20 +1,32 @@
-#include <GLFW/glfw3.h>
-#include "r_core.h"
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Main core of the rendering pipeline. Holds all the rendering data.
+Start and ends the frame
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
 
-R_CMD_Buffers* cmdBuffers;
+#include "r_core.h"
+#include "core/c_common.h"
+
+R_CMD_Buffer* cmdBuffer;
 R_DrawData* drawData;
+R_RenderPassData* pass;
 R_BackendData* backend_data;
-R_Cvars* cvars;
+R_Cvars* r_cvars;
 R_Metrics metrics;
+R_StorageBuffers storage_buffers;
 
 extern void r_processCommands1();
-
-
-//update metrics values and check if we can render this frame
+extern void r_RenderAll();
+extern GLFWwindow* glfw_window;
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Updates metrics and sets if we should skip this frame
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
 static void _updateMetrics()
 {
 	backend_data->skip_frame = false;
-	backend_data->render_thread_active = false;
 
 	metrics.frame_ticks_per_second++;
 	float new_time = glfwGetTime();
@@ -27,9 +39,9 @@ static void _updateMetrics()
 		metrics.previous_fps_timed_time = new_time;
 	}
 	
-	if (cvars->r_limitFPS->int_value == 1)
+	if (r_cvars->r_limitFPS->int_value == 1)
 	{
-		float max_fps = (cvars->r_maxFPS->int_value > 0) ? cvars->r_maxFPS->int_value : 144; //make sure we are not diving by zero
+		float max_fps = (r_cvars->r_maxFPS->int_value > 0) ? r_cvars->r_maxFPS->int_value : 144; //make sure we are not diving by zero
 		float max_fps_norm = 1.0 / max_fps;
 
 		if (new_time - metrics.previous_render_time >= max_fps_norm)
@@ -43,58 +55,96 @@ static void _updateMetrics()
 		}
 	}
 }
+static void _updateMSSAFBOTexture()
+{
 
+}
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Runs specific update/change functions 
+only if certain cvars are modified
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
 static void _checkForModifiedCvars()
 {
-	if (cvars->r_useVsync->modified)
+	if (r_cvars->w_useVsync->modified)
 	{
-		glfwSwapInterval(cvars->r_useVsync->int_value);
-		cvars->r_useVsync->modified = false;
+		//glfwSwapInterval(r_cvars->w_useVsync->int_value);
+		r_cvars->w_useVsync->modified = false;
+	}
+	if (r_cvars->w_width->modified)
+	{
+		
+	}
+	if (r_cvars->w_height->modified)
+	{
+
 	}
 }
 
-static void _beginProcessingCommands()
+static void r_waitForRenderThread()
 {
-	if (cvars->r_multithread->int_value == 1)
+	//wait till thread completes it's work
+	WaitForSingleObject(backend_data->thread.event_completed, INFINITE);
+}
+
+static void r_wakeRenderThread()
+{
+	SetEvent(backend_data->thread.event_work_permssion);
+
+	//wait till starts working
+	//WaitForSingleObject(backend_data->thread.event_active, INFINITE);
+}
+
+static void r_renderThreadSleep()
+{	
+	ResetEvent(backend_data->thread.event_active);
+
+	//signal that we have completed our work
+	SetEvent(backend_data->thread.event_completed);
+
+	//stall till we get permission to work from the main thread
+	WaitForSingleObject(backend_data->thread.event_work_permssion, INFINITE);
+	
+	//reset state
+	ResetEvent(backend_data->thread.event_completed);
+	ResetEvent(backend_data->thread.event_work_permssion);
+
+	SetEvent(backend_data->thread.event_active);
+}
+
+void r_threadLoop()
+{
+	while (true)
 	{
-		if (thrd_create(&backend_data->render_thread, r_processCommands1, NULL) != thrd_success)
-		{
-			return;
-		}
-		backend_data->render_thread_active = true;
-	}
-	else
-	{
+		r_renderThreadSleep();
+
+		backend_data->thread.boolean_active = true;
+
 		r_processCommands1();
+
+		backend_data->thread.boolean_active = false;
 	}
 }
 
-void r_startFrame()
+void r_startFrame1()
 {
 	_updateMetrics();
 	_checkForModifiedCvars();
-
-	if (backend_data->skip_frame)
-	{
-		return;
-	}
-
-	_beginProcessingCommands();
+	
+	r_processCommands1();
+	//r_wakeRenderThread();
 }
 
-void r_endFrame()
+void r_endFrame1()
 {
-	if (backend_data->skip_frame)
-	{
-		return;
-	}
+	//r_waitForRenderThread();
+	
+	//int sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+	//glClientWaitSync(sync, GL_SYNC_FLUSH_COMMANDS_BIT, INFINITE);
 
-	//if we have thread active wait for it to finish its work
-	if (backend_data->render_thread_active)
-	{
-		thrd_join(backend_data->render_thread, NULL);
-		backend_data->render_thread_active = false;
-	}
+	glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+	r_RenderAll();
 
 
 }

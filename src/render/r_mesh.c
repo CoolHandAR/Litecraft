@@ -1,9 +1,9 @@
-#include "r_mesh.h"
 
 #include <glad/glad.h>
 
 #include "r_renderDefs.h"
 
+#include "r_model.h"
 
 R_Mesh Mesh_Init(dynamic_array* p_vertices, dynamic_array* p_indices, dynamic_array* p_textures)
 {

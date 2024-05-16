@@ -9,6 +9,10 @@
 #define Math_PI 3.1415926535897932384626433833
 #define CMP_EPSILON 0.00001
 
+inline float Math_Clamp(float v, float min_v, float max_v)
+{
+	return v < min_v ? min_v : (v > max_v ? max_v : v);
+}
 
 inline bool Math_IsZeroApprox(float s)
 {

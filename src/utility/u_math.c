@@ -5,7 +5,6 @@
 
 long double Math_fract(long double x)
 {
-	
 	return fminl(x - floorl(x), 0.999999940395355224609375);
 	
 }
@@ -771,6 +770,7 @@ void Math_Model(vec3 position, vec3 size, float rotation, mat4 dest)
 	pos[1] = position[1];
 	pos[2] = position[2];
 	glm_translate(m, pos);
+
 
 	if (rotation != 0)
 	{

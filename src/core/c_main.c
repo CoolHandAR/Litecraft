@@ -4,8 +4,7 @@
 #include "lc_core.h"
 #include "utility/u_math.h"
 
-#include "c_console.h"
-#include "c_cvars.h"
+#include "cvar.h"
 
 #include "render/r_renderer.h"
 
@@ -13,19 +12,49 @@
 
 #include <windows.h>
 
+#include "input.h"
+
+extern GLFWwindow* glfw_window;
+
+/*
+~~~~~~~~~~~~~~~~~~~~~~
+CORE ENGINE FUNCTIONS
+~~~~~~~~~~~~~~~~~~~~~~
+*/
+#define NUKLEAR_MAX_VERTEX_BUFFER 512 * 1024
+#define NUKLEAR_MAX_ELEMENT_BUFFER 128 * 1024
+
+
+#include "core/c_common.h"
+#define NK_INCLUDE_DEFAULT_FONT
+#define NK_INCLUDE_FIXED_TYPES
+#define NK_INCLUDE_STANDARD_IO
+#define NK_INCLUDE_STANDARD_VARARGS
+#define NK_INCLUDE_DEFAULT_ALLOCATOR
+#define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
+#define NK_INCLUDE_FONT_BAKING
+#define NK_INCLUDE_DEFAULT_FONT
+#define NK_KEYSTATE_BASED_INPUT
+#define NK_GLFW_GL3_IMPLEMENTATION
+#define NK_IMPLEMENTATION
+#include <nuklear/nuklear.h>
+#include <nuklear/nuklear_glfw_gl3.h>
+
+
+
 #define MAX_PHYS_STEPS 6
 #define MAX_PHYS_DELTA_TIME 1.0
 #define PHYS_DESIRED_FPS 60.0f
 #define PHYS_MS_PER_SECOND 1000.0f
 
- GLFWwindow* s_Window;
- ivec2 s_windowSize;
-
+extern void r_startFrame1();
+extern void r_endFrame1();
 extern bool C_init();
-extern void r_onWindowResize(ivec2 window_size);
-extern void s_SoundEngineCleanup();
+extern void C_Exit();
 extern void r_startFrame();
 extern void r_endFrame();
+extern void Input_processActions();
+extern void Con_Update();
 
 typedef struct C_EngineTiming
 {
@@ -34,37 +63,16 @@ typedef struct C_EngineTiming
 	bool phys_in_frame;
 } C_EngineTiming;
 
+NK_Data nk;
 static C_EngineTiming s_engineTiming;
 
-void C_setWindowPtr(GLFWwindow* ptr)
+size_t C_getTicks()
 {
-	s_Window = ptr;
+	return s_engineTiming.ticks;
 }
-
-void C_resizeCallback(GLFWwindow* window, int width, int height)
+size_t C_getPhysicsTicks()
 {
-	glViewport(0, 0, width, height);
-	s_windowSize[0] = width;
-	s_windowSize[1] = height;
-
-	r_onWindowResize(s_windowSize);
-}
-
-void C_mouseCallback(GLFWwindow* window, double xpos, double ypos)
-{
-	LC_MouseUpdate(xpos, ypos);
-}
-void C_kbCallback(GLFWwindow* Window, int key, int scancode, int action, int mods)
-{
-	//backspace for console
-	if ((key == 259 || key == 257)&& action == GLFW_PRESS)
-	{
-		C_KB_Input(key);
-	}
-}
-void C_charCallback(GLFWwindow* window, unsigned int codepoint)
-{
-		C_KB_Input(codepoint);
+	return s_engineTiming.phys_ticks;
 }
 
 void C_Loop()
@@ -93,11 +101,13 @@ void C_Loop()
 	*	MAIN LOOP
 	* ~~~~~~~~~~~~~~~~~~
 	*/
-	while (!glfwWindowShouldClose(s_Window))
+	while (!glfwWindowShouldClose(glfw_window))
 	{
-		if (glfwGetKey(s_Window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-			glfwSetWindowShouldClose(s_Window, true);
+		if (glfwGetKey(glfw_window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+			glfwSetWindowShouldClose(glfw_window, true);
 		
+		
+		nk_glfw3_new_frame(&nk.glfw);
 
 		/*
 		* ~~~~~~~~~~~~~~~~~~
@@ -109,6 +119,13 @@ void C_Loop()
 		float delta_time = new_time - previous_frame;
 		previous_frame = new_time;
 		float total_delta_time = delta_time / DESIRED_FRAME_TIME;
+		
+		/*
+		* ~~~~~~~~~~~~~~~~~~
+		*	INPUT UPDATE
+		* ~~~~~~~~~~~~~~~~~~
+		*/
+		Input_processActions();
 
 		/*
 		* ~~~~~~~~~~~~~~~~~~
@@ -117,21 +134,24 @@ void C_Loop()
 		*/
 		LC_Loop(delta_time);
 
+
+		//we need to issue draw calls before the core game loop
+		//start rendering
+		//r_startFrame1();
+
 		/*
 		* ~~~~~~~~~~~~~~~~~~
 		* EXTRAS
 		* ~~~~~~~~~~~~~~~~~~
 		*/
-		C_DrawConsole();
-
-
+		Con_Update();
 		/*
 		* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 		* PROCESS RENDER COMMANDS ON THE RENDER THREAD
 		* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 		*/
 		thrd_t render_thread;
-		thrd_create(&render_thread, r_processCommands, NULL);
+		//thrd_create(&render_thread, r_processCommands, NULL);
 		/*
 		* ~~~~~~~~~~~~~~~~~~
 		* PHYSICS LOOP
@@ -158,18 +178,22 @@ void C_Loop()
 		* RENDER
 		* ~~~~~~~~~~~~~~~~~~
 		*/
+		//glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+		//r_endFrame1();
+		
 		//WAIT FOR THE RENDER THREAD TO COMPLETE
-		thrd_join(render_thread, NULL);
+		//thrd_join(render_thread, NULL);
 		//RENDER
 		++frames_per_second;
 		if (use_fps_limit)
 		{
 			if (new_time - previous_render_frame >= MAX_FPS)
 			{
-				r_startFrame();
-				r_endFrame();
+				//r_startFrame();
+				//r_endFrame();
 
-				glfwSwapBuffers(s_Window);
+				//nk_glfw3_render(&nk.glfw, NK_ANTI_ALIASING_ON, NUKLEAR_MAX_VERTEX_BUFFER, NUKLEAR_MAX_ELEMENT_BUFFER);
+				//glfwSwapBuffers(glfw_window);
 				previous_render_frame = new_time;
 			}
 		}
@@ -178,7 +202,8 @@ void C_Loop()
 			r_startFrame();
 			r_endFrame();
 
-			glfwSwapBuffers(s_Window);
+			nk_glfw3_render(&nk.glfw, NK_ANTI_ALIASING_ON, NUKLEAR_MAX_VERTEX_BUFFER, NUKLEAR_MAX_ELEMENT_BUFFER);
+			glfwSwapBuffers(glfw_window);
 
 
 			if (new_time - previous_fps_timed_frame > 1.0)
@@ -190,24 +215,11 @@ void C_Loop()
 			
 		}
 		
-		
-
-
 		s_engineTiming.ticks++;
-
-		
-
-		
 		glfwPollEvents();
 	}
 }
 
-void C_Cleanup()
-{
-	glfwTerminate();
-	s_SoundEngineCleanup();
-	C_CvarCoreCleanup();
-}
 
 int C_entry()
 {
@@ -218,19 +230,13 @@ int C_entry()
 	memset(&s_engineTiming, 0, sizeof(C_EngineTiming));
 	
 
-	
-
-	
-	s_windowSize[0] = 800;
-	s_windowSize[1] = 600;
-
 	//START CORE LOOP
 	C_Loop();
 
 
 	//CLEAN UP
+	C_Exit();
 	LC_Cleanup();
-	C_Cleanup();
 
 	return 0;
 }

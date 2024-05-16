@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+R_Camera* current_camera;
+
 static Camera_Data getDefautltData()
 {
 	Camera_Data data;
@@ -134,5 +136,20 @@ void Camera_UpdateMatrices(R_Camera* const p_cam, float screen_width, float scre
 
 	glm_lookat(p_cam->data.position, &center, p_cam->data.camera_up, p_cam->data.view_matrix);
 	glm_perspective(glm_rad(p_cam->config.fov), screen_width / screen_height, p_cam->config.zNear, p_cam->config.zFar, p_cam->data.proj_matrix);
+
+	mat4 view_proj;
+	glm_mat4_mul(p_cam->data.proj_matrix, p_cam->data.view_matrix, view_proj);
+
+	glm_frustum_planes(view_proj, p_cam->data.frustrum_planes);
+}
+
+void Camera_setCurrent(R_Camera* const p_cam)
+{
+	current_camera = p_cam;
+}
+
+R_Camera* Camera_getCurrent()
+{
+	return current_camera;
 }
 

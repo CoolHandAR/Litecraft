@@ -2,62 +2,10 @@
 
 #include "cJSON/cJSON.h"
 
+#include "utility/u_utility.h"
 #include <string.h>
 #include <assert.h>
 
-char* _parseFromFile(const char* p_jsonPath)
-{
-	FILE* json_file = NULL;
-	
-	fopen_s(&json_file, p_jsonPath, "r");
-	if (!json_file)
-	{
-		printf("Failed to open json file at path: %s!\n", p_jsonPath);
-		return 0;
-	}
-
-	int buffer_size = 102400;
-
-	char* buffer = malloc(buffer_size);
-	if (!buffer)
-	{
-		printf("MALLOC FAILURE\n");
-		return 0;
-	}
-	memset(buffer, 0, buffer_size);
-
-	//READ FROM THE JSON FILE
-	int c;
-	int i = 0;
-	while ((c = fgetc(json_file)) != EOF)
-	{
-		buffer[i] = c;
-		i++;
-
-		//realloc more if we need to 
-		if (i >= buffer_size - 1)
-		{
-			void* ptr = realloc(buffer, buffer_size + 1024);
-
-			//did we fail to realloc for some reason?
-			if (!ptr)
-			{
-				free(buffer);
-				return NULL;
-			}
-			void* ptr_new_data = (char*)ptr + buffer_size;
-			memset(ptr_new_data, 0, 1024);
-			buffer_size += 1024;
-
-			buffer = ptr;
-		}
-	}
-	
-	//CLEAN UP
-	fclose(json_file);
-
-	return buffer;
-}
 
 R_FontData R_loadFontData(const char* p_jsonPath, const char* p_textureFile)
 {
@@ -68,7 +16,7 @@ R_FontData R_loadFontData(const char* p_jsonPath, const char* p_textureFile)
 	font_data.texture = Texture_Load(p_textureFile, NULL);
 
 	//read from the json file
-	char* json_char_data = _parseFromFile(p_jsonPath);
+	char* json_char_data = File_ParseString(p_jsonPath);
 
 	if (!json_char_data)
 	{
