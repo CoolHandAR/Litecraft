@@ -9,6 +9,10 @@
 #define Math_PI 3.1415926535897932384626433833
 #define CMP_EPSILON 0.00001
 
+void Math_Proj_ReverseZInfinite(float fovy, float aspect, float nearZ, float farZ, mat4 dest);
+
+void Math_GLM_FrustrumPlanes_ReverseZ(mat4 m, vec4 dest[6]);
+
 inline float Math_Clamp(float v, float min_v, float max_v)
 {
 	return v < min_v ? min_v : (v > max_v ? max_v : v);
@@ -64,6 +68,13 @@ inline void Math_mat4_mulv2(mat4 m, vec2 v, float third, float last, vec2 dest)
 	res[3] = last;
 	glm_mat4_mulv(m, res, res);
 	glm_vec2(res, dest);
+}
+
+inline void Math_vec3_scaleadd(vec3 va, vec3 vb, float scale, vec3 dest)
+{
+	dest[0] = va[0] + scale * vb[0];
+	dest[1] = va[1] + scale * vb[1];
+	dest[2] = va[2] + scale * vb[2];
 }
 
 inline bool Math_vec3_is_zero(vec3 v)
@@ -133,3 +144,12 @@ bool Plane_IntersectsSegment(Plane* const p_plane, vec3 begin, vec3 end, vec3 r_
 
 void Math_Model(vec3 position, vec3 size, float rotation, mat4 dest);
 void Math_Model2D(vec2 position, vec2 size, float rotation, mat4 dest);
+
+
+typedef struct
+{
+	mat4 projView;
+	float splitDist;
+} CascadeShadow;
+
+void CascadeShadow_genMatrix(vec3 p_lightDir, mat4 view, mat4 proj, mat4 dest[5], float cascades[5]);

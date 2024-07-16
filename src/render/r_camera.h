@@ -38,6 +38,7 @@ typedef struct R_Camera
 
 
 R_Camera Camera_Init();
+void Camera_updateFront(R_Camera* const p_cam);
 void Camera_ProcessMouse(R_Camera* const p_cam, double x, double y);
 void Camera_ProcessMove(R_Camera* const p_cam, int x, int y);
 void Camera_UpdateMatrices(R_Camera* const p_cam, float screen_width, float screen_height);

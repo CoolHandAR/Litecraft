@@ -20,8 +20,8 @@ typedef struct AABB_QueryResult
 typedef struct AABB_RayQueryResult
 {
 	AABB box;
-	float near;
-	float far;
+	float near2;
+	float far2;
 	vec3 normal;
 	vec3 clip;
 	void* data;

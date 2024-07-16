@@ -6,8 +6,9 @@
 #include "c_common.h"
 #include "cvar.h"
 #include <Windows.h>
+#include <assert.h>
 
-#define DEFAULT_WINDOW_WIDTH 1024
+#define DEFAULT_WINDOW_WIDTH 1280
 #define DEFAULT_WINDOW_HEIGHT 720
 #define WINDOW_NAME "Litecraft"
 

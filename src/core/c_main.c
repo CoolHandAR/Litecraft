@@ -14,6 +14,8 @@
 
 #include "input.h"
 
+#include "lc2/lc_world.h"
+
 extern GLFWwindow* glfw_window;
 
 /*
@@ -55,11 +57,13 @@ extern void r_startFrame();
 extern void r_endFrame();
 extern void Input_processActions();
 extern void Con_Update();
+extern void ThreadCore_ShutdownInactiveThreads();
 
 typedef struct C_EngineTiming
 {
 	size_t ticks;
 	size_t phys_ticks;
+	float delta_time;
 	bool phys_in_frame;
 } C_EngineTiming;
 
@@ -73,6 +77,16 @@ size_t C_getTicks()
 size_t C_getPhysicsTicks()
 {
 	return s_engineTiming.phys_ticks;
+}
+
+float C_getDeltaTime()
+{
+	return s_engineTiming.delta_time;
+}
+
+float C_getPhysDeltaTime()
+{
+	return 0.0f;
 }
 
 void C_Loop()
@@ -119,6 +133,7 @@ void C_Loop()
 		float delta_time = new_time - previous_frame;
 		previous_frame = new_time;
 		float total_delta_time = delta_time / DESIRED_FRAME_TIME;
+		s_engineTiming.delta_time = delta_time;
 		
 		/*
 		* ~~~~~~~~~~~~~~~~~~
@@ -126,6 +141,7 @@ void C_Loop()
 		* ~~~~~~~~~~~~~~~~~~
 		*/
 		Input_processActions();
+		
 
 		/*
 		* ~~~~~~~~~~~~~~~~~~
@@ -173,6 +189,7 @@ void C_Loop()
 			s_engineTiming.phys_in_frame = false;
 		}
 		
+		
 		/*
 		* ~~~~~~~~~~~~~~~~~~
 		* RENDER
@@ -214,7 +231,8 @@ void C_Loop()
 			}
 			
 		}
-		
+		LC_World_Update2();
+		ThreadCore_ShutdownInactiveThreads();
 		s_engineTiming.ticks++;
 		glfwPollEvents();
 	}

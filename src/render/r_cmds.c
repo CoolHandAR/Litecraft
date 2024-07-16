@@ -1,5 +1,5 @@
 /*
-	Process all render commands
+	Process all renderer commands
 */
 
 #include "r_core.h"
@@ -267,11 +267,11 @@ static void _uploadDataToGpu()
 	}
 	if (drawData->lines.vertices_count > 0)
 	{
-        memcpy(drawData->lines.buffer_ptr, drawData->lines.vertices, sizeof(LineVertex) * drawData->lines.vertices_count);
+        memcpy(drawData->lines.buffer_ptr, drawData->lines.vertices, sizeof(BasicVertex) * drawData->lines.vertices_count);
 	}
     if (drawData->triangle.vertices_count > 0)
     {
-        memcpy(drawData->triangle.buffer_ptr, drawData->triangle.vertices, sizeof(TriangleVertex) * drawData->triangle.vertices_count);
+        memcpy(drawData->triangle.buffer_ptr, drawData->triangle.vertices, sizeof(BasicVertex) * drawData->triangle.vertices_count);
     }
 
 }

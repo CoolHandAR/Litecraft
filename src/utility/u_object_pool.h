@@ -1,6 +1,6 @@
 #pragma once
 
-#include "dynamic_array.h"
+#include "utility/dynamic_array.h"
 
 typedef struct Object_Pool
 {

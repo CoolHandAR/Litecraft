@@ -293,8 +293,22 @@ void Shader_SetInteger(R_Shader shader, const char* name, int value)
 		return;
 	}
 #endif
-
 	glUniform1i(uniform_location, value);
+}
+
+void Shader_SetUnsigned(R_Shader shader, const char* name, unsigned value)
+{
+	GLint uniform_location = glGetUniformLocation(shader, name);
+
+#if PRINT_AND_FAIL_ON_INVALID_UNIFORM_LOCATION
+
+	if (uniform_location == -1)
+	{
+		printf("GL_ERROR::Invalid Uniform Location: %s \n", name);
+		return;
+	}
+#endif
+	glUniform1ui(uniform_location, value);
 }
 
 void Shader_SetVector2f(R_Shader shader, const char* name, float x, float y)
@@ -345,7 +359,7 @@ void Shader_SetVector3f(R_Shader shader, const char* name, float x, float y, flo
 	glUniform3f(uniform_location, x, y, z);
 }
 
-void Shader_SetVector3f_2(R_Shader shader, const char* name, vec3* const value)
+void Shader_SetVector3f_2(R_Shader shader, const char* name, vec3 const value)
 {
 	GLint uniform_location = glGetUniformLocation(shader, name);
 
@@ -358,7 +372,7 @@ void Shader_SetVector3f_2(R_Shader shader, const char* name, vec3* const value)
 	}
 #endif
 
-	glUniform3f(uniform_location, *value[0], *value[1], *value[2]);
+	glUniform3f(uniform_location, value[0], value[1], value[2]);
 }
 
 void Shader_SetVector4f(R_Shader shader, const char* name, float x, float y, float z, float w)

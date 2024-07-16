@@ -1,5 +1,5 @@
 #include "lc_player.h"
-
+#include "core/c_common.h"
 
 #define PLAYER_AABB_WIDTH 1.1
 #define PLAYER_AABB_HEIGHT 3
@@ -7,11 +7,37 @@
 
 #define PLAYER_MAX_SPEED 100
 #define PLAYER_MAX_DUCK_SPEED 12
-#define PLAYER_ACCEL 1
+#define PLAYER_ACCEL 10
 #define PLAYER_AIR_ACCEL 100
-#define PLAYER_JUMP_HEIGHT 100
+#define PLAYER_JUMP_HEIGHT 1
 
 #define PLAYER_ACTION_FREQ 0.4f
+
+#define PLAYER_HOTBAR_SLOTS 9
+#define PLAYER_INVENTORY_SLOTS 27
+
+typedef struct LC_Inventory
+{
+	LC_BlockType storage_slots[PLAYER_INVENTORY_SLOTS];
+
+} LC_Inventory;
+
+typedef struct LC_Player
+{
+	LC_Entity* handle;
+	Kinematic_Body* k_body;
+	bool free_fly;
+	bool inventory_opened;
+	bool mouse_click[2];
+
+	float attack_cooldown_timer;
+
+	LC_BlockType held_block_type;
+	int hotbar_index;
+
+	LC_BlockType hotbar_slots[PLAYER_HOTBAR_SLOTS];
+
+} LC_Player;
 
 static LC_Player s_player;
 R_Camera* cam_ptr;
@@ -26,11 +52,25 @@ typedef struct LC_UISprites
 } LC_UISprites;
 
 #include "lc_block_defs.h"
+#include "lc2/lc_world.h"
 
 extern R_Texture g_gui_atlas_texture;
 extern R_Texture g_block_atlas;
 static LC_UISprites s_uiSprites;
 static R_Texture inventory_texture;
+
+static bool isPlayerInBlock(int p_gX, int p_gY, int p_gZ)
+{
+	AABB block_box;
+	block_box.width = 1;
+	block_box.height = 1;
+	block_box.length = 1;
+	block_box.position[0] = p_gX - 0.5;
+	block_box.position[1] = p_gY - 0.5;
+	block_box.position[2] = p_gZ - 0.5;
+
+	return AABB_intersectsOther(&s_player.k_body->box, &block_box);
+}
 
 static void initUiSprites()
 {
@@ -42,7 +82,7 @@ static void initUiSprites()
 	texture_region.y = 606;
 	texture_region.width = 182;
 	texture_region.height = 22;
-	Sprite_setTextureRegion(&s_uiSprites.hotbar, texture_region);
+	//Sprite_setTextureRegion(&s_uiSprites.hotbar, texture_region);
 	s_uiSprites.hotbar.scale[0] = 2;
 	s_uiSprites.hotbar.scale[1] = 2;
 	vec2 scale;
@@ -64,7 +104,7 @@ static void initUiSprites()
 	texture_region.y = 604;
 	texture_region.width = 24;
 	texture_region.height = 24;
-	Sprite_setTextureRegion(&s_uiSprites.hotbar_highlight, texture_region);
+	//Sprite_setTextureRegion(&s_uiSprites.hotbar_highlight, texture_region);
 	s_uiSprites.hotbar_highlight.scale[0] = 2;
 	s_uiSprites.hotbar_highlight.scale[1] = 2;
 
@@ -81,7 +121,7 @@ static void initUiSprites()
 	s_uiSprites.inventory.scale[0] = 2;
 	s_uiSprites.inventory.scale[1] = 2;
 	s_uiSprites.inventory.flipped_y = true;
-	Sprite_setTextureRegion(&s_uiSprites.inventory, texture_region);
+	//Sprite_setTextureRegion(&s_uiSprites.inventory, texture_region);
 	Sprite_setPosition(&s_uiSprites.inventory, position);
 }
 
@@ -141,7 +181,8 @@ static LC_Block* getSelectedBlock(ivec3 r_pos, ivec3 r_face)
 	from_pos[1] = cam_ptr->data.position[1] + 0.5;
 	from_pos[2] = cam_ptr->data.position[2] + 0.5;
 
-	LC_Block* block = LC_World_getBlockByRay(from_pos, cam_ptr->data.camera_front, block_pos, face);
+	//LC_Block* block = LC_World_getBlockByRay(from_pos, cam_ptr->data.camera_front, block_pos, face);
+	LC_Block* block = LC_World_getBlockByRay(from_pos, cam_ptr->data.camera_front, block_pos, face, NULL);
 
 	if (!block)
 		return NULL;
@@ -155,7 +196,6 @@ static LC_Block* getSelectedBlock(ivec3 r_pos, ivec3 r_face)
 	aabb.position[1] = block_pos[1] - 0.5;
 	aabb.position[2] = block_pos[2] - 0.5;
 
-	r_drawAABBWires(aabb, NULL);
 
 	r_pos[0] = block_pos[0];
 	r_pos[1] = block_pos[1];
@@ -190,13 +230,23 @@ void handleAction(float delta)
 	{
 		if (s_player.mouse_click[0])
 		{
-			LC_World_addBlock(block_pos[0], block_pos[1], block_pos[2], faces, s_player.held_block_type);
+			if (LC_World_addBlock2(block_pos[0], block_pos[1], block_pos[2], faces, s_player.held_block_type))
+			{
+				if (isPlayerInBlock(block_pos[0] + faces[0], block_pos[1] + faces[1], block_pos[2] + faces[2]))
+				{
+					s_player.k_body->box.position[0] += faces[0];
+					s_player.k_body->box.position[1] += faces[1];
+					s_player.k_body->box.position[2] += faces[2];
+				}
+				
+	
+			}
 			s_player.k_body->force_update_on_frame = true;
 			s_player.attack_cooldown_timer = PLAYER_ACTION_FREQ;
 		}
 		else if (s_player.mouse_click[1])
 		{
-			LC_World_mineBlock(block_pos[0], block_pos[1], block_pos[2]);
+			LC_World_mineBlock2(block_pos[0], block_pos[1], block_pos[2]);
 			s_player.k_body->force_update_on_frame = true;
 			s_player.attack_cooldown_timer = PLAYER_ACTION_FREQ;
 		}
@@ -208,7 +258,7 @@ void handleAction(float delta)
 
 }
 
-void LC_Player_Create(LC_World* world, vec3 pos)
+void LC_Player_Create(vec3 pos)
 {
 	LC_Player player;
 	memset(&player, 0, sizeof(LC_Player));
@@ -231,17 +281,23 @@ void LC_Player_Create(LC_World* world, vec3 pos)
 	aabb.height = PLAYER_AABB_HEIGHT;
 	aabb.length = PLAYER_AABB_LENGTH;
 
-	player.handle = LC_World_AssignEntity();
+	//player.handle = LC_World_AssignEntity();
 
-	player.k_body = PhysWorld_AddKinematicBody(world->phys_world, &aabb, player.handle);
-	player.k_body->max_speed = PLAYER_MAX_SPEED;
-	player.k_body->max_ducking_speed = PLAYER_MAX_DUCK_SPEED;
-	player.k_body->accel = PLAYER_ACCEL;
-	player.k_body->air_accel = PLAYER_AIR_ACCEL;
-	player.k_body->jump_height = PLAYER_JUMP_HEIGHT;
+	//PHYSICS BODY
+	//player.k_body = PhysWorld_AddKinematicBody(world->phys_world, &aabb, player.handle);
+	player.k_body = PhysWorld_AddKinematicBody(LC_World_GetPhysWorld(), &aabb, NULL);
+	player.k_body->config.ducking_scale = 0.2f;
+	player.k_body->config.ground_accel = 100;
+	player.k_body->config.air_accel = 1;
+	player.k_body->config.water_accel = 0.3;
+	player.k_body->config.jump_height = 0.07;
 	player.k_body->force_update_on_frame = true;
-
 	player.k_body->flags = PF__Collidable | PF__ForceUpdateOnFrame;
+	player.k_body->config.air_friction = 0.2;
+	player.k_body->config.ground_friction = 6.0;
+	player.k_body->config.flying_friction = 5;
+	player.k_body->config.water_friction = 1000;
+	player.k_body->config.stop_speed = 100;
 
 	player.free_fly = true;
 	player.held_block_type = LC_BT__STONE;
@@ -249,13 +305,14 @@ void LC_Player_Create(LC_World* world, vec3 pos)
 	player.hotbar_slots[0] = LC_BT__GRASS;
 	player.hotbar_slots[1] = LC_BT__SAND;
 	player.hotbar_slots[2] = LC_BT__STONE;
-	player.hotbar_slots[3] = LC_BT__DIRT;
+	player.hotbar_slots[3] = LC_BT__GLOWSTONE;
 	player.hotbar_slots[4] = LC_BT__TRUNK;
 	player.hotbar_slots[5] = LC_BT__TREELEAVES;
-	player.hotbar_slots[6] = LC_BT__WATER;
+	player.hotbar_slots[6] = LC_BT__MAGMA;
 	player.hotbar_slots[7] = LC_BT__GLASS;
-	player.hotbar_slots[8] = LC_BT__GLOWSTONE;
+	player.hotbar_slots[8] = LC_BT__OBSIDIAN;
 	player.hotbar_index = 0;
+
 
 	initUiSprites();
 
@@ -266,6 +323,7 @@ void LC_Player_Create(LC_World* world, vec3 pos)
 
 void LC_Player_Update(R_Camera* const cam, float delta)
 {
+	
 	cam_ptr = cam;
 
 	handleAction(delta);
@@ -276,7 +334,7 @@ void LC_Player_Update(R_Camera* const cam, float delta)
 
 	if (s_player.free_fly)
 	{
-		s_player.k_body->flags = s_player.k_body->flags & ~PF__AffectedByGravity;
+		s_player.k_body->flags &= ~PF__AffectedByGravity;
 	}
 	else
 	{
@@ -292,28 +350,30 @@ void LC_Player_Update(R_Camera* const cam, float delta)
 
 	if (s_player.k_body->flags & PF__Ducking)
 	{
-		s_player.k_body->box.height = (float)PLAYER_AABB_HEIGHT * 0.31f;
+		s_player.k_body->box.height = glm_lerp(s_player.k_body->box.height, (float)PLAYER_AABB_HEIGHT * 0.31f, 0.1);
 	}
 	else
 	{
-		s_player.k_body->box.height = (float)PLAYER_AABB_HEIGHT;
+		s_player.k_body->box.height = glm_lerp(s_player.k_body->box.height, (float)PLAYER_AABB_HEIGHT, 0.1);
 	}
 
 	memset(s_player.mouse_click, 0, sizeof(s_player.mouse_click));
 }
 void LC_Player_ProcessInput(GLFWwindow* const window, R_Camera* const cam)
 {
+	if (Con_isOpened())
+		return;
+
 	float yaw_in_radians = glm_rad(cam->data.yaw);
 	float cos_yaw = cos(yaw_in_radians);
 	float sin_yaw = sin(yaw_in_radians);
 
-	s_player.k_body->view_dir[0] = -cos_yaw;
-	s_player.k_body->view_dir[1] = cam->data.camera_front[1];
-	s_player.k_body->view_dir[2] = -sin_yaw;
+	
 
 	//MOVING
 	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
 	{
+		
 		s_player.k_body->direction[0] += cam->data.camera_right[0];
 		s_player.k_body->direction[2] += cam->data.camera_right[2];
 
@@ -322,6 +382,7 @@ void LC_Player_ProcessInput(GLFWwindow* const window, R_Camera* const cam)
 	}
 	else if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
 	{
+
 		s_player.k_body->direction[0] += -cam->data.camera_right[0];
 		s_player.k_body->direction[2] += -cam->data.camera_right[2];
 
@@ -330,6 +391,7 @@ void LC_Player_ProcessInput(GLFWwindow* const window, R_Camera* const cam)
 	}
 	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
 	{	
+
 		if (s_player.free_fly)
 		{
 			s_player.k_body->direction[0] += cam->data.camera_front[0];
@@ -361,7 +423,7 @@ void LC_Player_ProcessInput(GLFWwindow* const window, R_Camera* const cam)
 	//JUMPING
 	if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
 	{
-		if (s_player.k_body->on_ground && !s_player.free_fly)
+		if (!s_player.free_fly)
 		{
 			s_player.k_body->direction[1] = 1;
 		}

@@ -48,8 +48,6 @@ static void Render_LineBatch()
         return;
     }
 
-    glUseProgram(data->shader);
-
     glBindVertexArray(data->vao);
     glDrawArrays(GL_LINES, 0, data->vertices_count);
 
@@ -63,21 +61,28 @@ static void Render_TriangleBatch()
     if (data->vertices_count == 0)
         return;
 
-    glUseProgram(data->shader);
-
     glBindVertexArray(data->vao);
     glDrawArrays(GL_TRIANGLES, 0, data->vertices_count);
 
     data->vertices_count = 0;
 }
 
+static void Render_WorldChunks()
+{
+
+}
+
+void Render_3DScene()
+{
+    Render_WorldChunks();
+}
 
 
 void r_RenderAll()
 {
-   // glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
     Render_ScreenQuadBatch();
     Render_LineBatch();
     Render_TriangleBatch();
    
 }
+

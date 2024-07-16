@@ -196,8 +196,6 @@ static void Init_TextDrawData()
 
 static void _initLineDrawData()
 {
-    drawData->lines.shader = Shader_CompileFromFile("src/shaders/line_shader.vs", "src/shaders/line_shader.fs", NULL);
-
     glGenVertexArrays(1, &drawData->lines.vao);
     glGenBuffers(1, &drawData->lines.vbo);
 
@@ -208,17 +206,15 @@ static void _initLineDrawData()
 
     drawData->lines.buffer_ptr = glMapBufferRange(GL_ARRAY_BUFFER, 0, sizeof(drawData->lines.vertices), GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
 
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(LineVertex), (void*)(offsetof(LineVertex, position)));
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(BasicVertex), (void*)(offsetof(BasicVertex, position)));
     glEnableVertexAttribArray(0);
 
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(LineVertex), (void*)(offsetof(LineVertex, color)));
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(BasicVertex), (void*)(offsetof(BasicVertex, color)));
     glEnableVertexAttribArray(1);
 }
 
 static void _initTriangleDrawData()
 {
-    drawData->triangle.shader = Shader_CompileFromFile("src/shaders/triangle_shader.vs", "src/shaders/triangle_shader.fs", NULL);
-
     glGenVertexArrays(1, &drawData->triangle.vao);
     glGenBuffers(1, &drawData->triangle.vbo);
 
@@ -229,10 +225,10 @@ static void _initTriangleDrawData()
 
     drawData->triangle.buffer_ptr = glMapBufferRange(GL_ARRAY_BUFFER, 0, sizeof(drawData->triangle.vertices), GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
 
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(TriangleVertex), (void*)(offsetof(TriangleVertex, position)));
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(BasicVertex), (void*)(offsetof(BasicVertex, position)));
     glEnableVertexAttribArray(0);
 
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(TriangleVertex), (void*)(offsetof(TriangleVertex, color)));
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(BasicVertex), (void*)(offsetof(BasicVertex, color)));
     glEnableVertexAttribArray(1);
 }
 
@@ -386,9 +382,9 @@ static void Init_StorageBuffers()
 {
     memset(&storage_buffers, 0, sizeof(storage_buffers));
 
-    storage_buffers.particles = RSB_Create(200, sizeof(R_Particle), false, true, false, false);
-    storage_buffers.particle_emitters = RSB_Create(200, sizeof(R_ParticleEmitter), false, true, false, false);
-
+    storage_buffers.particles = RSB_Create(200, sizeof(R_Particle), false, true, false, false, true);
+    storage_buffers.particle_emitters = RSB_Create(200, sizeof(R_ParticleEmitter), false, true, false, false, true);
+    storage_buffers.texture_handles = RSB_Create(100, sizeof(GLuint64), false, true, false, false, true);
 
 }
 

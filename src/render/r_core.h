@@ -1,3 +1,5 @@
+#ifndef R_CORE_H
+#define R_CORE_H
 #pragma once
 
 #include <Windows.h>
@@ -17,26 +19,29 @@
 	VERTEX
 * ~~~~~~~~~~~~~~~~~~~
 */
-typedef struct ScreenVertex
+typedef struct
 {
 	vec3 position;
 	vec2 tex_coords;
 	float tex_index;
 } ScreenVertex;
 
-typedef struct LineVertex
+typedef struct
 {
 	vec3 position;
 	vec4 color;
-} LineVertex;
+} BasicVertex;
 
-typedef struct TriangleVertex
+typedef struct
 {
 	vec3 position;
-	vec4 color;
-} TriangleVertex;
+	vec3 normal;
+	vec3 tangent;
+	vec3 biTangent;
+	vec2 tex_coords;
+} Vertex;
 
-typedef struct TextVertex
+typedef struct
 {
 	vec3 position;
 	vec2 tex_coords;
@@ -60,11 +65,11 @@ typedef enum
 
 typedef enum
 {
-	R_CMD_PM__FULL, //draw the request
+	R_CMD_PM__FULL, //draw the request fully
 	R_CMD_PM__WIRES //draw in wireframe mode
 } R_CMD__PolygonMode;
 
-typedef struct R_CMD_DrawSprite
+typedef struct
 {
 	R_CMD_ProjectionType proj_type;
 	R_Sprite* sprite_ptr;
@@ -85,14 +90,14 @@ typedef struct
 	vec4 color;
 } R_CMD_DrawTriangle;
 
-typedef struct  R_CMD_DrawAABB
+typedef struct
 {
 	R_CMD__PolygonMode polygon_mode;
 	AABB aabb;
 	vec4 color;
 } R_CMD_DrawAABB;
 
-typedef struct R_CMD_DrawText
+typedef struct 
 {
 	R_CMD_ProjectionType proj_type;
 	const char* text;
@@ -102,6 +107,18 @@ typedef struct R_CMD_DrawText
 	
 } R_CMD_DrawText;
 
+typedef struct
+{
+	int particle_id;
+	vec3 velocity;
+	vec3 position;
+} R_CMD_ParticleEmitCustom;
+
+typedef struct
+{
+	int particle_id;
+} R_CMD_ParticleGeneric;
+
 typedef struct R_CMD_DrawModel
 {
 	R_Model* model;
@@ -110,12 +127,20 @@ typedef struct R_CMD_DrawModel
 
 typedef enum R_CMD
 {
+	//DRAWING
 	R_CMD__SPRITE,
 	R_CMD__AABB,
 	R_CMD__TEXT,
 	R_CMD__LINE,
 	R_CMD__TRIANGLE,
-	R_CMD__MODEL
+	R_CMD__MODEL,
+
+	//PARTICLE
+	R_CMD__PARTICLE_EMIT,
+	R_CMD__PARTICLE_EMIT_CUSTOM,
+	R_CMD__PARTICLE_RESTART,
+	R_CMD__PARTICLE_PAUSE,
+	R_CMD__PARTICLE_STOP
 } R_CMD;
 
 typedef struct
@@ -144,7 +169,7 @@ typedef struct
 #define SCREEN_QUAD_VERTICES_BUFFER_SIZE 1024
 #define SCREEN_QUAD_MAX_TEXTURES_IN_ARRAY 32
 
-typedef struct R_ScreenQuadDrawData
+typedef struct
 {
 	R_Shader shader;
 	ScreenVertex vertices[SCREEN_QUAD_VERTICES_BUFFER_SIZE];
@@ -159,10 +184,9 @@ typedef struct R_ScreenQuadDrawData
 
 #define LINE_VERTICES_BUFFER_SIZE 1024
 
-typedef struct R_LineDrawData
+typedef struct
 {
-	R_Shader shader;
-	LineVertex vertices[LINE_VERTICES_BUFFER_SIZE];
+	BasicVertex vertices[LINE_VERTICES_BUFFER_SIZE];
 	size_t vertices_count;
 	unsigned vao, vbo;
 	void* buffer_ptr;
@@ -172,8 +196,7 @@ typedef struct R_LineDrawData
 
 typedef struct
 {
-	R_Shader shader;
-	TriangleVertex vertices[TRIANGLE_VERTICES_BUFFER_SIZE];
+	BasicVertex vertices[TRIANGLE_VERTICES_BUFFER_SIZE];
 	size_t vertices_count;
 	unsigned vao, vbo;
 	void* buffer_ptr;
@@ -181,7 +204,7 @@ typedef struct
 
 #define TEXT_VERTICES_BUFFER_SIZE 1024
 
-typedef struct R_TextDrawData
+typedef struct
 {
 	R_Shader shader;
 	TextVertex vertices[TEXT_VERTICES_BUFFER_SIZE];
@@ -191,8 +214,7 @@ typedef struct R_TextDrawData
 	void* buffer_ptr;
 } R_TextDrawData;
 
-
-typedef struct R_DrawData
+typedef struct
 {
 	R_ScreenQuadDrawData screen_quad;
 	R_LineDrawData lines;
@@ -272,6 +294,7 @@ typedef struct
 	Cvar* r_mssaLevel;
 	Cvar* r_useDirShadowMapping;
 	Cvar* r_DirShadowMapResolution;
+	Cvar* r_HizCullingLevel;
 
 	//WINDOW SPECIFIC
 	Cvar* w_width;
@@ -294,11 +317,77 @@ typedef struct
 
 /*
 * ~~~~~~~~~~~~~~~~~~~~
-	BUFFERS DATA
+	BUFFER STRUCTS
+* ~~~~~~~~~~~~~~~~~~~
+*/
+typedef struct
+{
+	mat4 viewProjectionMatrix;
+	mat4 view;
+	mat4 proj;
+	mat4 invView;
+	mat4 invProj;
+	vec4 frustrum_planes[6];
+	vec4 position;
+	ivec2 screen_size;
+
+	float z_near;
+	float z_far;
+}R_CameraBuffer;
+
+typedef struct
+{
+	int s;
+}R_SceneBuffer;
+
+/*
+* ~~~~~~~~~~~~~~~~~~~~
+	UNIFORM BUFFERS DATA
+* ~~~~~~~~~~~~~~~~~~~
+*/
+typedef struct
+{
+	unsigned gl_handle;
+	void* data_map;
+} R_BufferMapPair;
+typedef struct
+{
+	R_BufferMapPair camera;
+	R_BufferMapPair scene;
+} R_UniformBuffers;
+
+/*
+* ~~~~~~~~~~~~~~~~~~~~
+	DRAW COMMAND STRUCTS
+* ~~~~~~~~~~~~~~~~~~~
+*/
+typedef struct
+{
+	unsigned count;
+	unsigned instanceCount;
+	unsigned first;
+	unsigned baseInstance;
+}  DrawArraysIndirectCommand;
+typedef struct
+{
+	unsigned count;
+	unsigned instanceCount;
+	unsigned firstIndex;
+	int      baseVertex;
+	unsigned baseInstance;
+} DrawElementsIndirectCommand;
+/*
+* ~~~~~~~~~~~~~~~~~~~~
+	STORAGE BUFFERS DATA
 * ~~~~~~~~~~~~~~~~~~~
 */
 typedef struct
 {
 	RenderStorageBuffer particles;
 	RenderStorageBuffer particle_emitters;
+	RenderStorageBuffer materials;
+	RenderStorageBuffer texture_handles;
+	RenderStorageBuffer draw_elements_commands;
 } R_StorageBuffers;
+
+#endif // R_CORE_H

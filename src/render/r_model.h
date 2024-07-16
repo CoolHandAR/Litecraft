@@ -1,25 +1,33 @@
 #pragma once
 
 #include "utility/dynamic_array.h"
+#include "utility/u_math.h"
+#include "r_texture.h"
+
+typedef struct
+{
+	R_Texture* base_color;
+	R_Texture* metallic__specular;
+	R_Texture* roughness;
+	R_Texture* normal;
+	R_Texture* ao;
+} Material;
 
 typedef struct R_Mesh
 {
-	unsigned vao, vbo, ebo;
+	mat4 xform;
+	vec3 bounding_box[2];
 	dynamic_array* vertices;
 	dynamic_array* indices;
-	dynamic_array* textures;
-
+	Material material;
+	unsigned storage_index;
 } R_Mesh;
 
-R_Mesh Mesh_Init(dynamic_array* p_vertices, dynamic_array* p_indices, dynamic_array* p_textures);
 void Mesh_Destruct(R_Mesh* p_mesh);
 
 typedef struct R_Model
 {
-	char directory[2222];
 	dynamic_array* meshes;
-	dynamic_array* loaded_textures;
-
 } R_Model;
 
 R_Model Model_Load(const char* p_mdlPath);

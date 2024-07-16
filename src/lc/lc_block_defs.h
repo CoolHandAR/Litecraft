@@ -1,11 +1,10 @@
 #pragma once
 
-#include "lc_chunk.h"
 #include <cglm/cglm.h>
 
 /*
 	Hardcoded block data. Used for rendering, collisions. 
-	Isn't very practical, but pretty scalable and error free :)
+	Isn't very practical, but it is good enough for this demo project
 	The arrays are index by the order of the LC_BlockType Enums
 	LiteCraft only supports blocks that are singular cuboids
 	So no custom types like chairs or beds
@@ -29,7 +28,9 @@ typedef enum LC_BlockType
 	LC_BT__WATER,
 	LC_BT__GLASS,
 	LC_BT__FLOWER,
-	LC_BT__GLOWSTONE
+	LC_BT__GLOWSTONE,
+	LC_BT__MAGMA,
+	LC_BT__OBSIDIAN
 
 } LC_BlockType;
 
@@ -43,6 +44,7 @@ typedef struct LC_Block_Texture_Offset_Data
 	vec2 bottom_face;
 	vec2 top_face;
 } LC_Block_Texture_Offset_Data;
+
 
 static const LC_Block_Texture_Offset_Data LC_BLOCK_TEX_OFFSET_DATA[] =
 {
@@ -111,12 +113,12 @@ static const LC_Block_Texture_Offset_Data LC_BLOCK_TEX_OFFSET_DATA[] =
 
 	//WATER
 	LC_BT__WATER,
-	0, 9,
-	0, 9,
-	0, 9,
-	0, 9,
-	0, 9,
-	0, 9,
+	2, 29,
+	2, 29,
+	2, 29,
+	2, 29,
+	2, 29,
+	2, 29,
 
 	//GLASS
 	LC_BT__GLASS,
@@ -145,159 +147,155 @@ static const LC_Block_Texture_Offset_Data LC_BLOCK_TEX_OFFSET_DATA[] =
 	25, 3,
 	25, 3,
 
+	//MAGMA
+	LC_BT__MAGMA,
+	27, 16,
+	27, 16,
+	27, 16,
+	27, 16,
+	27, 16,
+	27, 16,
+
+	//OBSIDIAN
+	LC_BT__OBSIDIAN,
+	17, 4,
+	17, 4,
+	17, 4,
+	17, 4,
+	17, 4,
+	17, 4,
+
 };
 
-typedef struct LC_Block_Collision_Data
+typedef struct
 {
 	LC_BlockType block_type;
-	bool collidable;
-} LC_Block_Collision_Data;
+	int material_type; //0 == opaque, 1 == transparent, 2 == water
+	int emits_light;
+	int collidable;
+} LC_Block_MiscData;
 
-static const LC_Block_Collision_Data LC_BLOCK_COLLISION_DATA[] =
+static const LC_Block_MiscData LC_BLOCK_MISC_DATA[] =
 {
 	//NONE
 	LC_BT__NONE,
-	false,
+	1,
+	0,
+	0,
 
 	//GRASS
 	LC_BT__GRASS,
-	true,
+	0,
+	0,
+	1,
 
 	//SAND
 	LC_BT__SAND,
-	true,
+	0,
+	0,
+	1,
 
 	//STONE
 	LC_BT__STONE,
-	true,
+	0,
+	0,
+	1,
 
 	//DIRT
 	LC_BT__DIRT,
-	true,
+	0,
+	0,
+	1,
 
 	//TRUNK
 	LC_BT__TRUNK,
-	true,
-
+	0,
+	0,
+	1,
 	//TREE LEAVES
 	LC_BT__TREELEAVES,
-	true,
+	1,
+	0,
+	1,
 
 	//WATER
 	LC_BT__WATER,
-	true,
+	2,
+	0,
+	1,
 
 	//GLASS
 	LC_BT__GLASS,
-	true,
+	1,
+	0,
+	1,
 
 	//FLOWER
 	LC_BT__FLOWER,
-	false,
+	1,
+	0,
+	0,
 
 	//GLOWSTONE
 	LC_BT__GLOWSTONE,
-	true,
+	0,
+	1,
+	1,
+
+	//MAGMA
+	LC_BT__MAGMA,
+	0,
+	1,
+	1,
+
+	//OBSIDIAN
+	LC_BT__OBSIDIAN,
+	0,
+	1,
+	1,
 };
 
-typedef struct LC_Block_Material_Data
+typedef struct
 {
 	LC_BlockType block_type;
-	vec3 ambient;
-	vec3 diffuse;
-	vec3 specular;
-	float shininess;
 
-	float shadow_intensity;
+	vec3 color;
+	float ambient_intensity;
+	float specular_intensity;
 
-} LC_Block_Material_Data;
+	float linear;
+	float quadratic;
+	float constant;
+} LC_Block_LightingData;
 
-static const LC_Block_Material_Data LC_BLOCK_MATERIAL_DATA[] =
+static const LC_Block_LightingData LC_BLOCK_LIGHTING_DATA[] =
 {
-	//NONE
-	LC_BT__NONE,
-	0, 0, 0,
-	0, 0, 0,
-	0, 0, 0,
-	0,
-	0,
-	//GRASS
-	LC_BT__GRASS,
-	0, 0, 0,
-	0, 0, 0,
-	0, 0, 0,
-	0,
-	0,
+	//GLOWSTONE
+	LC_BT__GLOWSTONE,
+	0.98, 0.85, 0.45,
+	0.8,
+	0.2,
+	0.42,
+	0.20,
+	1.0,
 
-	//SAND
-	LC_BT__SAND,
-	0, 0, 0,
-	0, 0, 0,
-	0, 0, 0,
-	0,
-	0,
+	//MAGMA
+	LC_BT__MAGMA,
+	0.85, 0.35, 0.04,
+	1.0,
+	0.4,
+	0.22,
+	0.20,
+	1.0,
 
-	//STONE
-	LC_BT__STONE,
-	0, 0, 0,
-	0, 0, 0,
-	0, 0, 0,
-	0,
-	0,
 
-	//DIRT
-	LC_BT__DIRT,
-	0, 0, 0,
-	0, 0, 0,
-	0, 0, 0,
-	0,
-	0,
+	//OBSIDIAN 
+	LC_BT__OBSIDIAN,
+	0.51, 0.03, 0.89,
+	1.0,
+	0.4,
+	0.22,
+	0.20,
+	1.0,
 
-	//TRUNK
-	LC_BT__TRUNK,
-	0, 0, 0,
-	0, 0, 0,
-	0, 0, 0,
-	0,
-	0,
-
-	//TREE LEAVES
-	LC_BT__TREELEAVES,
-	0, 0, 0,
-	0, 0, 0,
-	0, 0, 0,
-	0,
-	0,
-
-	//WATER
-	LC_BT__WATER,
-	0, 0, 0,
-	0, 0, 0,
-	0, 0, 0,
-	0,
-	0,
-
-	//GLASS
-	LC_BT__GLASS,
-	0, 0, 0,
-	0, 0, 0,
-	0, 0, 0,
-	0,
-	0,
-
-	//FLOWER
-	LC_BT__FLOWER,
-	0, 0, 0,
-	0, 0, 0,
-	0, 0, 0,
-	0,
-	0,
 };
-
-
-typedef struct LC_Block_Shader_Data
-{
-	LC_Block_Texture_Offset_Data texture_data;
-	LC_Block_Material_Data material_data;
-	
-} LC_Block_Shader_Data;

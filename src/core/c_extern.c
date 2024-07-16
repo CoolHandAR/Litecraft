@@ -1,4 +1,11 @@
 
+#define DYNAMIC_ARRAY_IMPLEMENTATION
+#include "utility/dynamic_array.h"
+
+#define CHM_IMPLEMENTATION
+#include "utility/Custom_Hashmap.h"
+
+
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
@@ -7,6 +14,7 @@
 
 #include "cvar.h"
 #include "render/r_renderer.h"
+
 
 
 
@@ -41,12 +49,15 @@ extern int Window_Init();
 extern int Sound_Init();
 extern void Sound_Cleanup();
 extern void GLmessage_callback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, GLchar const* message, void const* user_param);
-extern void RM_Init();
+extern void ResourceManager_Init();
+extern void ResourceManager_Cleanup();
 extern bool Input_Init();
 extern int Cvar_Init();
 extern void Cvar_Cleanup();
 extern int Con_Init();
 extern void Con_Cleanup();
+extern int ThreadCore_Init();
+extern void ThreadCore_Cleanup();
 extern NK_Data nk;
 extern GLFWwindow* glfw_window;
 
@@ -105,7 +116,8 @@ void C_setGLStates()
 	glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
 	glDebugMessageCallback(GLmessage_callback, NULL);
 	glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_NOTIFICATION, 0, NULL, GL_FALSE);
-	
+	glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_HIGH, 0, NULL, GL_FALSE);
+
 	glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
 }
 
@@ -119,11 +131,13 @@ bool C_init()
 	if (!Input_Init()) return false;
 	//if (!r_Init1()) return false;
 
+	ThreadCore_Init();
+
 	Con_Init();
 
 	C_setGLStates();
 
-	RM_Init();
+	ResourceManager_Init();
 	C_initNuklear();
 
 	glViewport(0, 0, INIT_WINDOW_WIDTH, INIT_WINDOW_HEIGHT);
@@ -134,9 +148,11 @@ bool C_init()
 
 void C_Exit()
 {
+	ThreadCore_Cleanup();
 	glfwTerminate();
 	Sound_Cleanup();
 	Cvar_Cleanup();
 	C_NuklearCleanup();
 	Con_Cleanup();
+	ResourceManager_Cleanup();
 }

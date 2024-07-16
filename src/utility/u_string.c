@@ -65,46 +65,21 @@ bool String_usingEmptyString(const char* p_str)
 	return false;
 }
 
-#define HASH_BITS_LONG_LONG ((sizeof (size_t)) * 8)
-#define HASH_ROTATE_LEFT(val, n)   (((val) << (n)) | ((val) >> (HASH_BITS_LONG_LONG - (n))))
-#define HASH_ROTATE_RIGHT(val, n)  (((val) >> (n)) | ((val) << (HASH_BITS_LONG_LONG - (n))))
-size_t Hash_stringSeeded(char* p_str, size_t p_seed, unsigned p_max)
+int String_findLastOfIndex(const char* p_str, int p_char)
 {
-	//src: http://web.archive.org/web/20071223173210/http://www.concentric.net/~Ttwang/tech/inthash.htm
-	size_t hash = p_seed;
+	int str_len = strlen(p_str);
 
-	while (*p_str)
+	int last_index = -1;
+
+	for (int i = 0; i < str_len; i++)
 	{
-		hash = HASH_ROTATE_LEFT(hash, 9) + (unsigned char)*p_str++;
+		char ch = p_str[i];
+
+		if (ch == p_char)
+		{
+			last_index = i;
+		}
 	}
-	hash ^= p_seed;
-	const int c2 = 0x27d4eb2d;
-	hash = (hash ^ 61) ^ (hash >> 16);
-	hash = hash + (hash << 3);
-	hash = hash ^ (hash >> 4);
-	hash = hash * c2;
-	hash = hash ^ (hash >> 15);
 
-	return hash + p_seed;
-}
-
-size_t Hash_string(char* p_str, unsigned p_max)
-{
-	//src: http://web.archive.org/web/20071223173210/http://www.concentric.net/~Ttwang/tech/inthash.htm
-	size_t hash = 0;
-
-	while (*p_str)
-	{
-		hash = HASH_ROTATE_LEFT(hash, 9) + (unsigned char)*p_str++;
-	}
-	const int c2 = 0x27d4eb2d;
-	hash = (hash ^ 61) ^ (hash >> 16);
-	hash = hash + (hash << 3);
-	hash = hash ^ (hash >> 4);
-	hash = hash * c2;
-	hash = hash ^ (hash >> 15);
-
-	hash &= p_max;
-
-	return hash;
+	return last_index;
 }

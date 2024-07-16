@@ -16,7 +16,7 @@ R_FontData R_loadFontData(const char* p_jsonPath, const char* p_textureFile)
 	font_data.texture = Texture_Load(p_textureFile, NULL);
 
 	//read from the json file
-	char* json_char_data = File_ParseString(p_jsonPath);
+	char* json_char_data = File_Parse(p_jsonPath, NULL);
 
 	if (!json_char_data)
 	{

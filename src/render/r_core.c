@@ -24,7 +24,7 @@ extern GLFWwindow* glfw_window;
 Updates metrics and sets if we should skip this frame
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-static void _updateMetrics()
+static void r_updateMetrics()
 {
 	backend_data->skip_frame = false;
 
@@ -55,17 +55,23 @@ static void _updateMetrics()
 		}
 	}
 }
-static void _updateMSSAFBOTexture()
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Called on any window resize event. Updates textures sizes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
+static void r_onWindowResize()
 {
 
 }
+
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Runs specific update/change functions 
 only if certain cvars are modified
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-static void _checkForModifiedCvars()
+static void r_checkForModifiedCvars()
 {
 	if (r_cvars->w_useVsync->modified)
 	{
@@ -129,8 +135,8 @@ void r_threadLoop()
 
 void r_startFrame1()
 {
-	_updateMetrics();
-	_checkForModifiedCvars();
+	r_updateMetrics();
+	r_checkForModifiedCvars();
 	
 	r_processCommands1();
 	//r_wakeRenderThread();

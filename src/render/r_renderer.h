@@ -8,11 +8,9 @@
 #include <cglm/cglm.h>
 
 #include "r_texture.h"
-#include "lc_chunk.h"
 #include "r_camera.h"
 
 #include "utility/u_math.h"
-#include "lc_world.h"
 #include "r_sprite.h"
 
 bool r_Init();
@@ -29,9 +27,9 @@ void r_drawCube(vec3 size, vec3 pos, vec4 color);
 void r_Draw(R_Model* const p_model, vec3 pos);
 void r_DrawScreenText(const char* p_string, vec2 p_position, vec2 p_size, vec4 p_color, float h_spacing, float y_spacing);
 void r_DrawScreenText2(const char* p_string, float p_x, float p_y, float p_width, float p_height, float p_r, float p_g, float p_b, float p_a, float h_spacing, float y_spacing);
-void r_DrawChunk(LC_Chunk* const chunk);
-void r_DrawWorldChunks2(LC_World* const world);
-void r_Update(R_Camera* const p_cam, LC_World* const world);
+void r_PrintfScreenText(float p_x, float p_y, float p_width, float p_height, float p_r, float p_g, float p_b, float p_a, float h_spacing, float y_spacing, const char* fmt, ...);
+//void r_DrawWorldChunks2(LC_World* const world);
+void r_Update(R_Camera* const p_cam);
 void r_DrawCrosshair();
 void r_DrawScreenSprite(R_Sprite* sprite);
 void r_processCommands();
@@ -57,6 +55,21 @@ typedef struct R_LightData
     float radius;
 } R_LightData;
 
-void r_registerLightSource(R_LightData p_lightData);
+typedef struct PointLight
+{
+    vec4 position;
+
+    vec4 color;
+    float ambient_intensity;
+    float specular_intensity;
+
+    float linear;
+    float quadratic;
+    float radius;
+    float constant;
+} PointLight;
+
+unsigned r_registerLightSource(PointLight p_lightData);
+void r_removeLightSource(unsigned p_index);
 
 #endif // !R_RENDERER_H

@@ -33,7 +33,7 @@ typedef enum
 
 /*
 ~~~~~~~~~~~~~~~~~
-COMMON FUNCTIONS
+PUBLIC FUNCTIONS
 ~~~~~~~~~~~~~~~~~
 */
 //Print to stdout and console
@@ -41,6 +41,8 @@ void C_Printf(const char* fmt, ...);
 void C_ErrorPrintf(ErrorType p_errorType, const char* fmt, ...);
 size_t C_getTicks();
 size_t C_getPhysicsTicks();
+float C_getDeltaTime();
+float C_getPhysDeltaTime();
 
 /*
 ~~~~~~~~~~~~~~~~~
@@ -65,3 +67,39 @@ void Window_getSize(ivec2 r_windowSize);
 void Window_detachGLContext();
 void Window_setGLContext();
 GLFWwindow* Window_getPtr();
+
+/*
+~~~~~~~~~~~~~~~~~
+THREADING
+~~~~~~~~~~~~~~~~~
+*/
+typedef void* (*ThreadTask_fun)(void);
+typedef int WorkHandleID;
+#define THREAD_TASK_ARG_DATA_MAX_SIZE 256
+
+typedef union
+{
+	long long int_value;
+	double long real_value;
+	void* mem_value;
+} ReturnResult;
+
+typedef enum
+{
+	TASK_FLAG__FIRE_AND_FORGET = 1 << 0, //Does not return a value and automatically discards the result
+	TASK_FLAG__PRIORITY_ABOVE_NORMAL = 1 << 1,
+	TASK_FLAG__PRIORITY_HIGHEST = 1 << 2,
+	TASK_FLAG__PRIORITY_BELOW_NORMAL = 1 << 2,
+	TASK_FLAG__PRIORITY_LOWEST = 1 << 3,
+	__INTERNAL_TASK_FLAG__INT_TYPE = 1 << 4,
+	__INTERNAL_TASK_FLAG__VOID_TYPE = 1 << 5
+}WorkTask_Flags;
+
+#define Thread_AssignTask(FUNCTION, FLAGS) __Internal_Thread_AssignTaskArgCopy(FUNCTION, NULL, 0, FLAGS | __INTERNAL_TASK_FLAG__VOID_TYPE);
+#define Thread_AssignTaskArgs(FUNCTION, ARG_DATA, FLAGS) __Internal_Thread_AssignTaskArgCopy(FUNCTION, &ARG_DATA, sizeof(ARG_DATA), FLAGS)
+#define Thread_AssignTaskIntType(FUNCTION, INT_TYPE, FLAGS) __Internal_Thread_AssignTaskArgCopy(FUNCTION, INT_TYPE, sizeof(INT_TYPE), FLAGS | __INTERNAL_TASK_FLAG__INT_TYPE)
+WorkHandleID __Internal_Thread_AssignTaskArgCopy(ThreadTask_fun p_taskFun, void* p_argData, size_t p_allocSize, WorkTask_Flags p_taskFlags);
+
+bool Thread_IsCompleted(WorkHandleID p_workHandleID);
+void Thread_ReleaseWorkHandle(WorkHandleID p_workHandleID);
+ReturnResult Thread_WaitForResult(WorkHandleID p_workHandleID, size_t p_waitTime);

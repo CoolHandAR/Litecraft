@@ -4,14 +4,13 @@
 
 #define MAX_FONT_GLYPHS 100
 
-
-typedef struct R_FontAtlasData
+typedef struct
 {
 	int distance_range;
 	float size;
 	int width, height;
 } R_FontAtlasData;
-typedef struct R_FontMetricData
+typedef struct
 {
 	int em_size;
 	double line_height;
@@ -21,7 +20,7 @@ typedef struct R_FontMetricData
 	double underline_thickness;
 } R_FontMetricData;
 
-typedef struct R_FontBounds
+typedef struct
 {
 	double left;
 	double bottom;
@@ -29,7 +28,7 @@ typedef struct R_FontBounds
 	double top;
 } R_FontBounds;
 
-typedef struct R_FontGlyphData
+typedef struct
 {
 	unsigned unicode;
 	double advance;
@@ -37,7 +36,7 @@ typedef struct R_FontGlyphData
 	R_FontBounds atlas_bounds;
 } R_FontGlyphData;
 
-typedef struct R_FontData
+typedef struct
 {
 	R_Texture texture;
 	R_FontAtlasData atlas_data;

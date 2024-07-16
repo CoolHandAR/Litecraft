@@ -111,7 +111,7 @@ static long _genHashValueForCvar(const char *p_string)
 
 	hash &= (FILE_HASH_SIZE - 1);
 
-	hash = Hash_string(p_string, FILE_HASH_SIZE - 1);
+	//hash = Hash_string(p_string);
 
 	return hash;
 }
@@ -276,7 +276,7 @@ bool Cvar_LoadAllFromFile(const char* p_filePath)
 {
 	//maybe move this to json later
 
-	char* parsed_string = File_ParseString(p_filePath);
+	char* parsed_string = File_Parse(p_filePath, NULL);
 
 	if (!parsed_string)
 	{

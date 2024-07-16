@@ -1,4 +1,3 @@
-#include "r_draw.h"
 #include "r_core.h"
 
 /*

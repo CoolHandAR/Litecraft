@@ -1,4 +1,5 @@
 #include "p_aabb_tree.h"
+#include <assert.h>
 
 #define AABB_NODE_NULL -1
 
@@ -327,8 +328,8 @@ dynamic_array* AABB_Tree_QueryRay(AABB_Tree* const p_tree, vec3 from, vec3 dir)
 				AABB_RayQueryResult* overlap = dA_emplaceBack(overlaps);
 				overlap->box = node->box;
 				overlap->data = node->data;
-				overlap->near = near;
-				overlap->far = far;
+				overlap->near2 = near;
+				overlap->far2 = far;
 				glm_vec3_copy(normal, overlap->normal);
 				glm_vec3_copy(clip, overlap->clip);
 			}

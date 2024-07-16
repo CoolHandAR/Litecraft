@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-char* File_ParseString(const char* p_filePath)
+void* File_Parse(const char* p_filePath, int* r_length)
 {
 	FILE* file = NULL;
 
@@ -14,46 +14,22 @@ char* File_ParseString(const char* p_filePath)
 		printf("Failed to open file for parsing at path: %s!\n", p_filePath);
 		return 0;
 	}
-
-	size_t buffer_size = 10240;
-
-	char* buffer = malloc(buffer_size);
+	int file_length = File_GetLength(file);
+	void* buffer = malloc(file_length + 1);
 	if (!buffer)
 	{
-		printf("MALLOC FAILURE\n");
 		return NULL;
 	}
-	memset(buffer, 0, buffer_size);
-
-	//READ FROM THE JSON FILE
-	int c;
-	int i = 0;
-	while ((c = fgetc(file)) != EOF)
-	{
-		buffer[i] = c;
-		i++;
-
-		//realloc more if we need to 
-		if (i + 1 >= buffer_size)
-		{
-			void* ptr = realloc(buffer, buffer_size + buffer_size);
-
-			//did we fail to realloc for some reason?
-			if (!ptr)
-			{
-				free(buffer);
-				return NULL;
-			}
-			void* ptr_new_data = (char*)ptr + buffer_size;
-			memset(ptr_new_data, 0, buffer_size);
-			buffer_size += buffer_size;
-
-			buffer = ptr;
-		}
-	}
+	memset(buffer, 0, file_length + 1);
+	fread_s(buffer, file_length, 1, file_length, file);
 
 	//CLEAN UP
 	fclose(file);
+
+	if (r_length)
+	{
+		*r_length = file_length;
+	}
 
 	return buffer;
 }
@@ -72,4 +48,17 @@ bool File_PrintString(const char* p_string, const char* p_filePath)
 	fwrite(p_string, sizeof(char), strlen(p_string), file);
 	
 	return fclose(file) == 0;
+}
+
+int File_GetLength(FILE* p_file)
+{
+	int pos;
+	int end;
+
+	pos = ftell(p_file);
+	fseek(p_file, 0, SEEK_END);
+	end = ftell(p_file);
+	fseek(p_file, pos, SEEK_SET);
+
+	return end;
 }

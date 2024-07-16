@@ -7,7 +7,42 @@
 #define STBI_FAILURE_USERMSG
 #include <stb_image/stb_image.h>
 
-static unsigned char* loadTextureData(R_Texture* const p_tex, const char* p_path, bool p_flipOnLoad)
+static unsigned nrChannelToImageFormat(int p_nrChannel)
+{
+	//from stb_image.h
+	// An output image with N components has the following components interleaved
+	// in this order in each pixel:
+	//
+	//     N=#comp     components
+	//       1           grey
+	//       2           grey, alpha
+	//       3           red, green, blue
+	//       4           red, green, blue, alpha
+	//
+	switch (p_nrChannel)
+	{
+	case 1:
+	{
+		return GL_RED;
+	}
+	case 2:
+	{
+		return GL_RG;
+	}
+	case 3:
+	{
+		return GL_RGB;
+	}
+	case 4:
+	{
+		return GL_RGBA;
+	}
+	}
+
+	return 0;
+}
+
+static unsigned char* loadTextureDataFromFile(int* r_width, int* r_height, unsigned* r_imageFormat, const char* p_path, bool p_flipOnLoad)
 {
 	int width, height, nrChannels;
 	stbi_set_flip_vertically_on_load(p_flipOnLoad);
@@ -17,7 +52,7 @@ static unsigned char* loadTextureData(R_Texture* const p_tex, const char* p_path
 	if (!data)
 	{
 		printf("Failed to load texture. Reason: %s ", stbi_failure_reason());
-		stbi_image_free(data);
+		//stbi_image_free(data);
 		return NULL;
 	}
 
@@ -28,76 +63,33 @@ static unsigned char* loadTextureData(R_Texture* const p_tex, const char* p_path
 		return NULL;
 	}
 
-	p_tex->width = width;
-	p_tex->height = height;
+	*r_width = width;
+	*r_height = height;
 
-	//from stb_image.h
-	// An output image with N components has the following components interleaved
-	// in this order in each pixel:
-	//
-	//     N=#comp     components
-	//       1           grey
-	//       2           grey, alpha
-	//       3           red, green, blue
-	//       4           red, green, blue, alpha
-	//set correct color channel format
-
-	if (nrChannels < 4)
-	{
-		p_tex->format.imageFormat = GL_RGB;
-	}
-	else
-	{
-		p_tex->format.imageFormat = GL_RGBA;
-	}
-
+	*r_imageFormat = nrChannelToImageFormat(nrChannels);
+	
 	return data;
 }
 
-static void genTexture(R_Texture* const p_tex, unsigned int p_width, unsigned int p_height, unsigned char* p_data)
-{
-	//create texture
-	glGenTextures(1, &p_tex->id);
-	glBindTexture(GL_TEXTURE_2D, p_tex->id);
-
-	int mipmap_levels = 2;
-	int format = GL_RGBA8;
-
-	//only works at openGL 4.2 and above
-	glTexStorage2D(GL_TEXTURE_2D, mipmap_levels, GL_RGBA8, p_width, p_height);
-
-	//set texture wrap and filter modes
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, p_tex->format.wrapS);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, p_tex->format.wrapT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, p_tex->format.filterMin);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, p_tex->format.filterMax);
-
-
-	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, p_width, p_height, p_tex->format.imageFormat, GL_UNSIGNED_BYTE, p_data);
-
-	// unbind texture
-	glBindTexture(GL_TEXTURE_2D, 0);
-}
-
-
-R_Texture Texture_Load(const char* p_texturePath, M_Rect2Di* p_textureRegion)
+static R_Texture genTexture(unsigned char* p_data, unsigned p_texWidth, unsigned p_texHeight, unsigned p_imageFormat, M_Rect2Di* p_textureRegion)
 {
 	R_Texture texture;
 	memset(&texture, 0, sizeof(R_Texture));
 
-	texture.format.imageFormat = GL_RGBA;
+	//Default format
+	texture.format.imageFormat = p_imageFormat;
 	texture.format.wrapS = GL_REPEAT;
 	texture.format.wrapT = GL_REPEAT;
 	texture.format.filterMin = GL_NEAREST;
 	texture.format.filterMax = GL_NEAREST;
 
-	unsigned char* texture_data = loadTextureData(&texture, p_texturePath, true);
+	texture.width = p_texWidth;
+	texture.height = p_texHeight;
 
-	if (!texture_data)
-	{
-		texture.id = 0;
-		return texture;
-	}
+	glGenTextures(1, &texture.id);
+	glBindTexture(GL_TEXTURE_2D, texture.id);
+
+	glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, texture.width, texture.height);
 
 	//check if we want to generate the whole texture or only a subset
 	bool render_entire_image;
@@ -120,7 +112,7 @@ R_Texture Texture_Load(const char* p_texturePath, M_Rect2Di* p_textureRegion)
 
 	if (render_entire_image)
 	{
-		genTexture(&texture, texture.width, texture.height, texture_data);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, texture.width, texture.height, texture.format.imageFormat, GL_UNSIGNED_BYTE, p_data);
 	}
 	else
 	{
@@ -131,18 +123,13 @@ R_Texture Texture_Load(const char* p_texturePath, M_Rect2Di* p_textureRegion)
 		if (rect.x + rect.width > texture.width) rect.width = texture.width - rect.x;
 		if (rect.y + rect.height > texture.height) rect.height = texture.height - rect.y;
 
-		//setup for future storage with nullptr
-		genTexture(&texture, rect.width, rect.y, texture_data, NULL);
-
-		glBindTexture(GL_TEXTURE_2D, texture.id);
-
 		//Need to multiply the width with multiplier since otherwise it causes crashes and/or broken diagonal lines
 		//READ: https://www.khronos.org/opengl/wiki/Common_Mistakes#Texture_upload_and_pixel_reads
 		//READ: https://www.khronos.org/opengl/wiki/Pixel_Transfer#Pixel_layout
 
 		const int PIXEL_ARRAY_MULTIPLIER = (texture.format.imageFormat == GL_RGB) ? 3 : 4;
 
-		const uint8_t* pixels = texture_data + PIXEL_ARRAY_MULTIPLIER * (rect.x + (texture.width * rect.y));
+		const uint8_t* pixels = p_data + PIXEL_ARRAY_MULTIPLIER * (rect.x + (texture.width * rect.y));
 
 		for (int i = 0; i < rect.height; ++i)
 		{
@@ -151,9 +138,74 @@ R_Texture Texture_Load(const char* p_texturePath, M_Rect2Di* p_textureRegion)
 		}
 	}
 
-	stbi_image_free(texture_data);
+
+	//set texture wrap and filter modes
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, texture.format.wrapS);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, texture.format.wrapT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, texture.format.filterMin);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, texture.format.filterMax);
 
 	glFlush();
+
+	// unbind texture
+	glBindTexture(GL_TEXTURE_2D, 0);
+
+
+	return texture;
+}
+
+
+
+R_Texture Texture_LoadFromData(unsigned char* p_data, size_t p_bufLen, M_Rect2Di* p_textureRegion)
+{
+	R_Texture texture;
+	texture.id = 0;
+
+	int width, height;
+	int nr_channels;
+	
+	unsigned char* texture_data = stbi_load_from_memory(p_data, p_bufLen, &width, &height, &nr_channels, 4);
+
+	if (!texture_data)
+	{
+		printf("Failed to load texture. Reason: %s ", stbi_failure_reason());
+		return texture;
+	}
+
+	if (width < 1 || height < 1)
+	{
+		printf("Failed to load texture. Reason: invalid size");
+		stbi_image_free(texture_data);
+		return texture;
+	}
+
+	unsigned image_format = nrChannelToImageFormat(nr_channels);
+
+	texture = genTexture(texture_data, width, height, image_format, p_textureRegion);
+
+	stbi_image_free(texture_data);
+
+	return texture;
+}
+
+R_Texture Texture_Load(const char* p_texturePath, M_Rect2Di* p_textureRegion)
+{
+	R_Texture texture;
+	texture.id = 0;
+
+	int width, height;
+	unsigned image_format;
+
+	unsigned char* texture_data = loadTextureDataFromFile(&width, &height, &image_format, p_texturePath, true);
+
+	if (!texture_data)
+	{
+		return texture;
+	}
+	
+	texture = genTexture(texture_data, width, height, image_format, p_textureRegion);
+
+	stbi_image_free(texture_data);
 
 	return texture;
 }
@@ -173,24 +225,24 @@ R_Texture CubemapTexture_Load(Cubemap_Faces_Paths p_facesPathsData)
 	
 	glGenTextures(1, &texture.id);
 	glBindTexture(GL_TEXTURE_CUBE_MAP, texture.id);
-	unsigned char* data;
+	unsigned char* data = NULL;
 	//RIGHT FACE
-	data = loadTextureData(&texture, p_facesPathsData.right_face, false);
+	data = loadTextureDataFromFile(&texture.width, &texture.height, &texture.format.imageFormat, p_facesPathsData.right_face, false);
 	glTexImage2D(GL_TEXTURE_CUBE_MAP_NEGATIVE_X, 0, texture.format.imageFormat, texture.width, texture.height, 0, texture.format.imageFormat, GL_UNSIGNED_BYTE, data);
 	//LEFT FACE
-	data = loadTextureData(&texture, p_facesPathsData.left_face, false);
+	data = loadTextureDataFromFile(&texture.width, &texture.height, &texture.format.imageFormat, p_facesPathsData.left_face, false);
 	glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, texture.format.imageFormat, texture.width, texture.height, 0, texture.format.imageFormat, GL_UNSIGNED_BYTE, data);
 	//TOP FACE
-	data = loadTextureData(&texture, p_facesPathsData.top_face, false);
+	data = loadTextureDataFromFile(&texture.width, &texture.height, &texture.format.imageFormat, p_facesPathsData.top_face, false);
 	glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_Y, 0, texture.format.imageFormat, texture.width, texture.height, 0, texture.format.imageFormat, GL_UNSIGNED_BYTE, data);
 	//BOTTOM FACE
-	data = loadTextureData(&texture, p_facesPathsData.bottom_face, false);
+	data = loadTextureDataFromFile(&texture.width, &texture.height, &texture.format.imageFormat, p_facesPathsData.bottom_face, false);
 	glTexImage2D(GL_TEXTURE_CUBE_MAP_NEGATIVE_Y, 0, texture.format.imageFormat, texture.width, texture.height, 0, texture.format.imageFormat, GL_UNSIGNED_BYTE, data);
 	//BACK FACE
-	data = loadTextureData(&texture, p_facesPathsData.back_face, false);
+	data = loadTextureDataFromFile(&texture.width, &texture.height, &texture.format.imageFormat, p_facesPathsData.back_face, false);
 	glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_Z, 0, texture.format.imageFormat, texture.width, texture.height, 0, texture.format.imageFormat, GL_UNSIGNED_BYTE, data);
 	//FRONT FACE
-	data = loadTextureData(&texture, p_facesPathsData.front_face, false);
+	data = loadTextureDataFromFile(&texture.width, &texture.height, &texture.format.imageFormat, p_facesPathsData.front_face, false);
 	glTexImage2D(GL_TEXTURE_CUBE_MAP_NEGATIVE_Z, 0, texture.format.imageFormat, texture.width, texture.height, 0, texture.format.imageFormat, GL_UNSIGNED_BYTE, data);
 
 

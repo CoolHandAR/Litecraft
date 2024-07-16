@@ -1,23 +1,31 @@
-﻿#include "r_renderer.h"
+﻿#include <glad/glad.h>
+#include "r_renderer.h"
 #include "r_shader.h"
 
-
-#include <glad/glad.h>
+#include "core/c_common.h"
+#include <cglm/clipspace/persp_rh_zo.h>
 
 
 #include "r_renderDefs.h"
-#include "r_mesh.h"
+
 
 #include "lc/lc_player.h"
 
 #include "render/r_font.h"
 
-#include "core/c_cvars.h"
+#include "core/cvar.h"
+#include <stdarg.h>
+#include "utility/u_utility.h"
+#include "r_particle.h"
+#include "lc2/lc_world.h"
+#include <time.h>
+#include <stdlib.h>
 
-#define W_WIDTH 1024
+#define W_WIDTH 1280
 #define W_HEIGHT 720
 
-#define SHADOW_MAP_RESOLUTION 2048
+#define SHADOW_MAP_RESOLUTION 1280
+
 
 #define LIGHT_MATRICES_COUNT 5
 #define SHADOW_CASCADE_LEVELS 4
@@ -30,7 +38,69 @@
 #define SCREEN_QUAD_MAX_TEXTURES 32
 const vec4 DEFAULT_COLOR = { 1, 1, 1, 1 };
 
-extern GLFWwindow* s_Window;
+extern GLFWwindow* glfw_window;
+
+typedef struct
+{
+    R_Shader cluster_build_shader;
+    R_Shader cluster_cull_shader;
+    R_Shader cluster_actives_shader;
+    R_Shader cluster_compact_shader;
+
+    unsigned clusters_SSBO;
+    unsigned lights_SSBO;
+    unsigned light_indexes_SSBO;
+    unsigned light_grid_SSBO;
+    unsigned global_index_count_SSBO;
+    unsigned active_clusters_ssbo;
+    unsigned global_active_clusters_count_ssbo;
+    unsigned unique_active_clusters_data_ssbo;
+    RenderStorageBuffer light_buffer;
+
+} ClusteredLightingData;
+
+typedef struct
+{
+    unsigned reflection_fbo, refraction_fbo;
+    unsigned cbuffer_reflection, cbuffer_refraction;
+    unsigned dbuffer_reflection, dbuffer_refraction;
+    R_Shader shader;
+    R_Texture dudv_map;
+    R_Texture normal_map;
+    float move_factor;
+    float wave_speed;
+} WaterRenderData;
+
+typedef struct
+{
+    unsigned flags;
+    int albedo_map;
+    int metalic_map;
+    int roughness_map;
+    int normal_map;
+    int ao_map;
+
+    float metallic_ratio;
+    float roughness_ratio;
+
+    vec4 color;
+} GL_Material;
+
+typedef struct
+{
+    GL_Material gl_material;
+} Client_Material;
+
+typedef struct MeshRenderData
+{
+    vec4 bounding_box[2];
+    unsigned material_index;
+}  MeshRenderData;
+typedef struct RenderRequest
+{
+    mat4 xform;
+    unsigned mesh_index;
+} RenderRequest;
 
 
 typedef struct DrawArraysIndirectCommand
@@ -41,23 +111,46 @@ typedef struct DrawArraysIndirectCommand
     unsigned  baseInstance;
 } DrawElementsIndirectCommand;
 
+typedef  struct {
+    unsigned  count;
+    unsigned  instanceCount;
+    unsigned  firstIndex;
+    int  baseVertex;
+    unsigned  baseInstance;
+} DrawElementsCMD;
 
-
-typedef struct R_LineDrawData
+typedef struct R_ParticleDrawData
 {
-    R_Shader shader;
-    LineVertex line_vertices[LINE_VERTICES_BUFFER_SIZE];
-    size_t vertices_count;
-    unsigned vao, vbo;
-} R_LineDrawData;
+    R_Shader transform_shader;
+    R_Shader compute_shader;
+    R_Shader render_shader;
+    RenderStorageBuffer particles;
+    RenderStorageBuffer emitters;
+    RenderStorageBuffer transforms;
+    
+    ParticleEmitterClient emitter_clients[4];
 
-typedef struct R_TriangleDrawData
+    R_ParticleEmitter* emitters_buffer;
+
+    unsigned draw_cmds;
+    unsigned atomic_counter_buffer;
+    unsigned vao, vbo, ebo;
+
+} R_ParticleDrawData;
+
+typedef struct
 {
-    R_Shader shader;
-    TriangleVertex triangle_vertices[TRIANGLE_VERTICES_BUFFER_SIZE];
-    size_t vertices_count;
-    unsigned vao, vbo;
-} R_TriangleDrawData;
+    unsigned render_requests;
+    unsigned mesh_data;
+    unsigned element_draW_cmds;
+    unsigned vao, vbo, ebo;
+    unsigned last_request_index;
+    unsigned process_shader;
+    unsigned tranforms;
+    unsigned textures_ssbo;
+    unsigned materials_ssbo;
+} R_MeshRenderData;
+
 
 typedef struct R_ScreenQuadDrawData
 {
@@ -93,37 +186,14 @@ typedef struct R_ShadowMapData
 
 } R_ShadowMapData;
 
-typedef struct R_BillboardData
-{
-    R_Shader shader;
-    unsigned vao, vbo;
-    R_Texture texture;
 
-} R_BillboardData;
-
-typedef enum R_SpriteDrawType
-{
-    SDT__SCREEN,
-    SDT__3D,
-    SDT__BILLBOARD
-} R_SpriteDrawType;
-
-typedef struct R_SpriteDrawCommand
-{
-    R_SpriteDrawType draw_type;
-    R_Sprite* sprite_ptr;
-    
-} R_SpriteDrawCommands;
-
-R_SpriteDrawCommands sprite_draw_commands[10];
-int sprite_Draw_cmnds_counter;
 
 typedef struct R_DeferredShadingData
 {
     R_Shader g_shader;
-    unsigned g_buffer;
+    unsigned g_fbo;
     unsigned g_position, g_normal, g_colorSpec;
-    unsigned depth_buffer;
+    unsigned g_depth_buffer;
 
     R_Shader lighting_shader;
 
@@ -215,6 +285,23 @@ typedef struct R_GeneralRenderData
     int window_height;
     float window_scale_width;
     float window_scale_height;
+    
+    R_Shader depth_prepass_shader;
+    R_Shader reflected_uv_shader;
+
+    R_Shader deffered_compute_shader;
+    R_Shader deffered_lighting_shader;
+    R_Shader ssao_pass_deffered_shader;
+    R_Shader ssao_pass_shader;
+    R_Shader ssao_blur_shader;
+    R_Shader ssao_compute_shader;
+
+    unsigned ssao_noise_texture;
+
+    unsigned ssaoFBO, ssaoColorBuffer;
+    unsigned ssaoBlurFBO, ssaoBlurColorBuffer;
+
+    unsigned reflectedUV_FBO, reflectedUV_ColorBuffer;
 
     unsigned msFBO, FBO;
     unsigned msRBO;
@@ -227,27 +314,42 @@ typedef struct R_GeneralRenderData
 
 } R_GeneralRenderData;
 
+typedef struct
+{
+    R_Texture albedo;
+    R_Texture metallic;
+    R_Texture normal;
+    R_Texture roughness;
+} PBR_TEXTURES;
+
 R_RenderSettings render_settings;
+static ClusteredLightingData clustered_data;
+static R_ParticleDrawData s_particleDrawData;
 static R_FontData s_fontData;
 static R_BitmapTextDrawData s_bitmapTextData;
-static R_BillboardData s_billboardData;
 static R_ShadowMapData s_shadowMapData;
-static R_LineDrawData s_lineDrawData;
-static R_TriangleDrawData s_triangleDrawData;
 static R_ScreenQuadDrawData s_screenQuadDrawData;
 static R_DeferredShadingData s_deferredShadingData;
 static R_GeneralRenderData s_RenderData;
 static R_Texture tex_atlas;
 static R_Texture cubemap_texture;
 static R_Texture bitmap_texture;
+static R_Texture dirst_texture;
 static R_Model model;
-LC_World* world_ptr;
-
-C_Cvar* r_mssaLevel;
+static R_Model cube_model;
+static R_Model sponza_model;
+static R_Model sphere_model;
+static R_Texture particle_spritesheet_texture;
+static R_MeshRenderData mesh_Render_data;
+static PBR_TEXTURES pbr_textures;
+static WaterRenderData water_data;
+mat4 s_view_proj;
+Cvar* r_mssaLevel;
+Cvar* r_shadowMapping;
 
 bool use_hdr;
 
-static R_LightData s_lightDataBuffer[32];
+static PointLight s_lightDataBuffer[32];
 int s_lightDataIndex;
 
 void r_onWindowResize(ivec2 window_size)
@@ -272,12 +374,12 @@ void r_onWindowResize(ivec2 window_size)
     }
    
     glBindTexture(GL_TEXTURE_2D, s_RenderData.color_buffer_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, s_RenderData.window_width, s_RenderData.window_height, 0,
-        GL_RGB, GL_UNSIGNED_BYTE, NULL);
+    //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, s_RenderData.window_width, s_RenderData.window_height, 0,
+      //  GL_RGB, GL_UNSIGNED_BYTE, NULL);
 
     glBindTexture(GL_TEXTURE_2D, s_RenderData.depth_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, s_RenderData.window_width, s_RenderData.window_height, 0,
-        GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+   // glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, s_RenderData.window_width, s_RenderData.window_height, 0,
+     //   GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
 
     glUseProgram(s_screenQuadDrawData.shader);
     Shader_SetVector2f(s_screenQuadDrawData.shader, "u_windowScale", s_RenderData.window_scale_width, s_RenderData.window_scale_height);
@@ -287,139 +389,199 @@ void r_onWindowResize(ivec2 window_size)
     Shader_SetVector2f(s_bitmapTextData.shader, "u_windowScale", s_RenderData.window_scale_width, s_RenderData.window_scale_height);
     Shader_SetMatrix4(s_bitmapTextData.shader, "u_orthoProjection", s_RenderData.orthoProj);
 }
-
-
-
-static void _initLineRenderData()
+static void _initClusteredData()
 {
-    memset(&s_lineDrawData, 0, sizeof(R_LineDrawData));
+    memset(&clustered_data, 0, sizeof(clustered_data));
 
-    s_lineDrawData.shader = Shader_CompileFromFile("src/shaders/line_shader.vs", "src/shaders/line_shader.fs", NULL);
+    clustered_data.cluster_build_shader = ComputeShader_CompileFromFile("src/shaders/cluster/cluster_build.comp");
+    clustered_data.cluster_cull_shader = ComputeShader_CompileFromFile("src/shaders/cluster/cluster_cull.comp");
+    clustered_data.cluster_actives_shader = ComputeShader_CompileFromFile("src/shaders/cluster/cluster_actives.comp");
+    clustered_data.cluster_compact_shader = ComputeShader_CompileFromFile("src/shaders/cluster/cluster_compact.comp");
 
-    if (s_lineDrawData.shader == 0)
-        return false;
+    glGenBuffers(1, &clustered_data.clusters_SSBO);
+    glGenBuffers(1, &clustered_data.lights_SSBO);
+    glGenBuffers(1, &clustered_data.light_indexes_SSBO);
+    glGenBuffers(1, &clustered_data.light_grid_SSBO);
+    glGenBuffers(1, &clustered_data.global_index_count_SSBO);
+    glGenBuffers(1, &clustered_data.active_clusters_ssbo);
+    glGenBuffers(1, &clustered_data.global_active_clusters_count_ssbo);
+    glGenBuffers(1, &clustered_data.unique_active_clusters_data_ssbo);
 
-    glGenVertexArrays(1, &s_lineDrawData.vao);
-    glGenBuffers(1, &s_lineDrawData.vbo);
-
-    glBindVertexArray(s_lineDrawData.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_lineDrawData.vbo);
-
-    glBufferData(GL_ARRAY_BUFFER, sizeof(s_lineDrawData.line_vertices), NULL, GL_STREAM_DRAW);
-
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(LineVertex), (void*)(offsetof(LineVertex, position)));
-    glEnableVertexAttribArray(0);
-
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(LineVertex), (void*)(offsetof(LineVertex, color)));
-    glEnableVertexAttribArray(1);
-}
-
-static void _initTriangleRenderData()
-{
-    memset(&s_triangleDrawData, 0, sizeof(R_TriangleDrawData));
-
-    s_triangleDrawData.shader = Shader_CompileFromFile("src/shaders/triangle_shader.vs", "src/shaders/triangle_shader.fs", NULL);
-
-    if (s_triangleDrawData.shader == 0)
-        return;
-
-    glGenVertexArrays(1, &s_triangleDrawData.vao);
-    glGenBuffers(1, &s_triangleDrawData.vbo);
-
-    glBindVertexArray(s_triangleDrawData.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_triangleDrawData.vbo);
-
-    glBufferData(GL_ARRAY_BUFFER, sizeof(s_triangleDrawData.triangle_vertices), NULL, GL_STREAM_DRAW);
-
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(TriangleVertex), (void*)(offsetof(TriangleVertex, position)));
-    glEnableVertexAttribArray(0);
-
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(TriangleVertex), (void*)(offsetof(TriangleVertex, color)));
-    glEnableVertexAttribArray(1);
-}
-
-static void _initScreenQuadRenderData()
-{
-    memset(&s_screenQuadDrawData, 0, sizeof(R_ScreenQuadDrawData));
-
-    s_screenQuadDrawData.tex_index = 1;
-
-    s_screenQuadDrawData.shader = Shader_CompileFromFile("src/shaders/screen_shader.vs", "src/shaders/screen_shader.fs", NULL);
-    assert(s_screenQuadDrawData.shader > 0);
-
-    glGenVertexArrays(1, &s_screenQuadDrawData.vao);
-    glGenBuffers(1, &s_screenQuadDrawData.vbo);
-    glGenBuffers(1, &s_screenQuadDrawData.ebo);
-
-    glBindVertexArray(s_screenQuadDrawData.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_screenQuadDrawData.vbo);
-
-    glBufferData(GL_ARRAY_BUFFER, sizeof(s_screenQuadDrawData.screen_quad_vertices), NULL, GL_STREAM_DRAW);
+    clustered_data.light_buffer = RSB_Create(1000, sizeof(PointLight), RSB_FLAG__POOLABLE | RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE);
     
 
-    unsigned* indices = malloc(sizeof(unsigned) * SCREEN_QUAD_INDICES_BUFFER_SIZE);
+    int num_clusters = 3456;
+    unsigned total_num_lights = num_clusters * 1000;
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, clustered_data.lights_SSBO);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(PointLight) * 1000, NULL, GL_STATIC_DRAW);
     
-    unsigned offset = 0;
-    if (indices)
-    {
-        for (int i = 0; i < SCREEN_QUAD_INDICES_BUFFER_SIZE / sizeof(unsigned); i+= 6)
-        {
-            indices[i + 0] = offset + 0;
-            indices[i + 1] = offset + 1;
-            indices[i + 2] = offset + 2;
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, clustered_data.light_grid_SSBO);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, 8 * num_clusters, NULL, GL_STREAM_DRAW);
+    
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, clustered_data.clusters_SSBO);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, 32 * num_clusters, NULL, GL_STREAM_DRAW);
 
-            indices[i + 3] = offset + 2;
-            indices[i + 4] = offset + 3;
-            indices[i + 5] = offset + 0;
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, clustered_data.light_indexes_SSBO);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned) * total_num_lights, NULL, GL_STREAM_DRAW);
 
-            offset += 4;
-        }
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, clustered_data.global_index_count_SSBO);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned), NULL, GL_STREAM_DRAW);
+    
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, clustered_data.active_clusters_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, 32 * num_clusters, NULL, GL_STREAM_DRAW);
 
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s_screenQuadDrawData.ebo);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, clustered_data.global_active_clusters_count_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned), NULL, GL_STREAM_DRAW);
 
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(unsigned) * SCREEN_QUAD_INDICES_BUFFER_SIZE, indices, GL_STATIC_DRAW);
-
-        free(indices);
-    }
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, clustered_data.unique_active_clusters_data_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, 32 * num_clusters, NULL, GL_STREAM_DRAW);
 
 
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ScreenVertex), (void*)(offsetof(ScreenVertex, position)));
-    glEnableVertexAttribArray(0);
+    glUseProgram(clustered_data.cluster_actives_shader);
+    Shader_SetInteger(clustered_data.cluster_actives_shader, "depth_texture", 0);
+}
 
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(ScreenVertex), (void*)(offsetof(ScreenVertex, tex_coords)));
-    glEnableVertexAttribArray(1);
+#define WATER_REFLECTION_WIDTH 1024
+#define WATER_REFLECTION_HEIGHT 720
+#define WATER_REFRACTION_WIDTH 1024
+#define WATER_REFRACTION_HEIGHT 720
+static void _initWaterRenderData()
+{
+    memset(&water_data, 0, sizeof(water_data));
 
-    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(ScreenVertex), (void*)(offsetof(ScreenVertex, tex_index)));
-    glEnableVertexAttribArray(2);
+    water_data.wave_speed = 0.02;
 
-    //SETUP WHITE TEXTURE  
-    //create texture
-     glGenTextures(1, &s_screenQuadDrawData.white_texture);
-    glBindTexture(GL_TEXTURE_2D, s_screenQuadDrawData.white_texture);
+    water_data.shader = Shader_CompileFromFile("src/shaders/water_shader.vs", "src/shaders/water_shader.fs", NULL);
+    assert(water_data.shader > 0);
 
-    //set texture wrap and filter modes
+    water_data.dudv_map = Texture_Load("assets/water/waterDUDV.png", NULL);
+ 
+    water_data.normal_map = Texture_Load("assets/water/normal_map.png", NULL);
+
+    glUseProgram(water_data.shader);
+    Shader_SetInteger(water_data.shader, "reflection_texture", 0);
+    Shader_SetInteger(water_data.shader, "refraction_texture", 1);
+    Shader_SetInteger(water_data.shader, "dudv_map", 2);
+    Shader_SetInteger(water_data.shader, "normal_map", 3);
+    Shader_SetInteger(water_data.shader, "refraction_depth_map", 4);
+
+    glGenFramebuffers(1, &water_data.reflection_fbo);
+    glGenFramebuffers(1, &water_data.refraction_fbo);
+    glGenTextures(1, &water_data.cbuffer_reflection);
+    glGenTextures(1, &water_data.cbuffer_refraction);
+    glGenTextures(1, &water_data.dbuffer_reflection);
+    glGenTextures(1, &water_data.dbuffer_refraction);
+
+    //WATER REFLECTION
+    glBindFramebuffer(GL_FRAMEBUFFER, water_data.reflection_fbo);
+    glBindTexture(GL_TEXTURE_2D, water_data.cbuffer_reflection);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, WATER_REFLECTION_WIDTH, WATER_REFLECTION_HEIGHT, 0,
+        GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 
-    uint32_t color_White = 0xffffffff;
+    glBindTexture(GL_TEXTURE_2D, water_data.dbuffer_reflection);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, WATER_REFLECTION_WIDTH, WATER_REFLECTION_HEIGHT, 0,
+        GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &color_White);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, water_data.cbuffer_reflection, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, water_data.dbuffer_reflection, 0);
 
-    glUseProgram(s_screenQuadDrawData.shader);
+    //WATER REFRACTION
+    glBindFramebuffer(GL_FRAMEBUFFER, water_data.refraction_fbo);
+    glBindTexture(GL_TEXTURE_2D, water_data.cbuffer_refraction);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, WATER_REFRACTION_WIDTH, WATER_REFRACTION_HEIGHT, 0,
+        GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 
-    //set up samplers
-    GLint texture_array_location = glGetUniformLocation(s_screenQuadDrawData.shader, "u_textures");
-    int32_t samplers[32];
+    glBindTexture(GL_TEXTURE_2D, water_data.dbuffer_refraction);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, WATER_REFRACTION_WIDTH, WATER_REFRACTION_HEIGHT, 0,
+        GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-    for (int i = 0; i < 32; i++)
-    {
-       samplers[i] = i;
-    }
-
-    glUniform1iv(texture_array_location, 32, samplers);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, water_data.cbuffer_refraction, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, water_data.dbuffer_refraction, 0);
 }
+
+static void _initMeshRenderData()
+{
+    memset(&mesh_Render_data, 0, sizeof(mesh_Render_data));
+
+    mesh_Render_data.process_shader = ComputeShader_CompileFromFile("src/shaders/mesh_batching.comp");
+    assert(mesh_Render_data.process_shader > 0);
+    
+
+    glGenBuffers(1, &mesh_Render_data.mesh_data);
+    glGenBuffers(1, &mesh_Render_data.element_draW_cmds);
+    glGenBuffers(1, &mesh_Render_data.render_requests);
+    glGenBuffers(1, &mesh_Render_data.vbo);
+    glGenBuffers(1, &mesh_Render_data.ebo);
+    glGenBuffers(1, &mesh_Render_data.tranforms);
+    glGenBuffers(1, &mesh_Render_data.textures_ssbo);
+    glGenBuffers(1, &mesh_Render_data.materials_ssbo);
+    glGenVertexArrays(1, &mesh_Render_data.vao);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, mesh_Render_data.textures_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(GLuint64) * 15, NULL, GL_STATIC_DRAW);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, mesh_Render_data.mesh_data);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(MeshRenderData) * 400, NULL, GL_STATIC_DRAW);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, mesh_Render_data.element_draW_cmds);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(DrawElementsCMD) * 400, NULL, GL_STATIC_DRAW);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, mesh_Render_data.render_requests);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(RenderRequest) * 400, NULL, GL_STATIC_DRAW);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, mesh_Render_data.materials_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(GL_Material) * 15, NULL, GL_STATIC_DRAW);
+
+    glBindVertexArray(mesh_Render_data.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, mesh_Render_data.vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(ModelVertex) * 100000, NULL, GL_STATIC_DRAW);
+     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh_Render_data.ebo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(unsigned) * 10000, NULL, GL_STATIC_DRAW);
+
+    const int STRIDE_SIZE = sizeof(ModelVertex);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, STRIDE_SIZE, (void*)(offsetof(ModelVertex, position)));
+    glEnableVertexAttribArray(0);
+
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, STRIDE_SIZE, (void*)(offsetof(ModelVertex, normal)));
+    glEnableVertexAttribArray(1);
+
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, STRIDE_SIZE, (void*)(offsetof(ModelVertex, tex_coords)));
+    glEnableVertexAttribArray(2);
+
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, STRIDE_SIZE, (void*)(offsetof(ModelVertex, tangent)));
+    glEnableVertexAttribArray(3);
+
+    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, STRIDE_SIZE, (void*)(offsetof(ModelVertex, bitangent)));
+    glEnableVertexAttribArray(4);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, mesh_Render_data.tranforms);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(vec4) * 1000, NULL, GL_STATIC_DRAW);
+
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 22, mesh_Render_data.mesh_data);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 23, mesh_Render_data.element_draW_cmds);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 24, mesh_Render_data.render_requests);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 25, mesh_Render_data.tranforms);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 26, mesh_Render_data.textures_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 27, mesh_Render_data.materials_ssbo);
+}
+
+
 
 static void _initShadowMapData()
 {   
@@ -431,10 +593,12 @@ static void _initShadowMapData()
 
     //SETUP FRAMEBUFFER
     glGenFramebuffers(1, &s_shadowMapData.frame_buffer);
+
+   
     
     glGenTextures(1, &s_shadowMapData.light_depth_maps);
     glBindTexture(GL_TEXTURE_2D_ARRAY, s_shadowMapData.light_depth_maps);
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT32F, render_settings.shadow_map_resolution, render_settings.shadow_map_resolution, SHADOW_CASCADE_LEVELS + 1, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT16, W_WIDTH, W_HEIGHT, SHADOW_CASCADE_LEVELS + 1, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
@@ -457,7 +621,7 @@ static void _initShadowMapData()
     glGenBuffers(1, &s_shadowMapData.light_space_matrices_ubo);
     glBindBuffer(GL_UNIFORM_BUFFER, s_shadowMapData.light_space_matrices_ubo);
     glBufferData(GL_UNIFORM_BUFFER, sizeof(mat4) * LIGHT_MATRICES_COUNT, NULL, GL_STREAM_DRAW);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 1, s_shadowMapData.light_space_matrices_ubo);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 4, s_shadowMapData.light_space_matrices_ubo);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
    
     float z_far = 500;
@@ -523,30 +687,95 @@ static void _initBitmapTextDrawData()
     
 }
 
-static void _initBillboardData()
+static void _initParticleData()
 {
-    memset(&s_billboardData, 0, sizeof(R_BillboardData));
+    memset(&s_particleDrawData, 0, sizeof(R_ParticleDrawData));
 
-    s_billboardData.shader = Shader_CompileFromFile("src/shaders/billboard.vs", "src/shaders/billboard.fs", "src/shaders/billboard.gs");
-    assert(s_billboardData.shader > 0);
+    s_particleDrawData.compute_shader = ComputeShader_CompileFromFile("src/shaders/particle_update.comp");
+    assert(s_particleDrawData.compute_shader > 0);
 
-    s_billboardData.texture = Texture_Load("assets/cube_textures/sand.png", NULL);
+    s_particleDrawData.render_shader = Shader_CompileFromFile("src/shaders/particle_render.vs", "src/shaders/particle_render.fs", NULL);
+    assert(s_particleDrawData.render_shader);
 
-    vec3 positions;
-    positions[0] = -20;
-    positions[1] = 0;
-    positions[2] = 0;
+    s_particleDrawData.transform_shader = Shader_CompileFromFile("src/shaders/particle_transform.vs", "src/shaders/particle_transform.fs", NULL);
+    assert(s_particleDrawData.transform_shader);
 
-    glGenVertexArrays(1, &s_billboardData.vao);
-    glGenBuffers(1, &s_billboardData.vbo);
-    glBindVertexArray(s_billboardData.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_billboardData.vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vec3), positions, GL_STATIC_DRAW);
+    glGenVertexArrays(1, &s_particleDrawData.vao);
+    glGenBuffers(1, &s_particleDrawData.vbo);
+    glGenBuffers(1, &s_particleDrawData.ebo);
 
+
+    glBindVertexArray(s_particleDrawData.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, s_particleDrawData.vbo);
+
+    float quad_vertices[] =
+    {
+        // positions        // texture Coords
+        -1.0f,  1.0f, 0.0, 0.0f, 1.0f,
+        -1.0f, -1.0f, 0.0, 0.0f, 0.0f,
+         1.0f,  1.0f, 0.0, 1.0f, 1.0f,
+         1.0f, -1.0f, 0.0, 1.0f, 0.0f,
+    };
+    float quad_vertices2[] =
+    {
+        // positions        // texture Coords
+        -1.0f, -1.0f, 0.0, 0.0f, 0.0f,
+         -1.0f,  1.0f, 0.0, 0.0f, 1.0f,
+         1.0f,  1.0f, 0.0, 1.0f, 1.0f,
+         1.0f, -1.0f, 0.0, 1.0f, 0.0f,
+    };
+
+   
+
+    unsigned indices[6];
+
+    indices[0] = 0;
+    indices[1] = 1;
+    indices[2] = 2;
+
+    indices[3] = 2;
+    indices[4] = 3;
+    indices[5] = 0;
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s_particleDrawData.ebo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices) * 100, indices, GL_STREAM_DRAW);
+    //glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, sizeof(indices), indices);
+
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad_vertices2) * 100, quad_vertices2, GL_STREAM_DRAW);
+  //  glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(quad_vertices), quad_vertices);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 5, (void*)0);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 5, (void*)(sizeof(float) * 3));
+    glEnableVertexAttribArray(1);
+
+    s_particleDrawData.particles = RSB_Create(100, sizeof(R_Particle), true, true, false, false, true);
+    s_particleDrawData.emitters = RSB_Create(4, sizeof(R_ParticleEmitter), false, true, true, false, true);
+    s_particleDrawData.transforms = RSB_Create(200, sizeof(vec4), true, true, false, false, true);
+    
+    s_particleDrawData.emitters_buffer = RSB_Map(&s_particleDrawData.emitters, GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT);
+    
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 10, s_particleDrawData.emitters.buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 11, s_particleDrawData.particles.buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 12, s_particleDrawData.transforms.buffer);
+
+    unsigned init = 0;
+    glGenBuffers(1, &s_particleDrawData.atomic_counter_buffer);
+    glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, s_particleDrawData.atomic_counter_buffer);
+    glBufferData(GL_ATOMIC_COUNTER_BUFFER, sizeof(unsigned), init, GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, 1, s_particleDrawData.atomic_counter_buffer);
 
 
+    DrawElementsCMD cmd;
+    cmd.count = 6;
+    cmd.baseInstance = 0;
+    cmd.baseVertex = 0;
+    cmd.firstIndex = 0;
+    cmd.instanceCount = 64;
+
+    glGenBuffers(1, &s_particleDrawData.draw_cmds);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, s_particleDrawData.draw_cmds);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(DrawElementsCMD) * 1, &cmd, GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 13, s_particleDrawData.draw_cmds);
 }
 
 static void _initGLStates()
@@ -566,6 +795,20 @@ static void _initGeneralRenderData()
 
     memset(&s_RenderData, 0, sizeof(R_GeneralRenderData));
 
+    s_RenderData.depth_prepass_shader = Shader_CompileFromFile("src/shaders/depth_prepass.vs", "src/shaders/depth_prepass.fs", NULL);
+    assert(s_RenderData.depth_prepass_shader > 0);
+
+    s_RenderData.deffered_compute_shader = ComputeShader_CompileFromFile("src/shaders/deffered_lighting.comp");
+    assert(s_RenderData.deffered_compute_shader > 0);
+    s_RenderData.deffered_lighting_shader = Shader_CompileFromFile("src/shaders/deffered_lighting.vs", "src/shaders/deffered_lighting.fs", NULL);
+    s_RenderData.ssao_pass_deffered_shader = Shader_CompileFromFile("src/shaders/ssao_deffered.vs", "src/shaders/ssao_deffered.fs", NULL);
+    s_RenderData.ssao_pass_shader = Shader_CompileFromFile("src/shaders/ssao.vs", "src/shaders/ssao.fs", NULL);
+    s_RenderData.ssao_blur_shader = Shader_CompileFromFile("src/shaders/ssao_blur.vs", "src/shaders/ssao_blur.fs", NULL);
+    s_RenderData.ssao_compute_shader = ComputeShader_CompileFromFile("src/shaders/ssao.comp");
+    s_RenderData.reflected_uv_shader = Shader_CompileFromFile("src/shaders/reflected_uv.vs", "src/shaders/reflected_uv.fs", NULL);
+    assert(s_RenderData.reflected_uv_shader > 0);
+    
+
     //CAMERA UBO
     glGenBuffers(1, &s_RenderData.camera_buffer);
     glBindBuffer(GL_UNIFORM_BUFFER, s_RenderData.camera_buffer);
@@ -573,6 +816,9 @@ static void _initGeneralRenderData()
     glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_RenderData.camera_buffer);
 
     //SETUP FRAMEBUFFERS AND RENDERBUFFERS
+    glGenFramebuffers(1, &s_RenderData.reflectedUV_FBO);
+    glGenFramebuffers(1, &s_RenderData.ssaoFBO);
+    glGenFramebuffers(1, &s_RenderData.ssaoBlurFBO);
     glGenFramebuffers(1, &s_RenderData.FBO);
     glGenFramebuffers(1, &s_RenderData.msFBO);
     glGenRenderbuffers(1, &s_RenderData.msRBO);
@@ -607,12 +853,12 @@ static void _initGeneralRenderData()
     //DEPTH BUFFER TEXTURE
     glGenTextures(1, &s_RenderData.depth_texture);
     glBindTexture(GL_TEXTURE_2D, s_RenderData.depth_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, W_WIDTH, W_HEIGHT, 0,
-        GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, W_WIDTH, W_HEIGHT, 0,
+        GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s_RenderData.depth_texture, 0);
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
@@ -643,15 +889,178 @@ static void _initGeneralRenderData()
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+    //REFLECTED UV
+    glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.reflectedUV_FBO);
+    glGenTextures(1, &s_RenderData.reflectedUV_ColorBuffer);
+    glBindTexture(GL_TEXTURE_2D, s_RenderData.reflectedUV_ColorBuffer);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W_WIDTH, W_HEIGHT, 0,
+        GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_RenderData.reflectedUV_ColorBuffer, 0);
+
+    glUseProgram(s_RenderData.reflected_uv_shader);
+    Shader_SetInteger(s_RenderData.reflected_uv_shader, "depth_texture", 0);
+    Shader_SetInteger(s_RenderData.reflected_uv_shader, "g_normal", 1);
+    Shader_SetInteger(s_RenderData.reflected_uv_shader, "g_color", 2);
+
+    //SSAO
+    glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.ssaoFBO);
+    glGenTextures(1, &s_RenderData.ssaoColorBuffer);
+    glBindTexture(GL_TEXTURE_2D, s_RenderData.ssaoColorBuffer);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, W_WIDTH / 2, W_HEIGHT / 2, 0, GL_RED, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_RenderData.ssaoColorBuffer, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        assert(false);
+
+    //SSAO BLUR
+    glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.ssaoBlurFBO);
+    glGenTextures(1, &s_RenderData.ssaoBlurColorBuffer);
+    glBindTexture(GL_TEXTURE_2D, s_RenderData.ssaoBlurColorBuffer);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, W_WIDTH / 2, W_HEIGHT / 2, 0, GL_RED, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_RenderData.ssaoBlurColorBuffer, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        assert(false);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    //SSAO NOISE
+    vec3 ssao_noise[16];
+    srand(time(NULL));
+    for (int i = 0; i < 16; i++)
+    {
+        ssao_noise[i][0] = ((float)rand() / (float)RAND_MAX) * 2.0 - 1.0;
+        ssao_noise[i][1] = ((float)rand() / (float)RAND_MAX) * 2.0 - 1.0;
+        ssao_noise[i][2] = 0.0f;
+    }
+
+    glGenTextures(1, &s_RenderData.ssao_noise_texture);
+    glBindTexture(GL_TEXTURE_2D, s_RenderData.ssao_noise_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 4, 4, 0, GL_RGB, GL_FLOAT, ssao_noise);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+    glUseProgram(s_RenderData.ssao_pass_shader);
+    Shader_SetInteger(s_RenderData.ssao_pass_shader, "depth_texture", 0);
+    Shader_SetInteger(s_RenderData.ssao_pass_shader, "noise_texture", 1);
+
+    for (int i = 0; i < 32; i++)
+    {
+        vec3 kernel;
+        kernel[0] = ((float)rand() / (float)RAND_MAX) * 2.0 - 1.0;
+        kernel[1] = ((float)rand() / (float)RAND_MAX) * 2.0 - 1.0;
+        kernel[2] = ((float)rand() / (float)RAND_MAX);
+        glm_normalize(kernel);
+        glm_vec3_scale(kernel, ((float)rand() / (float)RAND_MAX), kernel);
+      
+        float scale = i / 32.0f;
+
+        float lerp_scale = glm_lerp(0.1, 1.0, scale * scale);
+        glm_vec3_scale(kernel, lerp_scale, kernel);
+
+        char buf[256];
+        sprintf(buf, "u_kernelSamples[%i]", i);
+
+        //glUseProgram(s_RenderData.ssao_pass_shader);
+        //Shader_SetVector3f_2(s_RenderData.ssao_pass_shader, buf, kernel);
+        glUseProgram(s_RenderData.ssao_pass_deffered_shader);
+        Shader_SetVector3f_2(s_RenderData.ssao_pass_deffered_shader, buf, kernel);
+
+        glUseProgram(s_RenderData.ssao_compute_shader);
+        Shader_SetVector3f_2(s_RenderData.ssao_compute_shader, buf, kernel);
+    }
+
+   
+    glUseProgram(s_RenderData.ssao_blur_shader);
+    Shader_SetInteger(s_RenderData.ssao_blur_shader, "ssao_texture", 0);
+
+    glUseProgram(s_RenderData.ssao_pass_deffered_shader);
+    Shader_SetInteger(s_RenderData.ssao_pass_deffered_shader, "g_position", 0);
+    Shader_SetInteger(s_RenderData.ssao_pass_deffered_shader, "g_normal", 0);
+    Shader_SetInteger(s_RenderData.ssao_pass_deffered_shader, "noise_texture", 1);
+    Shader_SetInteger(s_RenderData.ssao_pass_deffered_shader, "depth_texture", 2);
+
+    glUseProgram(s_RenderData.ssao_compute_shader);
+    Shader_SetInteger(s_RenderData.ssao_compute_shader, "g_normal", 0);
+    Shader_SetInteger(s_RenderData.ssao_compute_shader, "noise_texture", 1);
+    Shader_SetInteger(s_RenderData.ssao_compute_shader, "depth_texture", 2);
+
+    glUseProgram(s_RenderData.deffered_lighting_shader);
+    Shader_SetInteger(s_RenderData.deffered_lighting_shader, "depth_texture", 0);
+    Shader_SetInteger(s_RenderData.deffered_lighting_shader, "gNormal", 1);
+    Shader_SetInteger(s_RenderData.deffered_lighting_shader, "gAlbedo", 2);
+    Shader_SetInteger(s_RenderData.deffered_lighting_shader, "ssao", 3);
+    Shader_SetInteger(s_RenderData.deffered_lighting_shader, "shadowMap", 4);
+
+    glUseProgram(s_RenderData.deffered_compute_shader);
+    Shader_SetInteger(s_RenderData.deffered_compute_shader, "depth_texture", 0);
+    Shader_SetInteger(s_RenderData.deffered_compute_shader, "gNormal", 1);
+    Shader_SetInteger(s_RenderData.deffered_compute_shader, "gAlbedo", 2);
+    Shader_SetInteger(s_RenderData.deffered_compute_shader, "ssao", 3);
+
+ 
 }   
 
 static void _initDeferredShadingData()
 {
+    glGenFramebuffers(1, &s_deferredShadingData.g_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_deferredShadingData.g_fbo);
+    //position texture
+    //glGenTextures(1, &s_deferredShadingData.g_position);
+   // glBindTexture(GL_TEXTURE_2D, s_deferredShadingData.g_position);
+    //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, W_WIDTH, W_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
+    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    //glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_deferredShadingData.g_position, 0);
+    // normal color buffer
+    glGenTextures(1, &s_deferredShadingData.g_normal);
+    glBindTexture(GL_TEXTURE_2D, s_deferredShadingData.g_normal);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W_WIDTH, W_HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_deferredShadingData.g_normal, 0);
+    // color + specular color buffer
+    glGenTextures(1, &s_deferredShadingData.g_colorSpec);
+    glBindTexture(GL_TEXTURE_2D, s_deferredShadingData.g_colorSpec);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W_WIDTH, W_HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, s_deferredShadingData.g_colorSpec, 0);
+    unsigned int attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+    glDrawBuffers(2, attachments);
+
+    //depth
+    glGenTextures(1, &s_deferredShadingData.g_depth_buffer);
+    glBindTexture(GL_TEXTURE_2D, s_deferredShadingData.g_depth_buffer);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, W_WIDTH, W_HEIGHT, 0,
+        GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s_deferredShadingData.g_depth_buffer, 0);
+
+
 
     glGenFramebuffers(1, &s_deferredShadingData.depth_mapFBO);
     glGenTextures(1, &s_deferredShadingData.light_depth_maps);
     glBindTexture(GL_TEXTURE_2D_ARRAY, s_deferredShadingData.light_depth_maps);
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT32F, SHADOW_MAP_RESOLUTION, SHADOW_MAP_RESOLUTION, SHADOW_CASCADE_LEVELS + 1, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT32F, W_WIDTH, W_HEIGHT, SHADOW_CASCADE_LEVELS + 1, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
@@ -694,7 +1103,7 @@ static void _initDeferredShadingData()
     s_deferredShadingData.shadow_depth_shader = Shader_CompileFromFile("src/shaders/shadow_depth_shader.vs", "src/shaders/shadow_depth_shader.fs", "src/shaders/shadow_depth_shader.gs");
     assert(s_deferredShadingData.shadow_depth_shader > 0);
 
-    s_deferredShadingData.hi_z_shader = Shader_CompileFromFile("src/shaders/hi-z.vs", "src/shaders/hi-z.fs", NULL);
+    s_deferredShadingData.hi_z_shader = Shader_CompileFromFile("src/shaders/hi-z.vs", "src/shaders/hi-z_min.fs", NULL);
     assert(s_deferredShadingData.hi_z_shader > 0);
 
     s_deferredShadingData.cull_shader = Shader_CompileFromFile("src/shaders/cull2.vs", "src/shaders/cull.fs", NULL);
@@ -703,11 +1112,11 @@ static void _initDeferredShadingData()
     s_deferredShadingData.post_process_shader = Shader_CompileFromFile("src/shaders/post_process.vs", "src/shaders/post_process.fs", NULL);
     assert(s_deferredShadingData.post_process_shader > 0);
 
-    s_deferredShadingData.cull_compute_shader = ComputeShader_CompileFromFile("src/shaders/cull_compute.comp");
+    s_deferredShadingData.cull_compute_shader = ComputeShader_CompileFromFile("src/shaders/cull_compute2.comp");
     assert(s_deferredShadingData.cull_compute_shader > 0);
 
-    s_deferredShadingData.bounding_box_cull_shader = Shader_CompileFromFile("src/shaders/cull_bound_box.vs", "src/shaders/cull_bound_box.fs", "src/shaders/cull_bound_box.gs");
-    assert(s_deferredShadingData.bounding_box_cull_shader > 0);
+   // s_deferredShadingData.bounding_box_cull_shader = Shader_CompileFromFile("src/shaders/cull_bound_box.vs", "src/shaders/cull_bound_box.fs", "src/shaders/cull_bound_box.gs");
+    //assert(s_deferredShadingData.bounding_box_cull_shader > 0);
 
     s_deferredShadingData.frustrum_select_shader = ComputeShader_CompileFromFile("src/shaders/frustrum_select.comp");
     assert(s_deferredShadingData.frustrum_select_shader > 0);
@@ -719,6 +1128,9 @@ static void _initDeferredShadingData()
     assert(s_deferredShadingData.model_shader > 0);
 
     //SETUP SHADER
+    glUseProgram(s_deferredShadingData.g_shader);
+    Shader_SetInteger(s_deferredShadingData.g_shader, "texture_atlas", 0);
+
     glUseProgram(s_deferredShadingData.lighting_shader);
     Shader_SetInteger(s_deferredShadingData.lighting_shader, "u_position", 0);
     Shader_SetInteger(s_deferredShadingData.lighting_shader, "u_normal", 1);
@@ -728,6 +1140,7 @@ static void _initDeferredShadingData()
     Shader_SetInteger(s_deferredShadingData.simple_lighting_shader, "atlas_texture", 0);
     Shader_SetInteger(s_deferredShadingData.simple_lighting_shader, "shadowMap", 1);
     Shader_SetInteger(s_deferredShadingData.simple_lighting_shader, "skybox_texture", 2);
+    Shader_SetInteger(s_deferredShadingData.simple_lighting_shader, "ssao_texture", 3);
     Shader_SetVector4f(s_deferredShadingData.simple_lighting_shader, "u_Fog.color", 0.6, 0.8, 1.0, 1.0);
     Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, "u_Fog.density", 0.00009);
 
@@ -940,13 +1353,12 @@ static void _initDeferredShadingData()
     //depth texture for occlussion culling
     glGenTextures(1, &s_deferredShadingData.depth_map_texture);
     glBindTexture(GL_TEXTURE_2D, s_deferredShadingData.depth_map_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, W_WIDTH, W_HEIGHT, 0,
-        GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, W_WIDTH, W_HEIGHT, 0,
+        GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
-    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 
     //framebuffer for occullsion culling
     glGenFramebuffers(1, &s_deferredShadingData.frame_buffer);
@@ -988,7 +1400,6 @@ static void _initDeferredShadingData()
     glGenBuffers(1, &s_deferredShadingData.SSBO);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, s_deferredShadingData.SSBO);
     glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(data), data, GL_MAP_READ_BIT | GL_MAP_COHERENT_BIT | GL_MAP_PERSISTENT_BIT);
-   // glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(data), data, GL_STREAM_DRAW);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, s_deferredShadingData.SSBO);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
@@ -1008,7 +1419,7 @@ static void _initDeferredShadingData()
     glGenBuffers(1, &s_deferredShadingData.chunks_info_ssbo);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, s_deferredShadingData.chunks_info_ssbo);
     glBufferData(GL_SHADER_STORAGE_BUFFER, 16, NULL, GL_STREAM_DRAW);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, s_deferredShadingData.bounds_ssbo);
+    //glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, s_deferredShadingData.bounds_ssbo);
 
 
     unsigned data_atomic = 0;
@@ -1033,51 +1444,415 @@ static void _initDeferredShadingData()
 
 
     glBindBufferBase(GL_UNIFORM_BUFFER, 2, s_deferredShadingData.camera_info_ubo);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, s_deferredShadingData.chunks_info_ssbo);
+
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, s_deferredShadingData.draw_buffer);
     glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, 0, s_deferredShadingData.atomic_counter);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, s_deferredShadingData.cull_vbo);
 }
 
+static void Register_ParticleEmitter(ParticleEmitterClient emitter)
+{
+    unsigned emitter_index = RSB_Request(&s_particleDrawData.emitters);
+    void* emitter_data = (char*)s_particleDrawData.emitters_buffer + (s_particleDrawData.emitters.item_size * emitter_index);
+    memcpy(emitter_data, &emitter.emitter_gl, sizeof(R_ParticleEmitter));
+    //RSB_Unmap(&s_particleDrawData.emitters);
+
+
+    //assign particle data
+    if (emitter.amount > s_particleDrawData.particles.reserve_size)
+    {
+        RSB_IncreaseSize(&s_particleDrawData.particles, emitter.amount - s_particleDrawData.particles.reserve_size);
+    }
+    R_Particle* particle_data = RSB_Map(&s_particleDrawData.particles, GL_MAP_WRITE_BIT);
+    mat4 model;
+    glm_mat4_identity(model);
+
+    for (int i = 0; i < emitter.amount; i++)
+    {
+        unsigned particle_index = RSB_Request(&s_particleDrawData.particles);
+        R_Particle* particle = &particle_data[particle_index];
+        glm_mat4_copy(model, particle->xform);
+        particle->emitter_index = emitter_index;
+        particle->local_index = i;
+    }
+    RSB_Unmap(&s_particleDrawData.particles);
+
+    emitter.storage_index = emitter_index;
+
+    s_particleDrawData.emitter_clients[0] = emitter;
+}
+
+static void Particle_Emitter_Play(ParticleEmitterClient* emitter)
+{
+   
+}
+
+static void Particle_Emitter_AnimationUpdate(ParticleEmitterClient* emitter, R_ParticleEmitter* gl_emit, float delta)
+{
+    double remaining = delta;
+    int i = 0;
+
+    while (remaining)
+    {
+        double speed = emitter->anim_speed_scale;
+        double abs_speed = fabs(speed);
+
+        if (speed == 0)
+        {
+            return;
+        }
+
+        int frame_count = emitter->frame_count;
+
+        int last_frame = frame_count - 1;
+
+        if (!signbit(speed))
+        {
+            if (emitter->frame_progress >= 1.0)
+            {
+                //anim restart
+                if (gl_emit->anim_frame >= last_frame)
+                {
+                    gl_emit->anim_frame = 0;
+                }
+                else
+                {
+                    gl_emit->anim_frame++;
+                }
+                emitter->frame_progress = 0.0;
+            }
+            
+            double to_process = min((1.0 - emitter->frame_progress) / abs_speed, remaining);
+            emitter->frame_progress += to_process * abs_speed;
+            remaining -= to_process;
+        }
+
+        i++;
+        if (i > frame_count) 
+        {
+            return; 
+        }
+    }
+
+}
+
+
+typedef enum EMITTER_FLAGS
+{
+    EMITTER_SKIP_DRAW = 1 << 0,
+    EMITTER_ACTIVE = 1 << 1,
+    EMITTER_CLEAR = 1 << 2,
+    EMITTER_FORCE_RESTART = 1 << 3
+
+} EMITTER_FLAGS;
+
+static void Particle_Emitter_Update()
+{
+
+
+    float delta = C_getDeltaTime();
+
+    for (int i = 0; i < 1; i++)
+    {
+        ParticleEmitterClient* client = &s_particleDrawData.emitter_clients[0];
+        R_ParticleEmitter* gl = &s_particleDrawData.emitters_buffer[client->storage_index];
+
+        float local_delta = delta;
+
+        
+        gl->prev_time = gl->time;
+        local_delta = delta * client->speed_scale;
+        client->time += local_delta;
+
+        if (client->time > client->life_time)
+        {
+            client->time = fmodf(client->time, client->life_time);
+            client->cycles++;
+            gl->cycle = client->cycles;
+
+            if (client->one_shot && client->cycles > 0)
+            {
+                client->playing = false;
+                client->cycles = 0;
+            }
+        }
+
+        gl->delta = local_delta;
+
+        gl->time = client->time / client->life_time;
+        
+        if(client->anim_speed_scale > 0)
+            Particle_Emitter_AnimationUpdate(client, gl, local_delta);
+
+        gl->flags = 0;
+
+        //perform frustrum cull
+        if (!glm_aabb_frustum(client->aabb, s_RenderData.camera_frustrum))
+        {
+            gl->flags |= EMITTER_SKIP_DRAW;
+        }
+
+     
+  
+        if (client->playing)
+        {
+            gl->flags |= EMITTER_ACTIVE;
+        }
+       
+
+
+        bool clear = false;
+
+        if (clear)
+        {
+            gl->flags |= EMITTER_CLEAR;
+        }
+       
+
+    }
+
+
+}
+
+static void renderMeshRequest(float x, float y, float z)
+{
+    RenderRequest request;
+    request.mesh_index = 0;
+    glm_mat4_identity(request.xform);
+    request.xform[3][0] = x;
+    request.xform[3][1] = y;
+    request.xform[3][2] = z;
+    
+
+    glNamedBufferSubData(mesh_Render_data.render_requests, mesh_Render_data.last_request_index * sizeof(RenderRequest), sizeof(RenderRequest), &request);
+    mesh_Render_data.last_request_index++;
+}
+
+extern void BSP_InitAllRenderData();
+extern void BSP_RenderAll(vec3 viewPos);
+extern void LoadBSPFile(const char* filename);
+
 bool r_Init()
 {
+    //LoadBSPFile("assets/bsp/test_level.bsp");
+    LoadBSPFile("assets/bsp/q3dm1.bsp");
+    BSP_InitAllRenderData();
+
+
     render_settings.flags = RF__ENABLE_SHADOW_MAPPING;
     render_settings.mssa_setting = R_MSSA_NONE;
     render_settings.shadow_map_resolution = R_SM__1024;
 
     _initGLStates();
-    _initBillboardData();
     _initGeneralRenderData();
-    _initLineRenderData();
-    _initTriangleRenderData();
-    _initScreenQuadRenderData();
     _initBitmapTextDrawData();
     _initDeferredShadingData();
     _initShadowMapData();
+    _initWaterRenderData();
+   // _initParticleData();
+    _initClusteredData();
+    _initMeshRenderData();
+    
+    ParticleEmitterClient emiiter;
+
+    
+    
+    memset(&emiiter, 0, sizeof(ParticleEmitterClient));
+
+    emiiter.gravity = 3;
+
+    //emiiter.emitter_gl.velocity[0] = 1;
+    //emiiter.emitter_gl.velocity[1] -= emiiter.gravity;
+
+    emiiter.life_time = 111;
+    emiiter.emitter_gl.life_time = 111;
+
+    emiiter.one_shot = false;
+    
+    emiiter.playing = true;
+    
+    emiiter.speed_scale = 1;
+    emiiter.emitter_gl.explosivness = 0;
+    emiiter.emitter_gl.emission_shape = 2;
+    emiiter.emitter_gl.emission_size[0] = 5;
+    emiiter.emitter_gl.emission_size[1] = 5;
+    emiiter.emitter_gl.emission_size[2] = 5;
+
+    emiiter.emitter_gl.randomness = 0;
+    emiiter.frame_count = 25;
+    emiiter.anim_speed_scale = 24;
+
+    emiiter.emitter_gl.color[0] = 1;
+    emiiter.emitter_gl.color[1] = 1;
+    emiiter.emitter_gl.color[2] = 1;
+    emiiter.emitter_gl.color[3] = 1;
+
+    emiiter.amount = 12;
+    emiiter.emitter_gl.particle_amount = 12;
+    emiiter.emitter_gl.anim_offset = 2;
+    glm_mat4_identity(emiiter.emitter_gl.xform);
+    
+
+    emiiter.aabb[0][0] = -20;
+    emiiter.aabb[0][1] = -20;
+    emiiter.aabb[0][2] = -20;
+
+    emiiter.aabb[1][0] = 22;
+    emiiter.aabb[1][1] = 22;
+    emiiter.aabb[1][2] = 22;
+
+    emiiter.emitter_gl.transform_align = 1;
+    emiiter.direction[0] = 1;
+    emiiter.direction[1] = -1;
+    emiiter.direction[2] = 0;
+
+    float inital_velocity = 5;
+    float linear_accel = 5;
+    vec3 force;
+    force[0] = 0;
+    force[1] = emiiter.gravity;
+    force[2] = 0;
+
+    force[0] += emiiter.direction[0] * inital_velocity;
+    force[1] += emiiter.direction[1] * inital_velocity;
+    force[2] += emiiter.direction[2] * inital_velocity;
+
    
-    r_mssaLevel = C_cvarRegister("r_mssaLevel", "0", NULL, 0, 0, 8);
+
+    emiiter.emitter_gl.velocity[0] = force[0];
+    emiiter.emitter_gl.velocity[1] = force[1];
+    emiiter.emitter_gl.velocity[2] = force[2];
+
+   // Register_ParticleEmitter(emiiter);
+    //Particle_Emitter_Play(&emiiter);
+
+
+    r_mssaLevel = Cvar_Register("r_mssaLevel", "0", "HELP TEXT", 0, 0, 8);
+    r_shadowMapping = Cvar_Register("r_shadowMapping", "1", NULL, 0, 0, 1);
         
     ivec2 window_size;
     window_size[0] = W_WIDTH;
     window_size[1] = W_HEIGHT;
     r_onWindowResize(window_size);
 
-    sprite_Draw_cmnds_counter = 0;
-    memset(sprite_draw_commands, 0, sizeof(sprite_draw_commands));
+    cube_model = Model_Load("assets/meshes/cube_mesh.dae");
+    sphere_model = Model_Load("assets/meshes/sphere_mesh.dae");
+    //sponza_model = Model_Load("assets/sponza/sponza2/NewSponza_Main_Zup_002.fbx");
+    
+    
+    R_Mesh* mesh = cube_model.meshes->data;
+    ModelVertex* verticies = mesh->vertices->data;
+    
+    float vert[300];
+    
+    int offset = 0;
+    for (int i = 0; i < mesh->vertices->elements_size; i++)
+    {
+        ModelVertex* v = &verticies[i];
+
+        vert[i + 0 + offset] = v->position[0];
+        vert[i + 1 + offset] = v->position[1];
+        vert[i + 2 + offset] = v->position[2];
+
+        vert[i + 3 + offset] = v->tex_coords[0];
+        vert[i + 4 + offset] = v->tex_coords[1];
+        offset += 4;
+    }
+
+    glNamedBufferSubData(s_particleDrawData.vbo, sizeof(float) * 20, (sizeof(float) * 5) * mesh->vertices->elements_size, vert);
+    unsigned* indices = mesh->indices->data;
+
+    glNamedBufferSubData(s_particleDrawData.ebo, sizeof(unsigned) * 6, sizeof(unsigned) * mesh->indices->elements_size, indices);
+
+    glNamedBufferSubData(mesh_Render_data.vbo, 0, sizeof(ModelVertex) * mesh->vertices->elements_size, mesh->vertices->data);
+    glNamedBufferSubData(mesh_Render_data.ebo, 0, sizeof(unsigned) * mesh->indices->elements_size, indices);
+    
+    MeshRenderData msd[2];
+    glm_vec3_copy(mesh->bounding_box[0], msd[0].bounding_box[0]);
+    glm_vec3_copy(mesh->bounding_box[1], msd[0].bounding_box[1]);
+
+    int v_offset = sizeof(ModelVertex) * mesh->vertices->elements_size;
+    int i_offset = sizeof(unsigned) * mesh->indices->elements_size;
+
+    R_Mesh* mesh2 = sphere_model.meshes->data;
+    glm_vec3_copy(mesh2->bounding_box[0], msd[1].bounding_box[0]);
+    glm_vec3_copy(mesh2->bounding_box[1], msd[1].bounding_box[1]);
+    glNamedBufferSubData(mesh_Render_data.vbo, v_offset, sizeof(ModelVertex) * mesh2->vertices->elements_size, mesh2->vertices->data);
+    glNamedBufferSubData(mesh_Render_data.ebo, i_offset, sizeof(unsigned) * mesh2->indices->elements_size, mesh2->indices->data);
+    
+
+  
+        
+
+    glNamedBufferSubData(mesh_Render_data.mesh_data, 0, sizeof(MeshRenderData) * 2, msd);
+
+    DrawElementsCMD cmd[2];
+    cmd[0].baseInstance = 0;
+    cmd[0].baseVertex = 0;
+    cmd[0].count = mesh->indices->elements_size;
+    cmd[0].firstIndex = 0;
+    cmd[0].instanceCount = 0;
+    
+    cmd[1].baseInstance = 0;
+    cmd[1].baseVertex = mesh->vertices->elements_size;
+    cmd[1].count = mesh2->indices->elements_size;
+    cmd[1].firstIndex = mesh->indices->elements_size;
+    cmd[1].instanceCount = 0;
+
+    glNamedBufferSubData(mesh_Render_data.element_draW_cmds, 0, sizeof(DrawElementsCMD) * 2, cmd);
+    
+
+    GL_Material material;
+    memset(&material, -1, sizeof(material));
+    material.albedo_map = 0;
+    material.metalic_map = 1;
+    material.normal_map = 2;
+    material.roughness_map = 3;
+    material.metallic_ratio = 1;
+    material.color[0] = 0;
+    material.color[1] = 0;
+    material.color[2] = 1;
+    material.color[3] = 1;
+    glNamedBufferSubData(mesh_Render_data.materials_ssbo, 0, sizeof(GL_Material), &material);
+
+    pbr_textures.albedo = Texture_Load("assets/pbr/rustediron2_basecolor.png", NULL);
+    pbr_textures.metallic = Texture_Load("assets/pbr/rustediron2_metallic.png", NULL);
+    pbr_textures.normal = Texture_Load("assets/pbr/rustediron2_normal.png", NULL);
+    pbr_textures.roughness = Texture_Load("assets/pbr/rustediron2_roughness.png", NULL);
+
    
-    world_ptr = NULL;
+
+    particle_spritesheet_texture = Texture_Load("assets/Rocket Fire 2-Sheet.png", NULL);
 
     bitmap_texture = Texture_Load("assets/ui/bigchars.tga", NULL);
 
     tex_atlas = Texture_Load("assets/cube_textures/block_atlas.png", NULL);
-   
+    
+    dirst_texture = Texture_Load("assets/cube_textures/dirt.png", NULL);
+
+
+    GLuint64 handles[4];
+    //handles[0] = glGetTextureHandleARB(pbr_textures.albedo.id);
+    //handles[1] = glGetTextureHandleARB(pbr_textures.metallic.id);
+    //handles[2] = glGetTextureHandleARB(pbr_textures.normal.id);
+    //handles[3] = glGetTextureHandleARB(pbr_textures.roughness.id);
+
+    for (int i = 0; i < 4; i++)
+    {
+        //glMakeTextureHandleResidentARB(handles[i]);
+    }
+
+   // glNamedBufferSubData(mesh_Render_data.textures_ssbo, 0, sizeof(GLuint64) * 4, handles);
+
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     s_fontData = R_loadFontData("assets/ui/myFont4.json", "assets/ui/myFont4.bmp");
     
 
-  //  model = Model_Load("assets/backpack/backpack.obj");
+   //
+   // 
+   // model = Model_Load("assets/backpack2/backpack.obj");
 
     float z_far = 500;
 
@@ -1104,24 +1879,8 @@ bool r_Init()
 	return true;
 }
 
-static void _drawTextBatch()
-{
-    glUseProgram(s_bitmapTextData.shader);
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, s_fontData.texture.id);
 
-    glBindVertexArray(s_bitmapTextData.vao);
-
-    glBindBuffer(GL_ARRAY_BUFFER, s_bitmapTextData.vbo);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(BitmapTextVertex) * s_bitmapTextData.vertices_count, s_bitmapTextData.vertices);
-
-    glDrawElements(GL_TRIANGLES, s_bitmapTextData.indices_count, GL_UNSIGNED_INT, 0);
-
-    memset(s_bitmapTextData.vertices, 0, sizeof(s_bitmapTextData.vertices));
-    s_bitmapTextData.vertices_count = 0;
-    s_bitmapTextData.indices_count = 0;
-}
 
 void r_DrawScreenText(const char* p_string, vec2 p_position, vec2 p_size, vec4 p_color, float h_spacing, float y_spacing)
 {
@@ -1130,7 +1889,7 @@ void r_DrawScreenText(const char* p_string, vec2 p_position, vec2 p_size, vec4 p
     //flush the batch??
     if (s_bitmapTextData.vertices_count + (4 * str_len) >= BITMAP_TEXT_VERTICES_BUFFER_SIZE - 1)
     {
-        _drawTextBatch();
+        
     }
 
     const char* itr_string = p_string;
@@ -1260,39 +2019,8 @@ void r_DrawScreenText(const char* p_string, vec2 p_position, vec2 p_size, vec4 p
 
 }
 
-void r_DrawScreenText2(const char* p_string, float p_x, float p_y, float p_width, float p_height, float p_r, float p_g, float p_b, float p_a, float h_spacing, float y_spacing)
-{
-    vec2 position;
-    position[0] = p_x;
-    position[1] = p_y;
 
-    vec2 size;
-    size[0] = p_width;
-    size[1] = p_height;
 
-    vec4 color;
-    color[0] = p_r;
-    color[1] = p_g;
-    color[2] = p_b;
-    color[3] = p_a;
-
-    r_DrawScreenText(p_string, position, size, color, h_spacing, y_spacing);
-}
-
-void RenderbillboardTexture()
-{
-    glUseProgram(s_billboardData.shader);
-    
-    Shader_SetVector3f(s_billboardData.shader, "u_viewPos", s_RenderData.camera->data.position[0], s_RenderData.camera->data.position[1], s_RenderData.camera->data.position[2]);
-    Shader_SetFloat(s_billboardData.shader, "u_billboardSize", 1);
-    Shader_SetInteger(s_billboardData.shader, "texture_sampler", 0);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, s_billboardData.texture.id);
-
-    glDrawArrays(GL_POINTS, 0, 1);
-
-}
 
 void _drawSkybox()
 {
@@ -1309,6 +2037,18 @@ void _drawSkybox()
     view_no_translation[2][2] = s_RenderData.camera->data.view_matrix[2][2];
     view_no_translation[2][3] = s_RenderData.camera->data.view_matrix[2][3];
     
+    static float rotation = 0;
+    rotation += 0.00010 * C_getDeltaTime();
+
+
+
+    vec3 axis;
+    axis[0] = 0;
+    axis[1] = 1;
+    axis[2] = 0;
+
+    glm_rotate(view_no_translation, glm_deg(rotation), axis);
+
     Shader_SetMatrix4(s_deferredShadingData.skybox_shader, "u_view", view_no_translation);
     Shader_SetMatrix4(s_deferredShadingData.skybox_shader, "u_projection", s_RenderData.camera->data.proj_matrix);
 
@@ -1322,500 +2062,33 @@ void _drawSkybox()
     glDepthFunc(GL_LESS);
 }
 
-static void _drawLineBatch()
+
+
+
+
+
+void r_Update(R_Camera* const p_cam)
 {
-    glUseProgram(s_lineDrawData.shader);
-
-    glBindVertexArray(s_lineDrawData.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_lineDrawData.vbo);
-
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(LineVertex) * s_lineDrawData.vertices_count, s_lineDrawData.line_vertices);
-
-    glLineWidth(2);
-
-    glDrawArrays(GL_LINES, 0, s_lineDrawData.vertices_count);
-
-    memset(s_lineDrawData.line_vertices, 0, sizeof(s_lineDrawData.line_vertices));
-    s_lineDrawData.vertices_count = 0;
-}
-static void _drawTriangleBatch()
-{
-    glUseProgram(s_triangleDrawData.shader);
-
-    glBindVertexArray(s_triangleDrawData.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_triangleDrawData.vbo);
-
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(TriangleVertex) * s_triangleDrawData.vertices_count, s_triangleDrawData.triangle_vertices);
-
-    glDrawArrays(GL_TRIANGLES, 0, s_triangleDrawData.vertices_count);
-
-    memset(s_triangleDrawData.triangle_vertices, 0, sizeof(s_triangleDrawData.triangle_vertices));
-    s_triangleDrawData.vertices_count = 0;
-}
-
-static void _drawScreenQuadBatch()
-{   
-    //bind texture units
-    for (int i = 0; i < (s_screenQuadDrawData.tex_index + 1); i++)
-    {
-        glBindTextureUnit(i, s_screenQuadDrawData.tex_array[i]);
-    }
-
-    glUseProgram(s_screenQuadDrawData.shader);
-
-    
-    glBindVertexArray(s_screenQuadDrawData.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_screenQuadDrawData.vbo);
-
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(ScreenVertex) * s_screenQuadDrawData.vertices_count, s_screenQuadDrawData.screen_quad_vertices);
-    glDrawElements(GL_TRIANGLES, s_screenQuadDrawData.indices_count, GL_UNSIGNED_INT, 0);
-
-    memset(s_screenQuadDrawData.screen_quad_vertices, 0, sizeof(s_screenQuadDrawData.screen_quad_vertices));
-    s_screenQuadDrawData.vertices_count = 0;
-    s_screenQuadDrawData.indices_count = 0;
-    s_screenQuadDrawData.indices_offset = 0;
-    s_screenQuadDrawData.tex_index = 1;
-}
-
-void r_drawLine(vec3 from, vec3 to, vec4 color)
-{
-    //draw the current batch??
-    if (s_lineDrawData.vertices_count + 2 >= LINE_VERTICES_BUFFER_SIZE - 1)
-    {
-        _drawLineBatch();
-    }
-
-    //start point
-    glm_vec3_copy(from, s_lineDrawData.line_vertices[s_lineDrawData.vertices_count].position);
-    if (color != NULL)
-    {
-        glm_vec4_copy(color, s_lineDrawData.line_vertices[s_lineDrawData.vertices_count].color);
-    }
-    else
-    {
-        glm_vec4_copy(DEFAULT_COLOR, s_lineDrawData.line_vertices[s_lineDrawData.vertices_count].color);
-    }
-
-    s_lineDrawData.vertices_count++;
-
-    //end point
-    glm_vec3_copy(to, s_lineDrawData.line_vertices[s_lineDrawData.vertices_count].position);
-    if (color != NULL)
-    {
-        glm_vec4_copy(color, s_lineDrawData.line_vertices[s_lineDrawData.vertices_count].color);
-    }
-    else
-    {
-        glm_vec4_copy(DEFAULT_COLOR, s_lineDrawData.line_vertices[s_lineDrawData.vertices_count].color);
-    }
-
-    s_lineDrawData.vertices_count++;
-}
-
-void r_drawLine2(float f_x, float f_y, float f_z, float t_x, float t_y, float t_z, vec4 color)
-{
-    vec3 from;
-    from[0] = f_x;
-    from[1] = f_y;
-    from[2] = f_z;
-
-    vec3 to;
-    to[0] = t_x;
-    to[1] = t_y;
-    to[2] = t_z;
-
-    r_drawLine(from, to, color);
-}
-
-void r_drawTriangle(vec3 p1, vec3 p2, vec3 p3, vec4 color)
-{
-    //draw the current batch??
-    if (s_triangleDrawData.vertices_count + 3 >= TRIANGLE_VERTICES_BUFFER_SIZE - 1)
-    {
-        _drawTriangleBatch();
-    }
-
-    //point 1
-    glm_vec3_copy(p1, s_triangleDrawData.triangle_vertices[s_triangleDrawData.vertices_count].position);
-    if (color != NULL)
-    {
-        glm_vec4_copy(color, s_triangleDrawData.triangle_vertices[s_triangleDrawData.vertices_count].color);
-    }
-    else
-    {
-        glm_vec4_copy(DEFAULT_COLOR, s_triangleDrawData.triangle_vertices[s_triangleDrawData.vertices_count].color);
-    }
-    s_triangleDrawData.vertices_count++;
-
-    //point 2
-    glm_vec3_copy(p2, s_triangleDrawData.triangle_vertices[s_triangleDrawData.vertices_count].position);
-    if (color != NULL)
-    {
-        glm_vec4_copy(color, s_triangleDrawData.triangle_vertices[s_triangleDrawData.vertices_count].color);
-    }
-    else
-    {
-        glm_vec4_copy(DEFAULT_COLOR, s_triangleDrawData.triangle_vertices[s_triangleDrawData.vertices_count].color);
-    }
-    s_triangleDrawData.vertices_count++;
-
-    //point 3
-    glm_vec3_copy(p3, s_triangleDrawData.triangle_vertices[s_triangleDrawData.vertices_count].position);
-    if (color != NULL)
-    {
-        glm_vec4_copy(color, s_triangleDrawData.triangle_vertices[s_triangleDrawData.vertices_count].color);
-    }
-    else
-    {
-        glm_vec4_copy(DEFAULT_COLOR, s_triangleDrawData.triangle_vertices[s_triangleDrawData.vertices_count].color);
-    }
-    s_triangleDrawData.vertices_count++;
-
-}
-
-void r_drawTriangle2(float p1_x, float p1_y, float p1_z, float p2_x, float p2_y, float p2_z, float p3_x, float p3_y, float p3_z, vec4 color)
-{
-    vec3 p1;
-    p1[0] = p1_x;
-    p1[1] = p1_y;
-    p1[2] = p1_z;
-
-    vec3 p2;
-    p2[0] = p2_x;
-    p2[1] = p2_y;
-    p2[2] = p2_z;
-
-    vec3 p3;
-    p3[0] = p3_x;
-    p3[1] = p3_y;
-    p3[2] = p3_z;
-
-    r_drawTriangle(p1, p2, p3, color);
-}
-
-void r_drawAABBWires(AABB box, vec4 color)
-{
-    //adding a small amount fixes z_fighting issues
-    for (int i = 0; i < 3; i++)
-    {
-        box.position[i] += 0.001;
-    }
-    r_drawLine2(box.position[0], box.position[1], box.position[2], box.position[0] + box.width, box.position[1], box.position[2], color);
-    r_drawLine2(box.position[0], box.position[1] + box.height, box.position[2], box.position[0] + box.width, box.position[1] + box.height, box.position[2], color);
-    r_drawLine2(box.position[0], box.position[1] + box.height, box.position[2], box.position[0], box.position[1], box.position[2], color);
-    r_drawLine2(box.position[0] + box.width, box.position[1], box.position[2], box.position[0] + box.width, box.position[1] + box.height, box.position[2], color);
-    r_drawLine2(box.position[0], box.position[1], box.position[2], box.position[0], box.position[1], box.position[2] + box.length, color);
-    r_drawLine2(box.position[0], box.position[1], box.position[2] + box.length, box.position[0] + box.width, box.position[1], box.position[2] + box.length, color);
-    r_drawLine2(box.position[0] + box.width, box.position[1], box.position[2] + box.length, box.position[0] + box.width, box.position[1], box.position[2], color);
-    r_drawLine2(box.position[0], box.position[1], box.position[2] + box.length, box.position[0], box.position[1] + box.height, box.position[2] + box.length, color);
-    r_drawLine2(box.position[0], box.position[1] + box.height, box.position[2] + box.length, box.position[0] + box.width, box.position[1] + box.height, box.position[2] + box.length, color);
-    r_drawLine2(box.position[0], box.position[1] + box.height, box.position[2], box.position[0], box.position[1] + box.height, box.position[2] + box.length, color);
-    r_drawLine2(box.position[0] + box.width, box.position[1] + box.height, box.position[2], box.position[0] + box.width, box.position[1] + box.height, box.position[2] + box.length, color);
-    r_drawLine2(box.position[0] + box.width, box.position[1], box.position[2] + box.length, box.position[0] + box.width, box.position[1] + box.height, box.position[2] + box.length, color);
-}
-
-void r_drawAABBWires2(vec3 box[2], vec4 color)
-{
-    AABB aabb;
-    aabb.position[0] = box[0][0];
-    aabb.position[1] = box[0][1];
-    aabb.position[2] = box[0][2];
-
-    aabb.width = (box[1][0] - box[0][0]) - 0.5;
-    aabb.height = (box[1][1] - box[0][1]) - 0.5;
-    aabb.length = (box[1][2] - box[0][2]) - 0.5;
-
-    r_drawAABBWires(aabb, color);
-}
-
-void r_drawCube(vec3 size, vec3 pos, vec4 color)
-{
-    vec3 CUBE_POSITION_VERTICES[] =
-    {
-        //back face
-        -0.5f, -0.5f, -0.5f,  // Bottom-left
-         0.5f,  0.5f, -0.5f,   // top-right
-         0.5f, -0.5f, -0.5f,   // bottom-right         
-         0.5f,  0.5f, -0.5f,   // top-right
-        -0.5f, -0.5f, -0.5f,   // bottom-left
-        -0.5f,  0.5f, -0.5f,   // top-left
-        // Front face
-        -0.5f, -0.5f,  0.5f,   // bottom-left
-         0.5f, -0.5f,  0.5f,   // bottom-right
-         0.5f,  0.5f,  0.5f,   // top-right
-         0.5f,  0.5f,  0.5f,   // top-right
-        -0.5f,  0.5f,  0.5f,   // top-left
-        -0.5f, -0.5f,  0.5f,   // bottom-left
-        // Left face
-        -0.5f,  0.5f,  0.5f,  // top-right
-        -0.5f,  0.5f, -0.5f,   // top-left
-        -0.5f, -0.5f, -0.5f,   // bottom-left
-        -0.5f, -0.5f, -0.5f,   // bottom-left
-        -0.5f, -0.5f,  0.5f,   // bottom-right
-        -0.5f,  0.5f,  0.5f,   // top-right
-        // Right face
-         0.5f,  0.5f,  0.5f,   // top-left
-         0.5f, -0.5f, -0.5f,   // bottom-right
-         0.5f,  0.5f, -0.5f,  // top-right         
-         0.5f, -0.5f, -0.5f,   // bottom-right
-         0.5f,  0.5f,  0.5f,  // top-left
-         0.5f, -0.5f,  0.5f,  // bottom-left     
-         // Bottom face
-         -0.5f, -0.5f, -0.5f,   // top-right
-          0.5f, -0.5f, -0.5f,   // top-left
-          0.5f, -0.5f,  0.5f,   // bottom-left
-          0.5f, -0.5f,  0.5f,   // bottom-left
-         -0.5f, -0.5f,  0.5f,  // bottom-right
-         -0.5f, -0.5f, -0.5f,   // top-right
-         // Top face
-         -0.5f,  0.5f, -0.5f,   // top-left
-          0.5f,  0.5f,  0.5f,   // bottom-right
-          0.5f,  0.5f, -0.5f,   // top-right     
-          0.5f,  0.5f,  0.5f,   // bottom-right
-         -0.5f,  0.5f, -0.5f,   // top-left
-         -0.5f,  0.5f,  0.5f // bottom-left   
-    };
-
-    mat4 model;
-    Math_Model(pos, size, 0, model);
-
-    for (int i = 0; i < 36; i+= 3)
-    {
-        glm_mat4_mulv3(model, CUBE_POSITION_VERTICES[i], 1.0f, CUBE_POSITION_VERTICES[i]);
-        glm_mat4_mulv3(model, CUBE_POSITION_VERTICES[i + 1], 1.0f, CUBE_POSITION_VERTICES[i + 1]);
-        glm_mat4_mulv3(model, CUBE_POSITION_VERTICES[i + 2], 1.0f, CUBE_POSITION_VERTICES[i + 2]);
-
-        r_drawTriangle(CUBE_POSITION_VERTICES[i], CUBE_POSITION_VERTICES[i + 1], CUBE_POSITION_VERTICES[i + 2], color);
-    }
-
-}
-
-static void _drawAll()
-{
-    if (s_lineDrawData.vertices_count > 0)
-    {
-        _drawLineBatch();
-    }
-    if (s_triangleDrawData.vertices_count > 0)
-    {
-        _drawTriangleBatch();
-    }
-}
-
-static void DrawMesh(const R_Mesh* p_mesh, vec3 pos)
-{
-    unsigned diffuse_nr = 1;
-    unsigned specular_nr = 1;
-    unsigned normal_nr = 1;
-    unsigned height_nr = 1;
-    glUseProgram(s_deferredShadingData.model_shader);
-
-    for (unsigned i = 0; i < p_mesh->textures->elements_size; i++)
-    {
-        glActiveTexture(GL_TEXTURE0 + i);
-
-        TextureData* array = p_mesh->textures->data;
-
-        char number[256];
-        memset(number, 0, 256);
-
-        if (strcmp(array[i].type, "texture_diffuse") == 0)
-        {
-            sprintf(number, "%i", diffuse_nr++);
-        }
-        else if (strcmp(array[i].type, "texture_specular") == 0)
-        {
-            sprintf(number, "%i", specular_nr++);
-           // continue;
-        }
-        else if (strcmp(array[i].type, "texture_normal") == 0)
-        {
-            sprintf(number, "%i", normal_nr++);
-        }
-        else if (strcmp(array[i].type, "texture_height") == 0)
-        {
-            sprintf(number, "%i", height_nr++);
-        }
-
-        char name_and_number[512];
-        memset(name_and_number, 0, 512);
-
-        strcpy(name_and_number, array[i].type);
-        strcat(name_and_number, number);
-
-        Shader_SetInteger(s_deferredShadingData.model_shader, name_and_number, i);
-        glBindTexture(GL_TEXTURE_2D, array[i].texture.id);
-
-  
-        
-    }
-
-
-    mat4 m;
-
-    vec3 size;
-    memset(size, 16, sizeof(vec3));
-    size[0] = 5;
-    size[1] = 5;
-    size[2] = 5;
-
-    Math_Model(pos, size, 0, m);
-
-    Shader_SetFloat(s_deferredShadingData.model_shader, "u_heightScale", 1.0);
-    Shader_SetMatrix4(s_deferredShadingData.model_shader, "u_model", m);
-    Shader_SetVector3f(s_deferredShadingData.model_shader, "u_viewPos", s_RenderData.camera->data.position[0], s_RenderData.camera->data.position[1], s_RenderData.camera->data.position[2]);
-    Shader_SetVector3f(s_deferredShadingData.model_shader, "u_lightPos", s_RenderData.camera->data.position[0], s_RenderData.camera->data.position[1], s_RenderData.camera->data.position[2]);
-    glBindVertexArray(p_mesh->vao);
-
-   // glActiveTexture(GL_TEXTURE1);
-   // glBindTexture(GL_TEXTURE_CUBE_MAP, cubemap_texture.id);
-
-    glDrawElements(GL_TRIANGLES, p_mesh->indices->elements_size, GL_UNSIGNED_INT, 0);
-    glActiveTexture(GL_TEXTURE0);
-}
-
-static void DrawModel(R_Model* const p_model, vec3 pos)
-{
-    for (int i = 0; i < p_model->meshes->elements_size; i++)
-    {
-        R_Mesh* mesh_array = p_model->meshes->data;
-        
-        DrawMesh(&mesh_array[i], pos);
-
-    }
-
-
-}
-
-
-void r_Draw(R_Model* const p_model, vec3 pos)
-{
-   
-    DrawModel(p_model, pos);
-}
-
-
-void r_DrawWorldChunks2(LC_World* const world)
-{
-    if (s_RenderData.camera == NULL)
-        return;
-
-    //PERFORM FRUSTRUM CULLING ON CHUNKS AND ISSUE DRAW COMMANDS
-    size_t chunk_count = world->chunks->pool->elements_size;
-
-    glUseProgram(s_deferredShadingData.frustrum_select_shader);
-    glDispatchCompute(chunk_count, 1, 1);
-
-    glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_ATOMIC_COUNTER_BUFFER);
-    
-
-    glBindVertexArray(world->vao);
-    glBindBuffer(GL_ARRAY_BUFFER, world->vbo);
-    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, s_deferredShadingData.draw_buffer);
-    glBindBuffer(GL_PARAMETER_BUFFER, s_deferredShadingData.atomic_counter);
-
-    if (render_settings.flags & RF__ENABLE_SHADOW_MAPPING)
-    {
-        //SET UP_LIGHT MATRICES
-        mat4 light_matrixes[5];
-        Math_getLightSpacesMatrixesForFrustrum(s_RenderData.camera, s_RenderData.window_width, s_RenderData.window_height, 5, s_shadowMapData.shadow_cascade_levels, world->sun.direction_to_center, light_matrixes);
-        glBindBuffer(GL_UNIFORM_BUFFER, s_shadowMapData.light_space_matrices_ubo);
-        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(light_matrixes), light_matrixes);
-
-        glUseProgram(s_shadowMapData.shadow_depth_shader);
-        glBindFramebuffer(GL_FRAMEBUFFER, s_shadowMapData.frame_buffer);
-        glViewport(0, 0, render_settings.shadow_map_resolution, render_settings.shadow_map_resolution);
-        glClear(GL_DEPTH_BUFFER_BIT);
-
-        //disable cull face for peter panning
-         glDisable(GL_CULL_FACE);
-
-        //RENDER FROM LIGHTS PERSPECTIVE
-        glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, chunk_count, sizeof(DrawElementsIndirectCommand));
-
-        
-        if (r_mssaLevel->int_value != 0)
-        {
-            glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.msFBO);
-        }
-        else if (use_hdr)
-        {
-            glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.hdrFBO);
-        }
-        else
-        {
-            glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.FBO);
-        }
-        glEnable(GL_CULL_FACE);
-        glViewport(0, 0, s_RenderData.window_width, s_RenderData.window_height);
-
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    }
-
-   
-
-    glUseProgram(s_deferredShadingData.simple_lighting_shader);
-
-    Shader_SetMatrix4(s_deferredShadingData.simple_lighting_shader, "u_view", s_RenderData.camera->data.view_matrix);
-    Shader_SetVector3f(s_deferredShadingData.simple_lighting_shader, "u_viewPos", s_RenderData.camera->data.position[0], s_RenderData.camera->data.position[1], s_RenderData.camera->data.position[2]);
-
-    Shader_SetVector3f(s_deferredShadingData.simple_lighting_shader, "u_dirLight.color", world->sun.sun_color[0], world->sun.sun_color[1], world->sun.sun_color[2]);
-    Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, "u_dirLight.ambient_intensity", 0.5f);
-    Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, "u_dirLight.diffuse_intensity", 0.8f);
-    Shader_SetVector3f(s_deferredShadingData.simple_lighting_shader, "u_dirLight.direction", world->sun.direction_to_center[0], world->sun.direction_to_center[1], world->sun.direction_to_center[2]);
-
-    //NORMAL RENDER PASS
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, tex_atlas.id);
-    if (render_settings.flags & RF__ENABLE_SHADOW_MAPPING)
-    {
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, s_shadowMapData.light_depth_maps);
-    }
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, cubemap_texture.id);
-
-    glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, chunk_count, sizeof(DrawElementsIndirectCommand));
-
-    //Clear draw and atomic buffers
-    glClearBufferSubData(GL_DRAW_INDIRECT_BUFFER, GL_R32UI, 0, sizeof(DrawElementsIndirectCommand) * chunk_count, GL_RED_INTEGER, GL_UNSIGNED_INT, NULL);
-    glClearBufferSubData(GL_ATOMIC_COUNTER_BUFFER, GL_R32UI, 0, sizeof(unsigned), GL_RED_INTEGER, GL_UNSIGNED_INT, NULL);
-    
-}
-
-
-void r_Update(R_Camera* const p_cam, LC_World* const world)
-{
-    world_ptr = world;
 
     mat4 view_proj;
     glm_mat4_mul(p_cam->data.proj_matrix, p_cam->data.view_matrix, view_proj);
+
 
     glBindBuffer(GL_UNIFORM_BUFFER, s_RenderData.camera_buffer);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(mat4), view_proj);
 
     s_RenderData.camera = p_cam;
 
+    //Math_GLM_FrustrumPlanes_ReverseZ(view_proj, s_RenderData.camera_frustrum);
     glm_frustum_planes(view_proj, s_RenderData.camera_frustrum);
 
+    glm_mat4_copy(view_proj, s_view_proj);
+
+    glBindBufferBase(GL_UNIFORM_BUFFER, 1, s_deferredShadingData.camera_info_ubo);
     glNamedBufferSubData(s_deferredShadingData.camera_info_ubo, 0, sizeof(vec4) * 6, s_RenderData.camera_frustrum);
 
-    if (glfwGetKey(s_Window, GLFW_KEY_C) == GLFW_PRESS)
-    {
-        s_deferredShadingData.use_hi_z_cull = !s_deferredShadingData.use_hi_z_cull;
-    }
-
-    if (glfwGetKey(s_Window, GLFW_KEY_L) == GLFW_PRESS)
-    {
-        render_settings.mssa_setting = R_MSSA_8;
-        printf("mssa on");
-    }
-    if (glfwGetKey(s_Window, GLFW_KEY_K) == GLFW_PRESS)
-    {
-        render_settings.mssa_setting = R_MSSA_NONE;
-        printf("mssa off");
-    }
-
+    
+  
 }
 
 
@@ -1855,72 +2128,125 @@ void r_DrawCrosshair()
 
 }
 
-
-void r_DrawScreenSpriteInternal(R_Sprite* sprite)
+void hizcullPass()
 {
-      //draw the current batch??
-    if (s_screenQuadDrawData.vertices_count + 4 >= SCREEN_QUAD_VERTICES_BUFFER_SIZE || s_screenQuadDrawData.tex_index >= SCREEN_QUAD_MAX_TEXTURES - 1)
-    {
-        _drawScreenQuadBatch();
+    glBindFramebuffer(GL_FRAMEBUFFER, s_deferredShadingData.g_fbo);
+    glUseProgram(s_deferredShadingData.hi_z_shader);
+    glBindVertexArray(s_deferredShadingData.screen_quad_vao);
+    // disable color buffer as we will render only a depth image
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s_deferredShadingData.g_depth_buffer);
+    // we have to disable depth testing but allow depth writes
+    glDepthFunc(GL_ALWAYS);
+    // calculate the number of mipmap levels for NPOT texture
+    int numLevels = 1 + (int)floorf(log2f(fmaxf(W_WIDTH, W_HEIGHT)));
+   // int numLevels = 1 + 2;
+    int currentWidth = W_WIDTH;
+    int currentHeight = W_HEIGHT;
+    for (int i = 1; i < numLevels; i++) {
+        glUniform2i(glGetUniformLocation(s_deferredShadingData.hi_z_shader, "LastMipSize"), currentWidth, currentHeight);
+        // calculate next viewport size
+        currentWidth /= 2;
+        currentHeight /= 2;
+        // ensure that the viewport size is always at least 1x1
+        currentWidth = currentWidth > 0 ? currentWidth : 2;
+        currentHeight = currentHeight > 0 ? currentHeight : 2;
+        glViewport(0, 0, currentWidth, currentHeight);
+        // bind next level for rendering but first restrict fetches only to previous level
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, i - 1);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, i - 1);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s_deferredShadingData.g_depth_buffer, i);
+        // dummy draw command as the full screen quad is generated completely by a geometry shader
+       // glDrawArrays(GL_POINTS, 0, 1);
+        glBindTexture(GL_TEXTURE_2D, s_deferredShadingData.g_depth_buffer);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
-    
-    int texture_slot_index = -1;
-
-    //find or assign the texture
-    for (int i = 0; i < SCREEN_QUAD_MAX_TEXTURES; i++)
-    {
-        //exists already?
-        if (sprite->texture->id == s_screenQuadDrawData.tex_array[i])
-        {
-            texture_slot_index = i;
-            break;
-        }
-    }
-    //not found? then add to the array
-    if (texture_slot_index == -1)
-    {
-        s_screenQuadDrawData.tex_array[s_screenQuadDrawData.tex_index] = sprite->texture->id;
-        texture_slot_index = s_screenQuadDrawData.tex_index;
-
-        s_screenQuadDrawData.tex_index++;
-    }
-    //set up the vertices
-    vec3 vertices[] =
-    {
-          0.5f,  0.5f, 0.0f,// top right
-          0.5f, -0.5f, 0.0f, // bottom right
-         -0.5f, -0.5f, 0.0f,// bottom left
-         -0.5f,  0.5f, 0.0f // top left 
-    };
-
-    for (int i = 0; i < 4; i++)
-    {
-        glm_mat4_mulv3(sprite->model_matrix, vertices[i], 1.0f, vertices[i]);
-        
-        s_screenQuadDrawData.screen_quad_vertices[s_screenQuadDrawData.vertices_count + i].position[0] = vertices[i][0];
-        s_screenQuadDrawData.screen_quad_vertices[s_screenQuadDrawData.vertices_count + i].position[1] = vertices[i][1];
-        s_screenQuadDrawData.screen_quad_vertices[s_screenQuadDrawData.vertices_count + i].position[2] = sprite->position[2]; //z_index
-
-        s_screenQuadDrawData.screen_quad_vertices[s_screenQuadDrawData.vertices_count + i].tex_coords[0] = sprite->texture_coords[i][0];
-        s_screenQuadDrawData.screen_quad_vertices[s_screenQuadDrawData.vertices_count + i].tex_coords[1] = sprite->texture_coords[i][1];
-
-        s_screenQuadDrawData.screen_quad_vertices[s_screenQuadDrawData.vertices_count + i].tex_index = texture_slot_index;
-    }
-    s_screenQuadDrawData.vertices_count += 4;
-    s_screenQuadDrawData.indices_count += 6;
+    // reset mipmap level range for the depth image
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, numLevels - 1);
+    // reset the framebuffer configuration
+    //glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_deferredShadingData.g_colorSpec, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s_deferredShadingData.g_depth_buffer, 0);
+    // reenable color buffer writes, reset viewport and reenable depth test
+    glDepthFunc(GL_LEQUAL); //is this right?
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glViewport(0, 0, W_WIDTH, W_HEIGHT);
 }
 
+void compLights()
+{   
+    mat4 inverse_proj;
+    glm_mat4_inv(s_RenderData.camera->data.proj_matrix, inverse_proj);
 
-void r_DrawScreenSprite(R_Sprite* sprite)
+    glClearNamedBufferSubData(clustered_data.light_grid_SSBO, GL_R32UI, 0, 8 * 500, GL_RED_INTEGER, GL_UNSIGNED_INT, NULL);
+    glClearNamedBufferSubData(clustered_data.global_active_clusters_count_ssbo, GL_R32UI, 0, sizeof(unsigned), GL_RED_INTEGER, GL_UNSIGNED_INT, NULL);
+
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, clustered_data.clusters_SSBO);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, clustered_data.active_clusters_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, clustered_data.light_buffer.buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, clustered_data.light_indexes_SSBO);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, clustered_data.light_grid_SSBO);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, clustered_data.global_index_count_SSBO);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, clustered_data.global_active_clusters_count_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, clustered_data.unique_active_clusters_data_ssbo);
+    
+
+   
+    glUseProgram(clustered_data.cluster_build_shader);
+    Shader_SetMatrix4(clustered_data.cluster_build_shader, "u_InverseProj", inverse_proj);
+    glDispatchCompute(16, 9, 24);
+    //glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    
+    glUseProgram(clustered_data.cluster_cull_shader);
+    Shader_SetMatrix4(clustered_data.cluster_cull_shader, "u_view", s_RenderData.camera->data.view_matrix);
+   // Shader_SetMatrix4(clustered_data.cluster_cull_shader, "u_proj", s_RenderData.camera->data.proj_matrix);
+    glDispatchCompute(1, 1, 6);
+   // glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+ 
+}
+
+void ShadowMapDraw(int max)
 {
-    if (sprite_Draw_cmnds_counter >= 10)
-    {
-        return;
-    }
+    vec3 down;
+    down[0] = 0;
+    down[1] = -1;
+    down[2] = 1;
+    //SET UP_LIGHT MATRICES
+    mat4 light_matrixes[5];
+    float cascades[5];
+    glDepthFunc(GL_GREATER);
+    glEnable(GL_DEPTH_TEST);
+    //CascadeShadow_genMatrix(down, s_RenderData.camera->data.view_matrix, s_RenderData.camera->data.proj_matrix, light_matrixes, cascades);
+    glUseProgram(s_RenderData.deffered_lighting_shader);
+    Shader_SetFloat(s_RenderData.deffered_lighting_shader, "u_cascadePlaneDistances[0]", cascades[0]);
+    Shader_SetFloat(s_RenderData.deffered_lighting_shader, "u_cascadePlaneDistances[1]", cascades[1]);
+    Shader_SetFloat(s_RenderData.deffered_lighting_shader, "u_cascadePlaneDistances[2]", cascades[2]);
+    Shader_SetFloat(s_RenderData.deffered_lighting_shader, "u_cascadePlaneDistances[3]", cascades[3]);
+    Shader_SetFloat(s_RenderData.deffered_lighting_shader, "u_cascadePlaneDistances[4]", cascades[4]);
 
-    sprite_draw_commands[sprite_Draw_cmnds_counter].draw_type = SDT__SCREEN;
-    sprite_draw_commands[sprite_Draw_cmnds_counter].sprite_ptr = sprite;
-    sprite_Draw_cmnds_counter++;
+    Math_getLightSpacesMatrixesForFrustrum(s_RenderData.camera, s_RenderData.window_width, s_RenderData.window_height, 5, s_shadowMapData.shadow_cascade_levels, down, light_matrixes);
+    glBindBuffer(GL_UNIFORM_BUFFER, s_shadowMapData.light_space_matrices_ubo);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(light_matrixes), light_matrixes);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 4, s_shadowMapData.light_space_matrices_ubo);
+
+    glUseProgram(s_shadowMapData.shadow_depth_shader);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_shadowMapData.frame_buffer);
+    glViewport(0, 0, W_WIDTH, W_HEIGHT);
+    glClear(GL_DEPTH_BUFFER_BIT);
+
+    //disable cull face for peter panning
+    glDisable(GL_CULL_FACE);
+
+   // glEnable(GL_DEPTH_CLAMP);
+
+    //RENDER FROM LIGHTS PERSPECTIVE
+    glMultiDrawArraysIndirect(GL_TRIANGLES, 0, max, 0);
+
+   // glDisable(GL_DEPTH_CLAMP);
+
+    glEnable(GL_CULL_FACE);
+    glViewport(0, 0, s_RenderData.window_width, s_RenderData.window_height);
 }
 
 void r_startFrame()
@@ -1942,50 +2268,322 @@ void r_startFrame()
     }
    
     glEnable(GL_DEPTH_TEST);
-    glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+    //glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        
+   vec3 pos;
+  
+   //draw occluder
+
+    // bind offscreen framebuffer
+   glBindFramebuffer(GL_FRAMEBUFFER, s_deferredShadingData.frame_buffer);
+   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+
+   
+    vec4 bounds;
+    bounds[0] = 8;
+    bounds[1] = 4;
+    bounds[2] = 8;
+    bounds[3] = 0.1;
+
+    glNamedBufferSubData(s_deferredShadingData.bounds_ssbo, 0, sizeof(vec4) * 1, bounds);
     
-    //Chunks pass. TODO include other draw calls like models, monsters and so on 
-    //that are not part of chunk drawing in between the shadow map pass
-    r_DrawWorldChunks2(world_ptr);
+    unsigned queyr = 0;
 
-    vec3 pos;
-    pos[0] = -20;
-    pos[1] = 0;
-    pos[2] = 0;
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, s_deferredShadingData.bounds_ssbo);
+    //glBindTextureUnit(0, s_deferredShadingData.depth_map_texture);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s_deferredShadingData.g_depth_buffer);
+    glUseProgram(s_deferredShadingData.cull_compute_shader);
+    
+  
 
-   // DrawModel(&model, pos);
+    Shader_SetMatrix4(s_deferredShadingData.cull_compute_shader, "u_mvp", s_view_proj);
+    Shader_SetVector3f_2(s_deferredShadingData.cull_compute_shader, "u_viewPos", s_RenderData.camera->data.position);
+   
+    //renderMeshRequest(0, 0, 0);
+   // renderMeshRequest(32, 0, 0);
+ 
 
-    //Lines, triangles etc... pass
-   // _drawAll();
 
-    //Skybox pass
+    //glUseProgram(mesh_Render_data.process_shader);
+    //glBindTexture(GL_TEXTURE_2D, s_deferredShadingData.depth_map_texture);
+   // glDispatchCompute(1, 1, 1);
+    //glFinish();
+
+
+
+    WorldRenderData* world_render_data = LC_World_getRenderData();
+
+    
+
+
+    glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+    glFinish();
+
+
+    //glm_sphere_fru
+
+
     _drawSkybox();
+   
 
-   // RenderbillboardTexture();
+
+
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, s_deferredShadingData.draw_buffer);
+    glBindBuffer(GL_PARAMETER_BUFFER, s_deferredShadingData.atomic_counter);
+
+    //NORMAL RENDER PASS
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex_atlas.id);
+    
+    //glUseProgram(s_deferredShadingData.simple_lighting_shader);
+    //glActiveTexture(GL_TEXTURE2);
+   // glBindTexture(GL_TEXTURE_CUBE_MAP, cubemap_texture.id);
+    glUseProgram(s_deferredShadingData.simple_lighting_shader);
+    //Shader_SetMatrix4(s_deferredShadingData.simple_lighting_shader, "u_view", s_RenderData.camera->data.view_matrix);
+  //  Shader_SetVector3f(s_deferredShadingData.simple_lighting_shader, "u_viewPos", s_RenderData.camera->data.position[0], s_RenderData.camera->data.position[1], s_RenderData.camera->data.position[2]);
+
+
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex_atlas.id);
+    glBindVertexArray(world_render_data->vao);
+    glBindBuffer(GL_ARRAY_BUFFER, world_render_data->vertex_buffer.buffer);
+
+   
+    size_t vertex_count = world_render_data->vertex_buffer.used_bytes / sizeof(ChunkVertex);
+    size_t t_vertex_count = world_render_data->transparents_vertex_buffer.used_bytes / sizeof(ChunkVertex);
+    
+  
+   
+    mat4 inverse_proj;
+    glm_mat4_inv(s_RenderData.camera->data.proj_matrix, inverse_proj);
+    mat4 inverse_view;
+    glm_mat4_inv(s_RenderData.camera->data.view_matrix, inverse_view);
+
+
+    //Process Chunks
+    int chunk_amount = world_render_data->chunk_data.used_size;
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 9, world_render_data->chunk_data.buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 10, world_render_data->opaque_draw_commands.buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 11, world_render_data->transparent_draw_commands.buffer);
+ 
+    glBindBufferBase(GL_UNIFORM_BUFFER, 1, s_deferredShadingData.camera_info_ubo);
+    glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, 0, s_deferredShadingData.atomic_counter);
+    r_Update(s_RenderData.camera);
+    glUseProgram(world_render_data->process_shader);
+    int num_x_groups = ceilf((float)LC_World_GetChunkAmount() / 64.0f);
+    Shader_SetInteger(world_render_data->process_shader, "u_chunkAmount", chunk_amount);
+    Shader_SetInteger(world_render_data->process_shader, "hiz_map_texture", 0);
+ 
+
+    glBindTextureUnit(0, s_deferredShadingData.g_depth_buffer);
+    glDispatchCompute(chunk_amount, 1, 1);
+    glFinish();
+
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, world_render_data->opaque_draw_commands.buffer);
+
+    
+    glBindVertexArray(world_render_data->vao);
+    glBindBuffer(GL_ARRAY_BUFFER, world_render_data->vertex_buffer.buffer);
+    glBindVertexBuffer(0, world_render_data->vertex_buffer.buffer, 0, sizeof(ChunkVertex));
+    
+    Camera_UpdateMatrices(s_RenderData.camera, 1280, 720);
+    ShadowMapDraw(chunk_amount);
+   
+
+    //DEPTH PRE PASS
+    glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+    glViewport(0, 0, W_WIDTH, W_HEIGHT);
+
+    glDisable(GL_BLEND);   //Disable so we can put extra information in alpha channel and it wont cause any issues
+    glDepthFunc(GL_GREATER);
+    glBindVertexArray(world_render_data->vao);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_deferredShadingData.g_fbo);
+    glClearColor(0, 0, 0, 0);//must be black
+    glClearDepth(0.0f);
+     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(s_RenderData.depth_prepass_shader);
+    // disable color buffer as we will render only a depth image
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glMultiDrawArraysIndirect(GL_TRIANGLES, 0, chunk_amount, 0);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthFunc(GL_LESS);
 
   
-    //text pass
-    if (s_bitmapTextData.vertices_count > 0)
-    {
-        _drawTextBatch();
-    }
 
-    //Screen quads pass
-    if (s_screenQuadDrawData.vertices_count > 0)
-    {
-        _drawScreenQuadBatch();
-    }
+
+    //GBUFFER PASS
+    glDisable(GL_BLEND);
+    glDepthFunc(GL_EQUAL); //Skip occluded pixels since we did pre pass above
+    glDepthMask(GL_FALSE);
+    glUseProgram(s_deferredShadingData.g_shader);
+    //Shader_SetMatrix4(s_deferredShadingData.g_shader, "u_view", s_RenderData.camera->data.view_matrix);
+    glBindTextureUnit(0, tex_atlas.id);
+    glMultiDrawArraysIndirect(GL_TRIANGLES, 0, chunk_amount, 0);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+   
+   
+    //SSAO PASS
+    glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.ssaoFBO);
+    glViewport(0, 0, W_WIDTH / 2, W_HEIGHT / 2);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindTextureUnit(0, s_deferredShadingData.g_normal);
+    glBindTextureUnit(1, s_RenderData.ssao_noise_texture);
+    glBindTextureUnit(2, s_deferredShadingData.g_depth_buffer);
+    glUseProgram(s_RenderData.ssao_pass_deffered_shader);
+
+    Shader_SetMatrix4(s_RenderData.ssao_pass_deffered_shader, "u_proj", s_RenderData.camera->data.proj_matrix);
+    Shader_SetMatrix4(s_RenderData.ssao_pass_deffered_shader, "u_InverseProj", inverse_proj);
+    //Shader_SetMatrix4(s_RenderData.ssao_pass_deffered_shader, "u_InverseView", inverse_view);
+
+    glBindVertexArray(s_deferredShadingData.screen_quad_vao);
+
+    //glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    //SSAO BLUR PASS
+    glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.ssaoBlurFBO);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindTextureUnit(0, s_RenderData.ssaoColorBuffer);
+    glUseProgram(s_RenderData.ssao_blur_shader);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glViewport(0, 0, W_WIDTH, W_HEIGHT);
+    glEnable(GL_BLEND);
+    hizcullPass();
+
+    
+
+    //REFLECTED UV PASS
+    glBindFramebuffer(GL_FRAMEBUFFER, s_RenderData.reflectedUV_FBO);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindTextureUnit(0, s_deferredShadingData.g_depth_buffer);
+    glBindTextureUnit(1, s_deferredShadingData.g_normal);
+    glBindTextureUnit(2, s_deferredShadingData.g_colorSpec);
+    glUseProgram(s_RenderData.reflected_uv_shader);
+   // Shader_SetMatrix4(s_RenderData.reflected_uv_shader, "u_InverseProj", inverse_proj);
+    Shader_SetMatrix4(s_RenderData.reflected_uv_shader, "u_proj", s_RenderData.camera->data.proj_matrix);
+    //Shader_SetMatrix4(s_RenderData.reflected_uv_shader, "u_view", inverse_view);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    
+
+    compLights();
+
+    //DEFFERED LIGHTING PASS
+    //glClearNamedBufferSubData(clustered_data.global_index_count_SSBO, GL_R32UI, 0, sizeof(unsigned), GL_RED_INTEGER, GL_UNSIGNED_INT, NULL);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_deferredShadingData.frame_buffer);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glUseProgram(s_RenderData.deffered_lighting_shader);
+    
+    static float time = 0;
+    time += C_getDeltaTime();
+   // if (time >= 10.0)
+     //   time = 0;
+
+
+    //Shader_SetVector3f_2(s_RenderData.deffered_lighting_shader, "u_viewPos", s_RenderData.camera->data.position);
+    Shader_SetMatrix4(s_RenderData.deffered_lighting_shader, "u_InverseProj", inverse_proj);
+    Shader_SetMatrix4(s_RenderData.deffered_lighting_shader, "u_InverseView", inverse_view);
+    //Shader_SetFloat(s_RenderData.deffered_lighting_shader, "u_delta", time);
+    //Shader_SetMatrix4(s_RenderData.deffered_lighting_shader, "u_view", s_RenderData.camera->data.view_matrix);
+    Shader_SetVector3f(s_RenderData.deffered_lighting_shader, "u_dirLight.direction", 0, 1, 0);
+    Shader_SetVector3f(s_RenderData.deffered_lighting_shader, "u_dirLight.color", 1, 1, 1);
+    Shader_SetFloat(s_RenderData.deffered_lighting_shader, "u_dirLight.ambient_intensity", 0.5);
+    Shader_SetFloat(s_RenderData.deffered_lighting_shader, "u_dirLight.specular_intensity", 0.5);
+
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, clustered_data.clusters_SSBO);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, clustered_data.active_clusters_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, clustered_data.light_buffer.buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, clustered_data.light_indexes_SSBO);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, clustered_data.light_grid_SSBO);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, clustered_data.global_index_count_SSBO);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, clustered_data.global_active_clusters_count_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, clustered_data.unique_active_clusters_data_ssbo);
+
+
+
+    glBindTextureUnit(0, s_deferredShadingData.g_depth_buffer);
+    glBindTextureUnit(1, s_deferredShadingData.g_normal);
+    glBindTextureUnit(2, s_deferredShadingData.g_colorSpec);
+    glBindTextureUnit(3, s_RenderData.ssaoBlurColorBuffer);
+    glBindTextureUnit(4, s_shadowMapData.light_depth_maps);
+
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, s_deferredShadingData.g_fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_deferredShadingData.frame_buffer);
+    glBlitFramebuffer(0, 0, W_WIDTH, W_HEIGHT, 0, 0, W_WIDTH, W_HEIGHT, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_deferredShadingData.frame_buffer);
+   
+    glEnable(GL_DEPTH_TEST);
+    //transparents pass
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glDepthFunc(GL_GREATER);
+    glDepthMask(GL_TRUE);
+    glBindTextureUnit(0, tex_atlas.id);
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, world_render_data->transparent_draw_commands.buffer);
+    glBindVertexArray(world_render_data->vao);
+    glBindVertexBuffer(0, world_render_data->transparents_vertex_buffer.buffer, 0, sizeof(ChunkVertex));
+    glBindBuffer(GL_ARRAY_BUFFER, world_render_data->transparents_vertex_buffer.buffer);
+    glUseProgram(world_render_data->transparents_forward_pass_shader);
+    Shader_SetVector3f_2(world_render_data->transparents_forward_pass_shader, "u_viewPos", s_RenderData.camera->data.position);
+    Shader_SetVector3f(world_render_data->transparents_forward_pass_shader, "u_dirLight.direction", 0, 1, 0);
+    Shader_SetVector3f(world_render_data->transparents_forward_pass_shader, "u_dirLight.color", 1, 1, 1);
+    Shader_SetFloat(world_render_data->transparents_forward_pass_shader, "u_dirLight.ambient_intensity", 0.5);
+    Shader_SetFloat(world_render_data->transparents_forward_pass_shader, "u_dirLight.specular_intensity", 0.5);
+    glMultiDrawArraysIndirect(GL_TRIANGLES, 0, chunk_amount, 0);
+    glDepthFunc(GL_LESS);
+    glEnable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
+
+    
+    //BSP TEST
+    glEnable(GL_BLEND);
+    glDepthFunc(GL_GREATER);
+    glDepthMask(GL_TRUE);
+    BSP_RenderAll(s_RenderData.camera->data.position);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+
+
+
+   // Shader_SetVector4f(s_deferredShadingData.simple_lighting_shader, "u_planeNormal", 0, 0, 0, FLT_MAX);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_deferredShadingData.frame_buffer);
+    glViewport(0, 0, W_WIDTH, W_HEIGHT);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex_atlas.id);
+    //glDrawArrays(GL_TRIANGLES, 0, vertex_count);
+
+ 
+
+  
+
+
+
+ 
+    glClearNamedBufferSubData(s_deferredShadingData.atomic_counter, GL_R32UI, 0, sizeof(unsigned), GL_RED_INTEGER, GL_UNSIGNED_INT, NULL);
+    
+
+
+
+
+
+}
+
+void r_renderFrameNew()
+{
 
 }
 
 void r_endFrame()
 {
-    if (r_mssaLevel->int_value != 0)
-    {
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, s_RenderData.msFBO);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_RenderData.FBO);
-        glBlitFramebuffer(0, 0, s_RenderData.window_width, s_RenderData.window_height, 0, 0, s_RenderData.window_width, s_RenderData.window_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    }
+   
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1993,79 +2591,45 @@ void r_endFrame()
 
     glUseProgram(s_deferredShadingData.post_process_shader);
 
-    glActiveTexture(GL_TEXTURE0);
-    if (use_hdr)
-    {
-        Shader_SetInteger(s_deferredShadingData.post_process_shader, "u_hdr", 1);
-        Shader_SetFloat(s_deferredShadingData.post_process_shader, "u_exposure", 1.0f);
-        glBindTexture(GL_TEXTURE_2D, s_RenderData.hdrColorBuffer);
-    }
-    else
-    {
-        glBindTexture(GL_TEXTURE_2D, s_RenderData.color_buffer_texture);
-    }
+    glBindTexture(GL_TEXTURE_2D, s_deferredShadingData.color_buffer_texture);
+    //glBindTexture(GL_TEXTURE_2D, s_RenderData.reflectedUV_ColorBuffer);
+
     glBindVertexArray(s_deferredShadingData.screen_quad_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_deferredShadingData.screen_quad_vbo);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
    
 }
 
-void r_processCommands()
+
+unsigned r_registerLightSource(PointLight p_lightData)
 {
- 
-    if (sprite_Draw_cmnds_counter > 0)
-    {
-        for (int i = 0; i < sprite_Draw_cmnds_counter; i++)
-        {
-            r_DrawScreenSpriteInternal(sprite_draw_commands[i].sprite_ptr);
-        }
-        sprite_Draw_cmnds_counter = 0;
-        memset(sprite_draw_commands, 0, sizeof(sprite_draw_commands));
-    }
+    const float maxBrightness = fmaxf(fmaxf(p_lightData.color[0], p_lightData.color[1]), p_lightData.color[2]);
+    p_lightData.radius = (-p_lightData.linear + sqrt(p_lightData.linear * p_lightData.linear - 4 * p_lightData.quadratic * (p_lightData.constant - (256.0f / 5.0f) * maxBrightness))) / (2.0f * p_lightData.quadratic);
 
-    
+    p_lightData.position[3] = 32.0;
+    p_lightData.color[3] = 1.0;
 
-  
-    
-    
+    unsigned index = RSB_Request(&clustered_data.light_buffer);
 
-}
-void r_registerLightSource(R_LightData p_lightData)
-{
-    if (s_lightDataIndex + 1 >= 32)
-    {
-        return;
-    }
-    
-    s_lightDataBuffer[s_lightDataIndex] = p_lightData;
-  
+    glNamedBufferSubData(clustered_data.light_buffer.buffer, index * sizeof(PointLight), sizeof(PointLight), &p_lightData);
 
-    char buffer[1024];
-    memset(buffer, 0, sizeof(buffer));
-
-    sprintf(buffer, "u_pointLights[%i].position", s_lightDataIndex);
-    
-    glUseProgram(s_deferredShadingData.simple_lighting_shader);
-    Shader_SetVector3f(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.position[0], p_lightData.position[1], p_lightData.position[2]);
-
-    sprintf(buffer, "u_pointLights[%i].color", s_lightDataIndex);
-    Shader_SetVector3f(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.color[0], p_lightData.color[1], p_lightData.color[2]);
-
-    sprintf(buffer, "u_pointLights[%i].ambient_intensity", s_lightDataIndex);
-    Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.ambient_intesity);
-
-    sprintf(buffer, "u_pointLights[%i].diffuse_intensity", s_lightDataIndex);
-    Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.diffuse_intesity);
-
-    sprintf(buffer, "u_pointLights[%i].constant", s_lightDataIndex);
-    Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.constant);
-
-    sprintf(buffer, "u_pointLights[%i].linear", s_lightDataIndex);
-    Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.linear);
-
-    sprintf(buffer, "u_pointLights[%i].quadratic", s_lightDataIndex);
-    Shader_SetFloat(s_deferredShadingData.simple_lighting_shader, buffer, p_lightData.quadratic);
 
     s_lightDataIndex++;
-    Shader_SetInteger(s_deferredShadingData.simple_lighting_shader, "u_pointLightCount", s_lightDataIndex);
+    glUseProgram(s_RenderData.deffered_lighting_shader);
+    Shader_SetInteger(s_RenderData.deffered_lighting_shader, "u_pointLightCount", s_lightDataIndex);
+
+    glUseProgram(s_RenderData.deffered_compute_shader);
+    Shader_SetInteger(s_RenderData.deffered_compute_shader, "u_pointLightCount", s_lightDataIndex);
+
+    glUseProgram(clustered_data.cluster_cull_shader);
+    Shader_SetInteger(clustered_data.cluster_cull_shader, "u_pointLightCount", s_lightDataIndex);
+
+    return index;
 }
+
+void r_removeLightSource(unsigned p_index)
+{
+    RSB_FreeItem(&clustered_data.light_buffer, p_index, true);
+}
+
+
