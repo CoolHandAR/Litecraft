@@ -1,0 +1,155 @@
+#version 460 core
+
+layout (local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#define CHUNK_WIDTH 16
+#define CHUNK_HEIGHT 16
+#define CHUNK_LENGTH 16
+
+struct DrawArraysIndirectCommand
+{
+    uint  count;
+    uint  instanceCount;
+    uint  first;
+    uint  baseInstance;
+};
+
+uniform sampler2D hiz_map_texture;
+
+layout (std140, binding = 0) uniform CameraData
+{
+	mat4 viewProjectionMatrix;
+    mat4 view;
+    vec4 frustrum_planes[6];
+    vec3 position;
+    ivec2 screen_size;
+
+    float z_near;
+    float z_far;
+} camera;
+
+layout (std140, binding = 5) uniform ChunkMinPoints
+{
+    vec4 data[100];
+} chunk_data;
+
+layout (std430, binding = 0) restrict buffer ChunkDrawCommands
+{
+	DrawArraysIndirectCommand data[];
+} chunk_draw_commands;
+
+bool AABB_In_Frustrum(vec4 aabb[2])
+{
+    vec4 p;
+    float dp;
+
+    for(int i = 0; i < 6; i++)
+    {
+        p = camera.frustrum_planes[i];
+
+        int i1 = int(p.x > 0.0);
+        int i2 = int(p.y > 0.0);
+        int i3 = int(p.z > 0.0);
+
+        dp = p.x * aabb[i1].x + 
+             p.y * aabb[i2].y +
+             p.z * aabb[i3].z;
+
+        if(dp < -p.w)
+            return false;
+    }
+
+    return true;
+}
+
+bool Hiz_Cull(vec4 aabb[2])
+{
+    aabb[0] = camera.viewProjectionMatrix * aabb[0];
+    aabb[1] = camera.viewProjectionMatrix * aabb[1];
+
+    aabb[0].xyz /= aabb[0].w;
+    aabb[1].xyz /= aabb[1].w;
+
+    vec2 screen_rectangle[2];
+    screen_rectangle[0].x = min( aabb[0].x, aabb[1].x ) / 2.0 + 0.5;
+    screen_rectangle[0].y = min( aabb[0].y, aabb[1].y ) / 2.0 + 0.5;
+    screen_rectangle[1].x = max( aabb[0].x, aabb[1].x ) / 2.0 + 0.5;
+    screen_rectangle[1].y = max( aabb[1].y, aabb[1].y ) / 2.0 + 0.5;
+
+    float instance_depth = min(aabb[0].z, aabb[1].z);
+
+    float ndc_width = distance(screen_rectangle[0], screen_rectangle[1]);
+    float W = ndc_width * max(camera.screen_size.x, camera.screen_size.y);
+
+    //calculate lod
+    float LOD = ceil(log2(W));
+
+    vec4 samples;
+    samples.x = textureLod( hiz_map_texture, vec2(screen_rectangle[0].x, screen_rectangle[0].y), LOD ).x;
+    samples.y = textureLod( hiz_map_texture, vec2(screen_rectangle[0].x, screen_rectangle[1].y), LOD ).x;
+    samples.z = textureLod( hiz_map_texture, vec2(screen_rectangle[1].x, screen_rectangle[1].y), LOD ).x;
+    samples.w = textureLod( hiz_map_texture, vec2(screen_rectangle[1].x, screen_rectangle[0].y), LOD ).x;
+
+    float max_depth = max( max( samples.x, samples.y ), max( samples.z, samples.w ) );
+
+    //not visible
+    if(instance_depth > max_depth)
+    {
+        return false;
+    }
+
+    //visible
+    return true;
+}
+
+void main()
+{
+    uint chunk_index = gl_GlobalInvocationID.x;
+
+    //Make sure we aren't processing something we don't need to
+    if(chunk_index >= 99)
+    {
+        return;
+    }
+
+    vec4 aabb[2];
+
+    aabb[0].xyz = chunk_data.data[chunk_index].xyz; //min point
+    aabb[1].xyz = vec3(aabb[0].x + CHUNK_WIDTH, aabb[0].y + CHUNK_HEIGHT, aabb[0].z + CHUNK_LENGTH); //max length
+
+    aabb[0].w = 1;
+    aabb[1].w = 1;
+
+#define CHUNK_CMD chunk_draw_commands.data[chunk_index]
+    //not in frustum?
+    if(!AABB_In_Frustrum(aabb))
+    {
+        CHUNK_CMD.instanceCount = 0;
+        return;
+    }
+
+
+
+    bool render = false;
+    
+    //perform hiz cull if a chunk has more vertices.Since a hiz cull is pretty expensive,
+    //and we don't want to perfom it, if the cost is not worth it 
+    if(CHUNK_CMD.count > 1000)
+    {
+        render = Hiz_Cull(aabb);
+    }
+    //otherwise frustrum cull is enough
+    else
+    {
+        render = true;
+    }
+
+    if(render)
+    {
+        CHUNK_CMD.instanceCount = 1;
+    }
+    else
+    {
+        CHUNK_CMD.instanceCount = 0;
+    }
+}

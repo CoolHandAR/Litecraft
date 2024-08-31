@@ -1,0 +1,227 @@
+#version 460 core
+
+#include "../scene_incl.incl"
+#include "lc_world_incl.incl"
+
+layout (local_size_x = 16, local_size_y = 1, local_size_z = 1) in;
+
+struct CombinedChunkDrawCmdData
+{
+	//OPAQUES
+	uint o_count;
+	uint o_instanceCount;
+	uint o_first;
+	uint o_baseInstance;
+
+	//TRANSPARENTS
+	uint t_count;
+	uint t_instanceCount;
+	uint t_first;
+	uint t_baseInstance;
+};
+
+struct DrawArraysIndirectCommand
+{
+    uint  count;
+    uint  instanceCount;
+    uint  first;
+    uint  baseInstance;
+};
+
+layout (std430, binding = 16) restrict buffer DrawCmdsBuffer
+{
+    CombinedChunkDrawCmdData data[];
+} chunk_draw_cmds;
+
+layout (std430, binding = 17) writeonly restrict buffer OcclussionBoxesVertexData
+{
+    vec4 data[];
+} ocl_box_vertices;
+
+layout (std430, binding = 18) writeonly restrict buffer OcclussionTestDrawCmdBuffer
+{
+    DrawArraysIndirectCommand data;
+} occlusion_drawCmd;
+
+bool AABB_In_Frustrum(vec4 aabb[2], vec4 frustrum_planes[6])
+{
+    vec4 p;
+    float dp;
+
+    for(int i = 0; i < 6; i++)
+    {
+        p = frustrum_planes[i];
+
+        int i1 = int(p.x > 0.0);
+        int i2 = int(p.y > 0.0);
+        int i3 = int(p.z > 0.0);
+
+        dp = p.x * aabb[i1].x + 
+             p.y * aabb[i2].y +
+             p.z * aabb[i3].z;
+
+        if(dp < -p.w)
+            return false;
+    }
+
+    return true;
+}
+
+
+void BuildOcclusionBoxSides(vec3 aabb_ctr, uint chunk_index, uint stride)
+{
+    const float W = CHUNK_WIDTH / 2.0;
+    const float H = CHUNK_HEIGHT / 2.0;
+    const float L = CHUNK_LENGTH / 2.0;
+
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(-W, H, L), chunk_index);
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(W, H, L), chunk_index);
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(-W, -H, L), chunk_index);
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(W, -H, L), chunk_index);
+
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(W, -H, -L), chunk_index);
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(W, H, L), chunk_index);
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(W, H, -L), chunk_index);
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(-W, H, L), chunk_index);
+
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(-W, H, -L), chunk_index);
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(-W, -H, L), chunk_index);
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(-W, -H, -L), chunk_index);
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(W, -H, -L), chunk_index);
+
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(-W, H, -L), chunk_index);
+    ocl_box_vertices.data[stride++] = vec4(aabb_ctr + vec3(W, H, -L), chunk_index);
+}
+
+uniform uint u_TotalChunkAmount;
+
+uniform uint u_OpaqueUpdateOffset;
+uniform int u_OpaqueUpdateMoveBy;
+
+uniform uint u_TransparentUpdateOffset;
+uniform int u_TransparentUpdateMoveBy;
+
+void main()
+{
+    uint chunk_index = gl_GlobalInvocationID.x;
+
+     //make sure we aren't processing more chunks than we need to
+    if(chunk_index >= u_TotalChunkAmount)
+    {
+        return;
+    }
+
+#define CHUNK chunk_data.data[chunk_index]
+#define DRAWCMD chunk_draw_cmds.data[chunk_index]
+    
+     //always reset the instance count
+    DRAWCMD.o_instanceCount = 0;
+    DRAWCMD.t_instanceCount = 0;
+
+    uint total_vert_count = DRAWCMD.o_count + DRAWCMD.t_count;
+    
+    //Is the chunk completely empty?
+    if(total_vert_count == 0)
+    {
+        return;
+    }
+
+     //Update offsets and vertex counts of the draw cmd
+     if(u_OpaqueUpdateMoveBy != 0)
+     {
+        if(DRAWCMD.o_count > 0)
+        {
+            if(DRAWCMD.o_first > u_OpaqueUpdateOffset)
+            {
+                DRAWCMD.o_first += u_OpaqueUpdateMoveBy;
+            }
+            else if(DRAWCMD.o_first == u_OpaqueUpdateOffset)
+            {
+                DRAWCMD.o_count += u_OpaqueUpdateMoveBy;
+            }
+        }
+     }
+     if(u_TransparentUpdateMoveBy != 0)
+     {
+        if(DRAWCMD.t_count > 0)
+        {
+            if(DRAWCMD.t_first > u_TransparentUpdateOffset)
+            {
+                DRAWCMD.t_first += u_TransparentUpdateMoveBy;
+            }
+            else if(DRAWCMD.t_first == u_TransparentUpdateOffset)
+            {
+                DRAWCMD.t_count += u_TransparentUpdateMoveBy;
+            }
+        }
+     }
+
+    //Prepare an aabb
+    vec4 aabb[2];
+    aabb[0] = vec4(CHUNK.min_point.x - 0.5, CHUNK.min_point.y - 0.5, CHUNK.min_point.z - 0.5, 1.0);
+    aabb[1] = vec4(CHUNK.min_point.x + CHUNK_WIDTH, CHUNK.min_point.y + CHUNK_HEIGHT, CHUNK.min_point.z + CHUNK_LENGTH, 1.0);
+
+    //Perform frustrum check
+    if(!AABB_In_Frustrum(aabb, cam.frustrum_planes))
+    {
+        //not in frustrum
+        CHUNK.vis_flags = 0; //reset vis flags
+        return;
+    }
+
+    bool skip_occlusion_check = false;
+
+    //was this chunk previously in frustrum?
+    if(bool(CHUNK.vis_flags & CHUNK_FLAG_IN_FRUSTRUM) == false)
+    {
+        //if this chunk was not previously in frustrum
+        //we will skip the occlusion check
+        skip_occlusion_check = true;
+    }
+
+    //If we got here, that means we are in frustrum
+    CHUNK.vis_flags |= CHUNK_FLAG_IN_FRUSTRUM;
+
+    //Build 3 visible sides of a box, for raster occlusion testing
+    vec3 aabb_center = vec3(CHUNK.min_point.x - 0.5, CHUNK.min_point.y - 0.5, CHUNK.min_point.z - 0.5) + vec3(8);
+    //this function returns true if we should skip occlusion check and stops building the box sides
+
+    groupMemoryBarrier();
+    memoryBarrierAtomicCounter();
+    uint stride = atomicAdd(occlusion_drawCmd.data.count, 14);
+    BuildOcclusionBoxSides(aabb_center, chunk_index, stride);
+
+    //if this chunk failed the oclussion test, was not visible in the last frame and was in frustrum, we skip drawing this chunk
+    if(bool(CHUNK.vis_flags & CHUNK_FLAG_VISIBLE) == false  && skip_occlusion_check == false)
+    {
+        return;  
+    }
+
+    if(bool(CHUNK.vis_flags & CHUNK_FLAG_PREV_VISIBLE) == false)
+    {
+       CHUNK.vis_flags |= CHUNK_FLAG_PREV_VISIBLE;
+    }
+    else
+    {
+        CHUNK.vis_flags &= ~CHUNK_FLAG_PREV_VISIBLE;
+    }
+
+
+    //if we were not previously visible, we set this flag to true
+    //otherwise we flip it back
+   // CHUNK.vis_flags ^= CHUNK_FLAG_PREV_VISIBLE;
+
+
+    //Always remove the visible flag
+    CHUNK.vis_flags &= ~CHUNK_FLAG_VISIBLE;
+
+    //If we got here, this means this chunk is visible
+    if(DRAWCMD.t_count > 0)
+    {
+        DRAWCMD.t_instanceCount = 1;
+    }
+    if(DRAWCMD.o_count > 0)
+    {
+        DRAWCMD.o_instanceCount = 1;
+    }
+}

@@ -24,6 +24,7 @@ typedef struct R_Texture
 R_Texture Texture_LoadFromData(unsigned char* p_data, size_t p_bufLen, M_Rect2Di* p_textureRegion);
 R_Texture Texture_Load(const char* p_texturePath, M_Rect2Di* p_textureRegion);
 void Texture_Destruct(R_Texture* p_texture);
+R_Texture HDRTexture_Load(const char* p_texturePath, M_Rect2Di* p_textureRegion);
 
 typedef struct Cubemap_Faces_Paths
 {

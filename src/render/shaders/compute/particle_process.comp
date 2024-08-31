@@ -1,0 +1,49 @@
+//Inspired by godot's implementation https://github.com/godotengine/godot/blob/master/servers/rendering/renderer_rd/shaders/particles_copy.glsl
+
+#version 460 core
+
+layout (local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct Particle
+{
+    mat4 xform;
+    vec3 velocity;
+    uint packed_index; //Emitter index and local index
+    uint color[4]; //Color range [0-255]
+};
+
+struct ParticleEmitter
+{
+    vec4 color;
+    vec4 end_color;
+    
+    vec3 velocity;
+    mat4 xform;
+
+    uint flags;
+
+    float delta;
+    float time;
+    float prev_time;
+
+    float explosiveness;
+    float randomness;
+    float life_time;
+
+    uint emission_shape;
+    vec3 emission_size;
+
+    uint particle_amount;
+    uint cycle;
+
+    uint anim_frame;
+    uint anim_offset;
+};
+
+uint hash(uint x)
+{
+    x = ((x >> uint(16)) ^ x) * uint(0x45d9f3b);
+	x = ((x >> uint(16)) ^ x) * uint(0x45d9f3b);
+	x = (x >> uint(16)) ^ x;
+	return x;
+}

@@ -71,7 +71,36 @@ static unsigned char* loadTextureDataFromFile(int* r_width, int* r_height, unsig
 	return data;
 }
 
-static R_Texture genTexture(unsigned char* p_data, unsigned p_texWidth, unsigned p_texHeight, unsigned p_imageFormat, M_Rect2Di* p_textureRegion)
+static float* loadTextureDataFromFileFloat(int* r_width, int* r_height, unsigned* r_imageFormat, const char* p_path, bool p_flipOnLoad)
+{
+	int width, height, nrChannels;
+	stbi_set_flip_vertically_on_load(p_flipOnLoad);
+
+	float* data = stbi_loadf(p_path, &width, &height, &nrChannels, 0);
+
+	if (!data)
+	{
+		printf("Failed to load texture. Reason: %s ", stbi_failure_reason());
+		//stbi_image_free(data);
+		return NULL;
+	}
+
+	if (width < 1 || height < 1)
+	{
+		printf("Failed to load texture. Reason invalid size");
+		stbi_image_free(data);
+		return NULL;
+	}
+
+	*r_width = width;
+	*r_height = height;
+
+	*r_imageFormat = nrChannelToImageFormat(nrChannels);
+
+	return data;
+}
+
+static R_Texture genTexture(unsigned char* p_data, unsigned p_texWidth, unsigned p_texHeight, unsigned p_imageFormat, M_Rect2Di* p_textureRegion, bool p_isFloat)
 {
 	R_Texture texture;
 	memset(&texture, 0, sizeof(R_Texture));
@@ -89,7 +118,9 @@ static R_Texture genTexture(unsigned char* p_data, unsigned p_texWidth, unsigned
 	glGenTextures(1, &texture.id);
 	glBindTexture(GL_TEXTURE_2D, texture.id);
 
-	glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, texture.width, texture.height);
+	//glTexStorage2D(GL_TEXTURE_2D, 1, (p_isFloat == true) ? GL_RGBA16F : GL_RGBA8, texture.width, texture.height);
+
+	glTexImage2D(GL_TEXTURE_2D, 0, (p_isFloat == true) ? GL_RGBA16F : GL_RGBA8, texture.width, texture.height, 0, texture.format.imageFormat, (p_isFloat == true) ? GL_FLOAT : GL_UNSIGNED_BYTE, NULL);
 
 	//check if we want to generate the whole texture or only a subset
 	bool render_entire_image;
@@ -112,7 +143,7 @@ static R_Texture genTexture(unsigned char* p_data, unsigned p_texWidth, unsigned
 
 	if (render_entire_image)
 	{
-		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, texture.width, texture.height, texture.format.imageFormat, GL_UNSIGNED_BYTE, p_data);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, texture.width, texture.height, texture.format.imageFormat, (p_isFloat == true) ? GL_FLOAT : GL_UNSIGNED_BYTE, p_data);
 	}
 	else
 	{
@@ -133,7 +164,7 @@ static R_Texture genTexture(unsigned char* p_data, unsigned p_texWidth, unsigned
 
 		for (int i = 0; i < rect.height; ++i)
 		{
-			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, i, rect.width, 1, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, i, rect.width, 1, GL_RGB, (p_isFloat) ? GL_FLOAT : GL_UNSIGNED_BYTE, pixels);
 			pixels += PIXEL_ARRAY_MULTIPLIER * texture.width;
 		}
 	}
@@ -181,7 +212,7 @@ R_Texture Texture_LoadFromData(unsigned char* p_data, size_t p_bufLen, M_Rect2Di
 
 	unsigned image_format = nrChannelToImageFormat(nr_channels);
 
-	texture = genTexture(texture_data, width, height, image_format, p_textureRegion);
+	texture = genTexture(texture_data, width, height, image_format, p_textureRegion, false);
 
 	stbi_image_free(texture_data);
 
@@ -203,7 +234,7 @@ R_Texture Texture_Load(const char* p_texturePath, M_Rect2Di* p_textureRegion)
 		return texture;
 	}
 	
-	texture = genTexture(texture_data, width, height, image_format, p_textureRegion);
+	texture = genTexture(texture_data, width, height, image_format, p_textureRegion, false);
 
 	stbi_image_free(texture_data);
 
@@ -214,6 +245,28 @@ void Texture_Destruct(R_Texture* p_texture)
 {
 	glDeleteTextures(1, p_texture->id);
 
+}
+
+R_Texture HDRTexture_Load(const char* p_texturePath, M_Rect2Di* p_textureRegion)
+{
+	R_Texture texture;
+	texture.id = 0;
+
+	int width, height;
+	unsigned image_format;
+
+	float* texture_data = loadTextureDataFromFileFloat(&width, &height, &image_format, p_texturePath, true);
+
+	if (!texture_data)
+	{
+		return texture;
+	}
+
+	texture = genTexture(texture_data, width, height, image_format, p_textureRegion, true);
+
+	stbi_image_free(texture_data);
+
+	return texture;
 }
 
 R_Texture CubemapTexture_Load(Cubemap_Faces_Paths p_facesPathsData)

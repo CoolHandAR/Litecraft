@@ -3,9 +3,9 @@
 #include <glad/glad.h>
 #include <stdio.h>
 #include <string.h>
+#include "utility/u_utility.h"
 
 #define PRINT_AND_FAIL_ON_INVALID_UNIFORM_LOCATION 1
-#define READ_BUFFER_SIZE 20480
 
 static bool checkCompileErrors(unsigned int p_object, const char* p_type)
 {
@@ -33,6 +33,109 @@ static bool checkCompileErrors(unsigned int p_object, const char* p_type)
 		}
 	}
 	return true;
+}
+
+static char* handleIncludeDirective(const char* p_srcPath, const char* p_buffer, int p_bufferSize)
+{
+	if (!p_srcPath || !p_buffer)
+	{
+		return;
+	}
+
+	//current active buffer
+	char* cur_buf = p_buffer;
+
+	int buf_size = p_bufferSize;
+
+	//Look up if we have any includes
+	char* look_up = strstr(cur_buf, "#include ");
+
+	while (look_up)
+	{
+		char directory[256];
+		memset(directory, 0, sizeof(directory));
+
+		//Find and set the directory of this shader file
+		int _index = String_findLastOfIndex(p_srcPath, '/');
+
+		if (_index > -1)
+		{
+			strncpy_s(directory, 256, p_srcPath, _index);
+		}
+
+		char file_name_buf[256];
+		char file_loc_buf[256];
+
+		memset(file_name_buf, 0, sizeof(file_name_buf));
+		memset(file_loc_buf, 0, sizeof(file_loc_buf));
+
+		//copy the included file name into the buffer
+		_memccpy(file_name_buf, look_up + strlen("#include \'"), '\n', 256);
+
+		//remove the last " mark
+		void* find = strchr(file_name_buf, '\'"');
+		if (find)
+		{
+			memset(find, 0, 1);
+		}
+		
+		//concat the directory and the file name
+		sprintf_s(file_loc_buf, 256, "%s/%s", directory, file_name_buf);
+
+		int parsed_length = 0;
+
+		//try to parse the data
+		char* parsed_data = File_Parse(file_loc_buf, &parsed_length);
+
+		//we succeeded
+		if (parsed_data)
+		{	
+			//we need to reallocate for the increased size. Current buffer size + parsed buffer size
+			char* reallocated_buffer = realloc(cur_buf, buf_size + parsed_length + 1);
+
+			if (reallocated_buffer)
+			{
+				buf_size = buf_size + parsed_length;
+
+				//look up the include derictive again
+				look_up = strstr(reallocated_buffer, "#include ");
+
+				if (look_up)
+				{
+					//remove the include derictive
+					char* ch = look_up;
+					while (*ch != '\n')
+					{
+						if (ch != '\n')
+							memset(ch, ' ', 1);
+						ch++;
+					}
+
+
+					//copy the data after the include directive forward
+					memmove(look_up + parsed_length, look_up, strlen(look_up));
+					//copy the parsed data into the main buffer
+					memcpy(look_up, parsed_data, parsed_length);
+					//make sure the complete buffer is null terminated
+					memset(reallocated_buffer + buf_size, 0, 1);
+				
+				}
+				cur_buf = reallocated_buffer;
+			}
+			//make sure to free the parsed data
+			free(parsed_data);
+		}
+		else
+		{
+			printf("Failed to process shader include: %s \n", file_name_buf);
+			break;
+		}
+		//look for another include derictive
+		if(cur_buf)
+			look_up = strstr(cur_buf, "#include ");
+	}
+
+	return cur_buf;
 }
 
 R_Shader Shader_CompileFromMemory(const char* p_vertexShader, const char* p_fragmentShader, const char* p_geometryShader)
@@ -87,123 +190,91 @@ R_Shader Shader_CompileFromMemory(const char* p_vertexShader, const char* p_frag
 		glDeleteShader(geometry_shader);
 	}
 
-	printf("Shader compiled successfully\n");
-
 	return shader_id;
 }
 
 R_Shader Shader_CompileFromFile(const char* p_vertexShaderPath, const char* p_fragmentShaderPath, const char* p_geometryShaderPath)
 {
-	FILE* vertex_file = NULL;
-	FILE* fragment_file = NULL;
-	FILE* geometry_file = NULL;
+	int vertex_length = 0;
+	int fragment_length = 0;
+	int geo_length = 0;
 
-	fopen_s(&vertex_file, p_vertexShaderPath, "r");
-	if (!vertex_file)
+	char* vertex_buf = File_Parse(p_vertexShaderPath, &vertex_length);
+	char* fragment_buf = File_Parse(p_fragmentShaderPath, &fragment_length);
+	char* geo_buf = NULL;
+
+	if (p_geometryShaderPath)
+	{
+		geo_buf = File_Parse(p_geometryShaderPath, &geo_length);
+	}
+	if (!vertex_buf)
 	{
 		printf("Failed to open vertex shader file!\n");
 		return 0;
 	}
-
-	fopen_s(&fragment_file, p_fragmentShaderPath, "r");
-	if (!fragment_file)
+	if (!fragment_buf)
 	{
 		printf("Failed to open fragment shader file!\n");
+		free(vertex_buf);
 		return 0;
 	}
-
-	if (p_geometryShaderPath != NULL)
+	if (p_geometryShaderPath)
 	{
-		fopen_s(&geometry_file, p_geometryShaderPath, "r");
-		if (!geometry_file)
+		if (!geo_buf)
 		{
+			free(vertex_buf);
+			free(fragment_buf);
 			printf("Failed to open geometry shader file!\n");
 			return 0;
 		}
 	}
-
-	char* vertex_buffer = malloc(READ_BUFFER_SIZE);
-	if (!vertex_buffer)
-	{
-		printf("MALLOC FAILURE\n");
-		return 0;
-	}	
-	memset(vertex_buffer, 0, READ_BUFFER_SIZE);
-
-
-	char* fragment_buffer = malloc(READ_BUFFER_SIZE);
-	if (!fragment_buffer)
-	{
-		free(fragment_buffer);
-		printf("MALLOC FAILURE\n");
-		return 0;
-	}
-	memset(fragment_buffer, 0, READ_BUFFER_SIZE);
-
-
-	char* geometry_buffer = NULL;
-	if (p_geometryShaderPath != NULL)
-	{
-		geometry_buffer = malloc(READ_BUFFER_SIZE);
-
-		if (!geometry_buffer)
-		{
-			free(vertex_buffer);
-			free(fragment_buffer);
-			printf("MALLOC FAILURE\n");
-			return 0;
-		}
-		memset(geometry_buffer, 0, READ_BUFFER_SIZE);
-	}
-
-
-	//READ FROM VERTEX_FILE
-	int c;
-	int i = 0;
-	while ((c = fgetc(vertex_file)) != EOF)
-	{
-		vertex_buffer[i] = c;
-		i++;
-	}
-	//READ FROM FRAGMENT_FILE
-	i = 0;
-	while ((c = fgetc(fragment_file)) != EOF)
-	{
-		fragment_buffer[i] = c;
-		i++;
-	}
-	//READ FROM GEOEMETRY FILE
-	if (p_geometryShaderPath != NULL && geometry_file != NULL)
-	{
-		i = 0;
-		while ((c = fgetc(geometry_file)) != EOF)
-		{
-			geometry_buffer[i] = c;
-			i++;
-		}
-	}
 	
+	//HANDLE INCLUDES
+	vertex_buf = handleIncludeDirective(p_vertexShaderPath, vertex_buf, vertex_length);
+	fragment_buf = handleIncludeDirective(p_fragmentShaderPath, fragment_buf, fragment_length);
+
+	if (p_geometryShaderPath && geo_buf)
+	{
+		geo_buf = handleIncludeDirective(p_geometryShaderPath, geo_buf, geo_length);
+	}
+
 	//COMPILE
-	R_Shader compiled_shader = Shader_CompileFromMemory(vertex_buffer, fragment_buffer, geometry_buffer);
-	
-	//CLEAN UP
-	fclose(vertex_file);
-	fclose(fragment_file);
-	if (geometry_file != NULL)
-	{
-		fclose(geometry_file);
-	}
-	
-	free(vertex_buffer);
-	free(fragment_buffer);
+	R_Shader compiled_shader = Shader_CompileFromMemory(vertex_buf, fragment_buf, geo_buf);
 
-	if (geometry_buffer != NULL)
+	//CLEAN UP
+	if (vertex_buf)
 	{
-		free(geometry_buffer);
+		free(vertex_buf);
+	}
+	if (fragment_buf)
+	{
+		free(fragment_buf);
+	}
+	if (p_geometryShaderPath && geo_buf)
+	{
+		free(geo_buf);
 	}
 
 	return compiled_shader;
 }
+
+static void Shader_InsertDefinesIntoCharBuf(const char* p_src, const char* p_defines, int p_defineCount)
+{
+	char* find_core = strstr(p_src, "core");
+
+	
+
+}
+
+static R_Shader Shader_CompileFromMemoryDefines(const char* p_vertexShader, const char* p_fragmentShader, const char* p_geometryShader, const char* p_defines, int p_defineCount)
+{
+	
+
+	unsigned int vertex_shader, fragment_shader, geometry_shader;
+
+	//return R_Shader();
+}
+
 
 R_Shader ComputeShader_CompileFromMemory(const char* p_computeShader)
 {
@@ -227,39 +298,27 @@ R_Shader ComputeShader_CompileFromMemory(const char* p_computeShader)
 
 R_Shader ComputeShader_CompileFromFile(const char* p_computeShaderPath)
 {
-	FILE* compute_file = NULL;
-	
-	fopen_s(&compute_file, p_computeShaderPath, "r");
-	if (!compute_file)
+	int comp_length = 0;
+
+	char* comp_buf = File_Parse(p_computeShaderPath, &comp_length);
+
+	if (!comp_buf)
 	{
-		printf("Failed to open compute shader file!\n");
+		printf("Failed to open compute shader file: %s !\n", p_computeShaderPath);
 		return 0;
 	}
 
-	char* compute_buffer = malloc(READ_BUFFER_SIZE);
-	if (!compute_buffer)
-	{
-		printf("MALLOC FAILURE\n");
-		return 0;
-	}
-	memset(compute_buffer, 0, READ_BUFFER_SIZE);
-
-	//READ FROM SHADER_FILE
-	int c;
-	int i = 0;
-	while ((c = fgetc(compute_file)) != EOF)
-	{
-		compute_buffer[i] = c;
-		i++;
-	}
+	//HANDLE INCLUDES
+	comp_buf = handleIncludeDirective(p_computeShaderPath, comp_buf, comp_length);
 
 	//COMPILE
-	R_Shader compiled_shader = ComputeShader_CompileFromMemory(compute_buffer);
+	R_Shader compiled_shader = ComputeShader_CompileFromMemory(comp_buf);
 
 	//CLEAN UP
-	fclose(compute_file);
-
-	free(compute_buffer);
+	if (comp_buf)
+	{
+		free(comp_buf);
+	}
 
 	return compiled_shader;
 }

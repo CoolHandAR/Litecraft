@@ -28,6 +28,8 @@ void Mesh_Destruct(R_Mesh* p_mesh);
 typedef struct R_Model
 {
 	dynamic_array* meshes;
+	unsigned id;
+	bool registered;
 } R_Model;
 
 R_Model Model_Load(const char* p_mdlPath);

@@ -132,46 +132,15 @@ void Camera_ProcessMove(R_Camera* const p_cam, int x, int y)
 
 }
 
-static void ReverseZ(mat4 proj)
-{
-	mat4 reverseZ;
-	glm_mat4_identity(reverseZ);
-
-	reverseZ[2][2] = -1.0;
-	reverseZ[2][3] = 1.0;
-
-	glm_mat4_mul(proj, reverseZ, proj);
-}
-
-static void inverseZmat(float fovY_radians, float aspectWbyH, float zNear, mat4 proj)
-{
-	float f = 1.0 / tanf(fovY_radians / 2.0);
-	
-	glm_mat4_zero(proj);
-
-	proj[0][0] = f / aspectWbyH;
-	proj[1][1] = f;
-	proj[2][2] = 0.0;
-	proj[2][3] = -1.0;
-	proj[3][2] = zNear;
-	proj[3][3] = 0.0;
-}
-
 void Camera_UpdateMatrices(R_Camera* const p_cam, float screen_width, float screen_height)
 {
 	vec3 center;
 	glm_vec3_add(p_cam->data.position, p_cam->data.camera_front, center);
 
 	glm_lookat(p_cam->data.position, center, p_cam->data.camera_up, p_cam->data.view_matrix);
-	//glm_lookat_rh_zo(p_cam->data.position, center, p_cam->data.camera_up, p_cam->data.view_matrix);
 
-	//glm_perspective(glm_rad(p_cam->config.fov), screen_width / screen_height, p_cam->config.zNear, p_cam->config.zFar, p_cam->data.proj_matrix);
-	glm_perspective_rh_zo(glm_rad(p_cam->config.fov), screen_width / screen_height, p_cam->config.zFar, p_cam->config.zNear, p_cam->data.proj_matrix);
-	//normalize(p_cam->data.proj_matrix);
-	//Math_Proj_ReverseZInfinite(glm_rad(p_cam->config.fov), screen_width / screen_height, p_cam->config.zNear, p_cam->config.zFar, p_cam->data.proj_matrix);
-	//ReverseZ(p_cam->data.proj_matrix);
-	//inverseZmat(glm_rad(p_cam->config.fov), screen_width / screen_height, p_cam->config.zNear, p_cam->data.proj_matrix);
-
+	glm_perspective(glm_rad(p_cam->config.fov), screen_width / screen_height, p_cam->config.zNear, p_cam->config.zFar, p_cam->data.proj_matrix);
+	
 	mat4 view_proj;
 	glm_mat4_mul(p_cam->data.proj_matrix, p_cam->data.view_matrix, view_proj);
 

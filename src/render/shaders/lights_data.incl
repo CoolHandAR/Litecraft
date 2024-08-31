@@ -1,0 +1,47 @@
+struct DirLight 
+{
+    vec3 direction;
+	
+    vec3 color;
+    float ambient_intensity;
+    float specular_intensity;
+};
+struct PointLight
+{
+    vec4 position;
+
+    vec4 color;
+    float ambient_intensity;
+    float specular_intensity;
+
+    float linear;
+    float quadratic;
+    float radius;
+    float constant;
+};
+struct SpotLight
+{
+    vec3 position;
+    vec3 direction;
+
+    vec3 color;
+    float ambient_intensity;
+    float specular_intensity;
+
+    float cutOff;
+    float outerCutOff;
+
+    float constant;
+    float linear;
+    float quadratic;
+};
+
+layout (std430, binding = 0) readonly restrict buffer PointLightsBuffer
+{
+    PointLight data[];
+} pLights;
+
+layout (std430, binding = 5) readonly restrict buffer SpotLightsBuffer
+{
+    SpotLight data[];
+} sLights;
