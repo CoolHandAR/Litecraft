@@ -57,142 +57,64 @@ long double Math_fract(long double x)
 	return fminl(x - floorl(x), 0.999999940395355224609375);
 	
 }
-#define GLM_CUSTOM_CLIPSPACE
-/* near */
-#define GLM_CSCOORD_LBN {-1.0f, -1.0f, 1.0f, 1.0f}
-#define GLM_CSCOORD_LTN {-1.0f,  1.0f, 1.0f, 1.0f}
-#define GLM_CSCOORD_RTN { 1.0f,  1.0f, 1.0f, 1.0f}
-#define GLM_CSCOORD_RBN { 1.0f, -1.0f, 1.0f, 1.0f}
 
-/* far */
-#define GLM_CSCOORD_LBF {-1.0f, -1.0f,  0.0f, 1.0f}
-#define GLM_CSCOORD_LTF {-1.0f,  1.0f,  0.0f, 1.0f}
-#define GLM_CSCOORD_RTF { 1.0f,  1.0f,  0.0f, 1.0f}
-#define GLM_CSCOORD_RBF { 1.0f, -1.0f,  0.0f, 1.0f}
-
-#define SHADOW_CASCADE_COUNT 5
-
-static void glm_frustum_corners22(mat4 invMat, vec4 dest[8]) {
-	vec4 c[8];
-
-	/* indexOf(nearCoord) = indexOf(farCoord) + 4 */
-	vec4 csCoords[8] = {
-	  GLM_CSCOORD_LBN,
-	  GLM_CSCOORD_LTN,
-	  GLM_CSCOORD_RTN,
-	  GLM_CSCOORD_RBN,
-
-	  GLM_CSCOORD_LBF,
-	  GLM_CSCOORD_LTF,
-	  GLM_CSCOORD_RTF,
-	  GLM_CSCOORD_RBF
-	};
-
-	glm_mat4_mulv(invMat, csCoords[0], c[0]);
-	glm_mat4_mulv(invMat, csCoords[1], c[1]);
-	glm_mat4_mulv(invMat, csCoords[2], c[2]);
-	glm_mat4_mulv(invMat, csCoords[3], c[3]);
-	glm_mat4_mulv(invMat, csCoords[4], c[4]);
-	glm_mat4_mulv(invMat, csCoords[5], c[5]);
-	glm_mat4_mulv(invMat, csCoords[6], c[6]);
-	glm_mat4_mulv(invMat, csCoords[7], c[7]);
-
-	glm_vec4_scale(c[0], 1.0f / c[0][3], dest[0]);
-	glm_vec4_scale(c[1], 1.0f / c[1][3], dest[1]);
-	glm_vec4_scale(c[2], 1.0f / c[2][3], dest[2]);
-	glm_vec4_scale(c[3], 1.0f / c[3][3], dest[3]);
-	glm_vec4_scale(c[4], 1.0f / c[4][3], dest[4]);
-	glm_vec4_scale(c[5], 1.0f / c[5][3], dest[5]);
-	glm_vec4_scale(c[6], 1.0f / c[6][3], dest[6]);
-	glm_vec4_scale(c[7], 1.0f / c[7][3], dest[7]);
-}
-static void getFrustrumConrners(mat4 inv_projView, vec4 dest[8])
-{
-	int i = 0;
-
-	for (unsigned int x = 0; x < 2; ++x)
-	{
-		for (unsigned int y = 0; y < 2; ++y)
-		{
-			for (unsigned int z = 0; z < 2; ++z)
-			{
-				vec4 pt;
-				pt[0] = 2.0 * x - 1.0;
-				pt[1] = 2.0 * y - 1.0;
-				pt[2] = z;
-				pt[3] = 1.0;
-				glm_mat4_mulv(inv_projView, pt, pt);
-				
-				for (int j = 0; j < 4; j++)
-				{
-					dest[i][j] = pt[j] / pt[3];
-				}
-				i++;
-			}
-		}
-	}
-}
-static void glm_ortho_rh_zo22(float left, float right,
-	float bottom, float top,
-	float nearZ, float farZ,
-	mat4  dest) {
-	float rl, tb, fn;
-
-	glm_mat4_zero(dest);
-
-	rl = 1.0f / (right - left);
-	tb = 1.0f / (top - bottom);
-	fn = -1.0f / (farZ - nearZ);
-
-	dest[0][0] = 2.0f * rl;
-	dest[1][1] = 2.0f * tb;
-	dest[2][2] = fn;
-	dest[3][0] = -(right + left) * rl;
-	dest[3][1] = -(top + bottom) * tb;
-	dest[3][2] = nearZ * fn;
-	dest[3][3] = 1.0f;
-
-
-}
-void Math_calcLightSpaceMatrix(const float p_cameraFov, const float p_screenWidth, const float p_screenHeight, const float p_nearPlane, const float p_farPlane, const float p_zMult,
-	vec3 p_lightDir, mat4 p_cameraView, mat4 dest)
+void Math_calcLightSpaceMatrix2(const float p_cameraFov, const float p_screenWidth, const float p_screenHeight, const float p_nearPlane, const float p_farPlane, const float p_zMult,
+	vec3 p_lightDir, mat4 p_cameraView, mat4 dest, int count)
 {
 	mat4 proj;
-	mat4 viewproj;
 	mat4 inv_view_proj;
 	mat4 light_view;
 	vec4 frustrum_corners[8];
 	vec4 frustrum_center;
 	vec3 eye;
 	vec3 up;
-	mat4 view;
-	glm_mat4_copy(p_cameraView, view);
-
-	glm_perspective(glm_rad(p_cameraFov), p_screenWidth / p_screenHeight, p_nearPlane, p_farPlane,  proj);
-	//glm_perspective_rh_zo(glm_rad(p_cameraFov), p_screenWidth / p_screenHeight, p_farPlane, p_nearPlane, proj);
-
-	glm_mat4_mul(proj, view, viewproj);
-	glm_mat4_inv(viewproj, inv_view_proj);
+	vec4 furthest_point;
 
 
-	//glm_frustum_corners(inv_view_proj, frustrum_corners);
-	getFrustrumConrners(inv_view_proj, frustrum_corners);
+
+	glm_perspective(glm_rad(p_cameraFov), p_screenWidth / p_screenHeight, p_nearPlane, p_farPlane, proj);
+
+	glm_mat4_mul(proj, p_cameraView, inv_view_proj);
+	glm_mat4_inv(inv_view_proj, inv_view_proj);
+
+	glm_frustum_corners(inv_view_proj, frustrum_corners);
+
 	glm_frustum_center(frustrum_corners, frustrum_center);
-	//glm_vec3_zero(frustrum_center);
-	
 
-	glm_normalize(p_lightDir);
-	eye[0] = frustrum_center[0] + p_lightDir[0];
-	eye[1] = frustrum_center[1] + p_lightDir[1];
-	eye[2] = frustrum_center[2] + p_lightDir[2];
+	glm_vec4_sub(frustrum_corners[0], frustrum_corners[6], furthest_point);
+	float radius = glm_vec4_norm(furthest_point);
+	float texels_per_unit = 1280.0 / (radius * 2.0);
 
-	up[0] = 0;
+	mat4 base_look_at;
+	mat4 base_look_at_inv;
+	vec3 look_at;
+
+	vec3 zero;
+	memset(up, 0, sizeof(vec3));
 	up[1] = 1;
-	up[2] = 0;
-	
-	
+	glm_vec3_zero(zero);
+	look_at[0] = -p_lightDir[0];
+	look_at[1] = -p_lightDir[1];
+	look_at[2] = -p_lightDir[2];
+
+	glm_lookat(zero, look_at, up, base_look_at);
+
+	glm_mat4_scale(base_look_at, texels_per_unit);
+	glm_mat4_inv(base_look_at, base_look_at_inv);
+
+	glm_mat4_mulv3(base_look_at, frustrum_center, 1.0, frustrum_center);
+	frustrum_center[0] = floorf(frustrum_center[0]);
+	frustrum_center[1] = floorf(frustrum_center[1]);
+	glm_mat4_mulv3(base_look_at_inv, frustrum_center, 1.0, frustrum_center);
+
+
+	eye[0] = frustrum_center[0] + (p_lightDir[0] * radius * 2.0);
+	eye[1] = frustrum_center[1] + (p_lightDir[1] * radius * 2.0);
+	eye[2] = frustrum_center[2] + (p_lightDir[2] * radius * 2.0);
+
+
+
 	glm_lookat(eye, frustrum_center, up, light_view);
-	
 
 	float min_x = FLT_MAX;
 	float min_y = FLT_MAX;
@@ -201,6 +123,7 @@ void Math_calcLightSpaceMatrix(const float p_cameraFov, const float p_screenWidt
 	float max_x = -FLT_MAX;
 	float max_y = -FLT_MAX;
 	float max_z = -FLT_MAX;
+
 
 	for (int i = 0; i < 8; i++)
 	{
@@ -216,7 +139,6 @@ void Math_calcLightSpaceMatrix(const float p_cameraFov, const float p_screenWidt
 		max_z = max(max_z, trf[2]);
 	}
 
-	//min_z = (2.0 * p_farPlane * p_nearPlane) / (p_farPlane + p_nearPlane - (min_z * 2.0 - 1.0) * (p_farPlane - p_nearPlane));
 
 	if (min_z < 0)
 	{
@@ -236,27 +158,270 @@ void Math_calcLightSpaceMatrix(const float p_cameraFov, const float p_screenWidt
 	}
 
 	mat4 light_proj;
-	
-	//glm_ortho(min_x, max_x, min_y, max_y, max_z, min_z, light_proj);
-	//glm_ortho()
-	glm_perspective_rh_zo(glm_rad(45), 1280 / 1280, p_farPlane, p_nearPlane, light_proj);
+
+
+
+
+	glm_ortho(-radius, radius, -radius, radius, 0.0, radius * 6, light_proj);
 
 	glm_mat4_mul(light_proj, light_view, dest);
 
+}
+void getAxis(mat4 m, int axis, vec3 dest)
+{
+	dest[0] = m[0][axis];
+	dest[1] = m[1][axis];
+	dest[2] = m[2][axis];
+}
+void getNormalizedBasisAxis(mat4 m, int axis, vec3 dest)
+{
+	dest[0] = m[0][axis];
+	dest[1] = m[1][axis];
+	dest[2] = m[2][axis];
+
+	glm_normalize(dest);
+}
+
+void OrthoNormalize(mat4 m)
+{
+	vec3 x, y, z;
+	getAxis(m, 0, x);
+	getAxis(m, 1, y);
+	getAxis(m, 2, z);
+
+	glm_normalize(x);
+	y[0] = y[0] - x[0] * (glm_vec3_dot(x, y));
+	y[1] = y[1] - x[1] * (glm_vec3_dot(x, y));
+	y[2] = y[2] - x[2] * (glm_vec3_dot(x, y));
+
+	glm_normalize(y);
+
+	z[0] = (z[0] - x[0] * (glm_vec3_dot(x, y)) - y[0] * glm_vec3_dot(y, z));
+	z[1] = (z[1] - x[1] * (glm_vec3_dot(x, y)) - y[1] * glm_vec3_dot(y, z));
+	z[2] = (z[2] - x[2] * (glm_vec3_dot(x, y)) - y[2] * glm_vec3_dot(y, z));
+	glm_normalize(z);
+
+	m[0][0] = x[0];
+	m[1][0] = x[1];
+	m[2][0] = x[2];
+
+	m[0][1] = y[0];
+	m[1][1] = y[1];
+	m[2][1] = y[2];
+
+	m[0][2] = z[0];
+	m[1][2] = z[1];
+	m[2][2] = z[2];
+}
+
+bool plane_intersect_3(vec4 plane, vec3 plane2, vec3 plane3, vec3 r_result)
+{
+	vec3 norm0;
+	vec3 norm1;
+	vec3 norm2;
+
+	glm_vec3_copy(plane, norm0);
+	glm_vec3_copy(plane2, norm1);
+	glm_vec3_copy(plane3, norm2);
+
+	vec3 crossed;
+	glm_vec3_cross(norm0, norm1, crossed);
+
+	float denom = glm_vec3_dot(crossed, norm2);
+
+	if (denom == 0.0)
+	{
+		return false;
+	}
+
+	if (r_result)
+	{
+		vec3 cross0, cross1, cross2;
+
+		glm_vec3_cross(norm1, norm2, cross0);
+		glm_vec3_cross(norm2, norm0, cross1);
+		glm_vec3_cross(norm0, norm1, cross2);
+
+		glm_vec3_scale(cross0, plane[3], cross0);
+		glm_vec3_scale(cross1, plane2[3], cross1);
+		glm_vec3_scale(cross2, plane3[3], cross2);
+
+		vec3 r;
+		glm_vec3_add(cross0, cross1, r);
+		glm_vec3_add(r, cross2, r);
+
+		r[0] /= denom;
+		r[1] /= denom;
+		r[2] /= denom;
+
+		glm_vec3_copy(r, r_result);
+	}
+}
+
+void getFrustrumEndpoints(mat4 proj, mat4 view, vec3 r_points[8])
+{
+	vec4 planes[6];
+	glm_frustum_planes(proj, planes);
+
+	// [left, right, bottom, top, near, far]
+
+	int INTERSECTIONS[8][3] =
+	{
+		GLM_RIGHT, GLM_BOTTOM, GLM_NEAR,
+		GLM_RIGHT, GLM_BOTTOM, GLM_FAR,
+		GLM_RIGHT, GLM_TOP, GLM_NEAR,
+		GLM_RIGHT, GLM_TOP, GLM_FAR,
+
+		GLM_LEFT, GLM_BOTTOM, GLM_NEAR,
+		GLM_LEFT, GLM_BOTTOM, GLM_FAR,
+		GLM_LEFT, GLM_TOP, GLM_NEAR,
+		GLM_LEFT, GLM_TOP, GLM_FAR,
+	};
+
+	for (int i = 0; i < 6; i++)
+	{
+		planes[i][0] = -planes[i][0];
+		planes[i][1] = -planes[i][1];
+		planes[i][2] = -planes[i][2];
+	}
+
+	for (int i = 0; i < 8; i++)
+	{
+		vec3 p;
+
+		bool res = plane_intersect_3(planes[INTERSECTIONS[i][0]], planes[INTERSECTIONS[i][1]], planes[INTERSECTIONS[i][2]], p);
+
+		glm_mat4_mulv3(view, p, 1.0, r_points[i]);
+	}
+}
+
+void Math_calcLightSpaceMatrix(const float p_cameraFov, const float p_screenWidth, const float p_screenHeight, const float p_nearPlane, const float p_farPlane, const float p_zMult,
+	vec3 p_lightDir, mat4 p_cameraView, mat4 dest, vec4 frustrum_dest[6])
+{
+	mat4 proj;
+	mat4 inv_view_proj;
+	mat4 light_view;
+	vec4 frustrum_corners[8];
+	vec4 frustrum_center;
+	vec3 eye;
+	vec3 up;
+	vec4 furthest_point;
+
+	glm_perspective(glm_rad(p_cameraFov), p_screenWidth / p_screenHeight, p_nearPlane, p_farPlane, proj);
+
+	glm_mat4_mul(proj, p_cameraView, inv_view_proj);
+	glm_mat4_inv(inv_view_proj, inv_view_proj);
+
+	glm_frustum_corners(inv_view_proj, frustrum_corners);
+
+	glm_frustum_center(frustrum_corners, frustrum_center);
+
+	glm_vec4_sub(frustrum_corners[0], frustrum_corners[6], furthest_point);
+
+	float radius = 0.0;
+	for (int i = 0; i < 8; i++)
+	{
+		float dist = glm_vec4_distance(frustrum_corners[i], frustrum_center);
+		radius = max(radius, dist);
+	}
+	//radius = glm_vec4_norm(furthest_point);
+
+	float texels_per_unit = 1280.0 / (radius * 2.0);
+
+	mat4 base_look_at;
+	mat4 base_look_at_inv;
+	vec3 look_at;
+
+	vec3 zero;
+	memset(up, 0, sizeof(vec3));
+	up[1] = 1;
+	glm_vec3_zero(zero);
+	look_at[0] = -p_lightDir[0];
+	look_at[1] = -p_lightDir[1];
+	look_at[2] = -p_lightDir[2];
+
+	glm_lookat(zero, look_at, up, base_look_at);
+
+	glm_mat4_scale(base_look_at, texels_per_unit);
+	glm_mat4_inv(base_look_at, base_look_at_inv);
+
+	glm_mat4_mulv3(base_look_at, frustrum_center, 1.0, frustrum_center);
+	frustrum_center[0] = floorf(frustrum_center[0]);
+	frustrum_center[1] = floorf(frustrum_center[1]);
+	glm_mat4_mulv3(base_look_at_inv, frustrum_center, 1.0, frustrum_center);
+
+
+	eye[0] = frustrum_center[0] + (p_lightDir[0] * radius);
+	eye[1] = frustrum_center[1] + (p_lightDir[1] * radius);
+	eye[2] = frustrum_center[2] + (p_lightDir[2] * radius);
+
+	float minX = FLT_MAX;
+	float minY = FLT_MAX;
+	float minZ = FLT_MAX;
+
+	float maxX = FLT_MIN;
+	float maxY = FLT_MIN;
+	float maxZ = FLT_MIN;
+
+	glm_lookat(eye, frustrum_center, up, light_view);
+	//*Exracted planes order : [left, right, bottom, top, near, far]
+
+	for (int i = 0; i < 8; i++)
+	{
+		vec4 trf;
+		glm_mat4_mulv(light_view, frustrum_corners[i], trf);
+
+		minX = min(minX, trf[0]);
+		minY = min(minY, trf[1]);
+		minZ = min(minZ, trf[2]);
+
+		maxX = max(maxX, trf[0]);
+		maxY = max(maxY, trf[1]);
+		maxZ = max(maxZ, trf[2]);
+	}
+
+	
+	float z_rad = radius;
+
+	float zMult = 2.0f;
+	if (minZ < 0)
+	{
+		minZ *= zMult;
+	}
+	else
+	{
+		minZ /= zMult;
+	}
+	if (maxZ < 0)
+	{
+		maxZ /= zMult;
+	}
+	else
+	{
+		maxZ *= zMult;
+	}
+
+	mat4 light_proj;
+
+	glm_ortho(-radius, radius, -radius, radius, 0.0, maxZ - minZ, light_proj);
+
+	glm_mat4_mul(light_proj, light_view, dest);
 }
 
 
 
 void Math_getLightSpacesMatrixesForFrustrum(const R_Camera* const p_camera, const float p_screenWidth, const float p_screenHeight,
-	const float p_zMult, vec4 p_shadowCascadeLevels, vec3 p_lightDir, mat4 dest[5])
+	const float p_zMult, vec4 p_shadowCascadeLevels, vec3 p_lightDir, mat4 dest[5], vec4 frustrum_planes[5][6])
 {
 
-	Math_calcLightSpaceMatrix(p_camera->config.fov, p_screenWidth, p_screenHeight, p_camera->config.zNear, p_shadowCascadeLevels[0], p_zMult, p_lightDir, p_camera->data.view_matrix, dest[0]);
-	Math_calcLightSpaceMatrix(p_camera->config.fov, p_screenWidth, p_screenHeight, p_shadowCascadeLevels[0], p_shadowCascadeLevels[1], p_zMult, p_lightDir, p_camera->data.view_matrix, dest[1]);
-	Math_calcLightSpaceMatrix(p_camera->config.fov, p_screenWidth, p_screenHeight, p_shadowCascadeLevels[1], p_shadowCascadeLevels[2], p_zMult, p_lightDir, p_camera->data.view_matrix, dest[2]);
-	Math_calcLightSpaceMatrix(p_camera->config.fov, p_screenWidth, p_screenHeight, p_shadowCascadeLevels[2], p_shadowCascadeLevels[3], p_zMult, p_lightDir, p_camera->data.view_matrix, dest[3]);
-	Math_calcLightSpaceMatrix(p_camera->config.fov, p_screenWidth, p_screenHeight, p_shadowCascadeLevels[3], p_camera->config.zFar, p_zMult, p_lightDir, p_camera->data.view_matrix, dest[4]);
+	Math_calcLightSpaceMatrix(p_camera->config.fov, p_screenWidth, p_screenHeight, p_camera->config.zNear, p_shadowCascadeLevels[0], p_zMult, p_lightDir, p_camera->data.view_matrix, dest[0], frustrum_planes[0]);
+	Math_calcLightSpaceMatrix(p_camera->config.fov, p_screenWidth, p_screenHeight, p_shadowCascadeLevels[0], p_shadowCascadeLevels[1], p_zMult, p_lightDir, p_camera->data.view_matrix, dest[1], frustrum_planes[1]);
+	Math_calcLightSpaceMatrix(p_camera->config.fov, p_screenWidth, p_screenHeight, p_shadowCascadeLevels[1], p_shadowCascadeLevels[2], p_zMult, p_lightDir, p_camera->data.view_matrix, dest[2], frustrum_planes[2]);
+	Math_calcLightSpaceMatrix(p_camera->config.fov, p_screenWidth, p_screenHeight, p_shadowCascadeLevels[2], p_shadowCascadeLevels[3], p_zMult, p_lightDir, p_camera->data.view_matrix, dest[3], frustrum_planes[3]);
+	//Math_calcLightSpaceMatrix(p_camera->config.fov, p_screenWidth, p_screenHeight, p_shadowCascadeLevels[3], p_camera->config.zFar, p_zMult, p_lightDir, p_camera->data.view_matrix, dest[4], frustrum_planes[4]);
 }
+
+
 
 void Math_CalcOrthoProj(const R_Camera* const p_camera, const float p_screenWidth, const float p_screenHeight, float p_shadowCascadeLevels[5])
 {
@@ -306,41 +471,6 @@ void Math_CalcOrthoProj(const R_Camera* const p_camera, const float p_screenWidt
 		float max_z = -FLT_MAX;
 		
 	}
-}
-
-double Noise_SimplexNoise2D(float x, float y, struct osn_context* osn_ctx, int octaves, float persistence)
-{
-	double sum = 0;
-	float strength = 1.0;
-	float scale = 1.0;
-
-	double noise = open_simplex_noise2(osn_ctx, x, y);
-
-	for (int i = 0; i < octaves; i++) {
-		sum += strength * noise * scale;
-		scale *= 2.0;
-		strength *= persistence;
-	}
-
-
-	return sum;
-}
-
-double Noise_SimplexNoise3Dabs(float x, float y, float z, struct osn_context* osn_ctx, int octaves, float persistence)
-{
-	double sum = 0;
-	float strength = 1.0;
-	float scale = 1.0;
-
-	double noise = fabs(open_simplex_noise3(osn_ctx, x, y, z));
-	
-	for (int i = 0; i < octaves; i++) {
-		sum += strength * noise * scale;
-		scale *= 2.0;
-		strength *= persistence;
-	}
-
-	return sum;
 }
 
 
@@ -1023,24 +1153,24 @@ void Math_Model2D(vec2 position, vec2 size, float rotation, mat4 dest)
 	Math_Model(pos, scale, rotation, dest);
 
 }
+#define SHADOW_CASCADE_COUNT 5
 
 
-
-void CascadeShadow_genMatrix(vec3 p_lightDir, mat4 view, mat4 proj, mat4 dest[5], float cascades[5])
+void CascadeShadow_genMatrix(vec3 p_lightDir, float nearPlane, float farPlane, mat4 view, mat4 proj, mat4 dest[5], float cascades[5])
 {
 	mat4 viewProj;
 	mat4 invViewProj;
 	glm_mat4_mul(proj, view, viewProj);
-	//glm_mat4_inv(viewProj, invViewProj);
+	glm_mat4_inv(viewProj, invViewProj);
 
-	glm_mat4_inv_fast(viewProj, invViewProj);
 	float cascadeSplitLambda = 0.95;
 
 	float cascadeSplits[SHADOW_CASCADE_COUNT];
 
 	float nearClip, farClip;
-
-	glm_persp_decomp_z_rh_zo(proj, &farClip, &nearClip);
+	
+	nearClip = nearPlane;
+	farClip = farPlane;
 	
 	float clipRange = farClip - nearClip;
 
@@ -1050,7 +1180,7 @@ void CascadeShadow_genMatrix(vec3 p_lightDir, mat4 view, mat4 proj, mat4 dest[5]
 	float range = maxZ - minZ;
 	float ratio = maxZ / minZ;
 
-	float lastSlipDistance = 0;
+	float lastSplitDistance = 0;
 	for (int i = 0; i < SHADOW_CASCADE_COUNT; i++)
 	{
 		float p = (i + 1) / (float)SHADOW_CASCADE_COUNT;
@@ -1061,7 +1191,7 @@ void CascadeShadow_genMatrix(vec3 p_lightDir, mat4 view, mat4 proj, mat4 dest[5]
 		
 		float splitDist = cascadeSplits[i];
 		vec4 frustrumCorners[8];
-		glm_frustum_corners22(invViewProj, frustrumCorners);
+		glm_frustum_corners(invViewProj, frustrumCorners);
 
 		for (int j = 0; j < 4; j++)
 		{
@@ -1070,7 +1200,7 @@ void CascadeShadow_genMatrix(vec3 p_lightDir, mat4 view, mat4 proj, mat4 dest[5]
 
 			vec4 splitedDist, lastSplitedDist;
 			glm_vec4_scale(dist, splitDist, splitedDist);
-			glm_vec4_scale(dist, lastSlipDistance, lastSplitedDist);
+			glm_vec4_scale(dist, lastSplitDistance, lastSplitedDist);
 
 			glm_vec4_add(frustrumCorners[j], splitedDist, frustrumCorners[j + 4]);
 			glm_vec4_add(frustrumCorners[j], lastSplitedDist, frustrumCorners[j]);
@@ -1118,6 +1248,6 @@ void CascadeShadow_genMatrix(vec3 p_lightDir, mat4 view, mat4 proj, mat4 dest[5]
 		glm_mat4_copy(finalProjMatrix, dest[i]);
 		cascades[i] = finalSplitDistance;
 
-		lastSlipDistance = cascadeSplits[i];
+		lastSplitDistance = cascadeSplits[i];
 	}
 }

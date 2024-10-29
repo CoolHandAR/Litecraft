@@ -2,7 +2,6 @@
 
 #include <cglm/cglm.h>
 #include <math.h>
-#include <open_simplex_noise_in_c/open-simplex-noise.h>
 #include "render/r_camera.h"
 
 
@@ -59,6 +58,11 @@ inline void Math_vec3_dir_to(vec3 from, vec3 to, vec3 dest)
 	glm_vec3_copy(v, dest);
 };
 
+inline void Math_vec3_slerp(vec3 from, vec3 to, float weight, vec3 dest)
+{
+	
+}
+
 inline void Math_mat4_mulv2(mat4 m, vec2 v, float third, float last, vec2 dest)
 {
 	vec4 res;
@@ -93,7 +97,10 @@ void Math_calcLightSpaceMatrix(const float p_cameraFov, const float p_screenWidt
 	vec3 p_lightDir, mat4 p_cameraView, mat4 dest);
 
 void Math_getLightSpacesMatrixesForFrustrum(const R_Camera* const p_camera, const float p_screenWidth, const float p_screenHeight, 
-	const float p_zMult, vec4 p_shadowCascadeLevels, vec3 p_lightDir, mat4 dest[5]);
+	const float p_zMult, vec4 p_shadowCascadeLevels, vec3 p_lightDir, mat4 dest[5], vec4 frustrum_planes[5][6]);
+
+
+
 
 typedef struct M_Rect2Df
 {
@@ -107,8 +114,6 @@ typedef struct M_Rect2Di
 	int width, height;
 } M_Rect2Di;
 
-double Noise_SimplexNoise2D(float x, float y, struct osn_context* osn_ctx, int octaves, float persistence);
-double Noise_SimplexNoise3Dabs(float x, float y, float z, struct osn_context* osn_ctx, int octaves, float persistence);
 
 typedef struct AABB
 {
@@ -152,4 +157,4 @@ typedef struct
 	float splitDist;
 } CascadeShadow;
 
-void CascadeShadow_genMatrix(vec3 p_lightDir, mat4 view, mat4 proj, mat4 dest[5], float cascades[5]);
+void CascadeShadow_genMatrix(vec3 p_lightDir, float nearPlane, float farPlane, mat4 view, mat4 proj, mat4 dest[5], float cascades[5]);

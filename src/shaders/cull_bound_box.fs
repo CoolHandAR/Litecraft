@@ -1,18 +1,18 @@
 #version 460 core
 
-out vec4 f_color;
 layout(early_fragment_tests) in;
 
-layout(std430, binding = 3) writeonly restrict buffer SSBO
+flat in uint v_chunkID;
+
+
+layout (std430, binding = 11) writeonly restrict buffer ChunkVisibles
 {
-    int data_SSBO[];
-};
-//flat in int v_chunkIndex;
+    uint data[];
+} VisibleChunk;
+
+
 
 void main()
-{
-   // int index = int(v_chunkIndex);
-
-
-    f_color = vec4(1, 1, 1, 1);
+{   
+    VisibleChunk.data[v_chunkID] = 1; 
 }

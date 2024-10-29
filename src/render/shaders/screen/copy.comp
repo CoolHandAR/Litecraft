@@ -1,0 +1,31 @@
+#version 460 core
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(rgba8, binding = 0) writeonly restrict uniform image2D outputImage;
+
+uniform sampler2D source_texture;
+
+uniform vec2 u_viewportSize;
+uniform float u_filterRadius = 0.005f;
+uniform float u_uvMultiplier = 1.0;
+
+
+void main()
+{
+	ivec2 iCoords = ivec2(gl_GlobalInvocationID.xy);
+
+    //Make sure we are not processing more than we need to
+    if (any(greaterThanEqual(iCoords, u_viewportSize))) 
+    { 
+		return;
+	}
+
+	vec2 coords = (vec2(iCoords + 0.5) / u_viewportSize);
+
+	coords *= u_uvMultiplier;
+	
+	vec4 sampleColor = texture(source_texture, coords);
+
+	imageStore(outputImage, ivec2(gl_GlobalInvocationID.xy), sampleColor);
+}

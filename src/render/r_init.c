@@ -7,11 +7,12 @@ textures and etc...
 
 
 #include "r_core.h"
+#include "input.h"
 #include "r_public.h"
-#include "r_particle.h"
 #include <string.h>
 #include <glad/glad.h>
 #include <assert.h>
+#include <GLFW/glfw3.h>
 
 
 extern R_CMD_Buffer* cmdBuffer;
@@ -73,17 +74,26 @@ static void Init_registerCvars()
     r_cvars.cam_mouseSensitivity = Cvar_Register("cam_mouseSensitivity", "1", NULL, CVAR__SAVE_TO_FILE, 0, 20);
     r_cvars.cam_zNear = Cvar_Register("cam_zNear", "0.1", NULL, CVAR__SAVE_TO_FILE, 0.01, 10.0);
     r_cvars.cam_zFar = Cvar_Register("cam_zFar", "1500", NULL, CVAR__SAVE_TO_FILE, 100, 4000);
+
+    //SHADOW SPECIFIC
+    r_cvars.r_allowParticleShadows = Cvar_Register("r_allowParticleShadws", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+    r_cvars.r_allowTransparentShadows = Cvar_Register("r_allowTransparentShadows", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+    r_cvars.r_shadowBias = Cvar_Register("r_shadowBias", "-0.07", NULL, CVAR__SAVE_TO_FILE, -10, 10);
+    r_cvars.r_shadowNormalBias = Cvar_Register("r_shadowNormalBias", "0.0", NULL, CVAR__SAVE_TO_FILE, 0, 10);
+    r_cvars.r_shadowVarianceMin = Cvar_Register("r_shadowVarianceMin", "0.0001", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+    r_cvars.r_shadowLightBleedReduction = Cvar_Register("r_shadowLightBleedReduction", "1.0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     
     //DEBUG
     r_cvars.r_drawDebugTexture = Cvar_Register("r_drawDebugTexture", "-1", NULL, CVAR__SAVE_TO_FILE, -1, 6);
     r_cvars.r_wireframe = Cvar_Register("r_wireframe", "0", NULL, CVAR__SAVE_TO_FILE, 0, 2);
+    r_cvars.r_drawPanel = Cvar_Register("r_drawPanel", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
 }
 
 static void Init_ScreenQuadDrawData()
 {
-	drawData->screen_quad.shader = Shader_CompileFromFile("src/shaders/screen_shader.vs", "src/shaders/screen_shader.fs", NULL);
+	drawData->screen_quad.shader = Shader_CompileFromFile("src/render/shaders/screen/screen_shader.vert", "src/render/shaders/screen/screen_shader.frag", NULL);
 
-    drawData->screen_quad.tex_index = 1;
+    drawData->screen_quad.tex_index = 0;
 
     glGenVertexArrays(1, &drawData->screen_quad.vao);
     glGenBuffers(1, &drawData->screen_quad.vbo);
@@ -127,40 +137,43 @@ static void Init_ScreenQuadDrawData()
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(ScreenVertex), (void*)(offsetof(ScreenVertex, tex_coords)));
     glEnableVertexAttribArray(1);
 
-    //glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(ScreenVertex), (void*)(offsetof(ScreenVertex, tex_index)));
-    //glEnableVertexAttribArray(2);
+    glVertexAttribIPointer(2, 1, GL_UNSIGNED_INT, sizeof(ScreenVertex), (void*)(offsetof(ScreenVertex, packed_texIndex_Flags)));
+    glEnableVertexAttribArray(2);
+
+    glVertexAttribIPointer(3, 4, GL_UNSIGNED_BYTE, sizeof(ScreenVertex), (void*)(offsetof(ScreenVertex, color)));
+    glEnableVertexAttribArray(3);
 
     //SETUP WHITE TEXTURE  
     //create texture
-    glGenTextures(1, &drawData->screen_quad.white_texture);
-    glBindTexture(GL_TEXTURE_2D, drawData->screen_quad.white_texture);
+  //  glGenTextures(1, &drawData->screen_quad.white_texture);
+   // glBindTexture(GL_TEXTURE_2D, drawData->screen_quad.white_texture);
 
     //set texture wrap and filter modes
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+   // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+   // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+   // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    uint32_t color_White = 0xffffffff;
+   // uint32_t color_White = 0xffffffff;
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &color_White);
+    //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &color_White);
 
     glUseProgram(drawData->screen_quad.shader);
 
     //set up samplers
-    GLint texture_array_location = glGetUniformLocation(drawData->screen_quad.shader, "u_textures");
-    int32_t samplers[32];
-
     for (int i = 0; i < 32; i++)
     {
-        samplers[i] = i;
+        char buf[256];
+        memset(buf, 0, sizeof(buf));
+
+        sprintf(buf, "u_textures[%i]", i);
+
+        Shader_SetInteger(drawData->screen_quad.shader, buf, i);
     }
 
-    glUniform1iv(texture_array_location, 32, samplers);
+    //glBindTextureUnit(0, drawData->screen_quad.white_texture);
 
-    glBindTextureUnit(0, drawData->screen_quad.white_texture);
-
-    drawData->screen_quad.tex_array[0] = drawData->screen_quad.white_texture;
+  //  drawData->screen_quad.tex_array[0] = drawData->screen_quad.white_texture;
 }
 
 static void Init_TextDrawData()
@@ -260,11 +273,17 @@ static void Init_TriangleDrawData()
     glBindBuffer(GL_ARRAY_BUFFER, drawData->triangle.vbo);
     glBufferStorage(GL_ARRAY_BUFFER, sizeof(drawData->triangle.vertices), NULL, GL_DYNAMIC_STORAGE_BIT);
 
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(BasicVertex), (void*)(offsetof(BasicVertex, position)));
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(TriangleVertex), (void*)(offsetof(TriangleVertex, position)));
     glEnableVertexAttribArray(0);
 
-    glVertexAttribIPointer(1, 4, GL_UNSIGNED_BYTE, sizeof(BasicVertex), (void*)(offsetof(BasicVertex, color)));
+    glVertexAttribIPointer(1, 4, GL_UNSIGNED_BYTE, sizeof(TriangleVertex), (void*)(offsetof(TriangleVertex, color)));
     glEnableVertexAttribArray(1);
+
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(TriangleVertex), (void*)(offsetof(TriangleVertex, texOffset)));
+    glEnableVertexAttribArray(2);
+
+    glVertexAttribIPointer(3, 1, GL_INT, sizeof(TriangleVertex), (void*)(offsetof(TriangleVertex, texture_index)));
+    glEnableVertexAttribArray(3);
 }
 
 static void Init_DrawData()
@@ -278,21 +297,56 @@ static void Init_DrawData()
 static void Init_GeneralPassData()
 {
     pass->general.basic_3d_shader = Shader_CompileFromFile("src/render/shaders/basic_3d.vert", "src/render/shaders/basic_3d.frag", NULL);
-    pass->general.box_blur_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/box_blur.frag", NULL);
+    pass->general.triangle_3d_shader = Shader_CompileFromFile("src/render/shaders/triangle_3d.vert", "src/render/shaders/triangle_3d.frag", NULL);
+    pass->general.box_blur_shader = ComputeShader_CompileFromFile("src/render/shaders/screen/box_blur.comp");
     pass->general.downsample_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/downsample.frag", NULL);
     pass->general.upsample_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/upsample.frag", NULL);
+    pass->general.copy_shader = ComputeShader_CompileFromFile("src/render/shaders/screen/copy.comp");
+
+    glUseProgram(pass->general.triangle_3d_shader);
+#ifndef USE_BINDLESS_TEXTURES
+    GLint texture_array_location = glGetUniformLocation(pass->general.triangle_3d_shader, "texture_arr");
+    int samplers[32];
+
+    for (int i = 0; i < 32; i++)
+    {
+        samplers[i] = i;
+    }
+
+    glUniform1iv(texture_array_location, 32, samplers);
+#endif
+
+    glGenFramebuffers(1, &pass->general.halfsize_fbo);
+    glGenTextures(1, &pass->general.depth_halfsize_texture);
+    glGenTextures(1, &pass->general.normal_halfsize_texture);
+
+    glBindTexture(GL_TEXTURE_2D, pass->general.depth_halfsize_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, INIT_WIDTH / 2, INIT_HEIGHT / 2, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+
+    glBindTexture(GL_TEXTURE_2D, pass->general.normal_halfsize_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, INIT_WIDTH / 2, INIT_HEIGHT / 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, pass->general.halfsize_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->general.normal_halfsize_texture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, pass->general.depth_halfsize_texture, 0);
+
+    CheckBoundFrameBufferStatus("General");
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 static void Init_PostProcessData()
 {
-    pass->post.post_process_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/post_process.frag", NULL);
+    RInternal_UpdatePostProcessShader(true);
     pass->post.debug_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/debug_screen.frag", NULL);
-
-    //SETUP SHADER UNIFORMS
-    glUseProgram(pass->post.post_process_shader);
-    Shader_SetInteger(pass->post.post_process_shader, "depth_texture", 0);
-    Shader_SetInteger(pass->post.post_process_shader, "MainSceneTexture", 1);
-    Shader_SetInteger(pass->post.post_process_shader, "BloomSceneTexture", 2);
 
     glUseProgram(pass->post.debug_shader);
     Shader_SetInteger(pass->post.debug_shader, "NormalMetalTexture", 0);
@@ -304,19 +358,53 @@ static void Init_PostProcessData()
 
 static void Init_LCSpecificData()
 {
-    pass->lc.depthPrepass_shader = Shader_CompileFromFile("src/render/shaders/lc/", "src/render/shaders/lc/", NULL);
+    for (int i = 0; i < 4; i++)
+    {
+        drawData->lc_world.shadow_counts[i] = dA_INIT(int, 0);
+        drawData->lc_world.shadow_firsts[i] = dA_INIT(int, 0);
+
+        drawData->lc_world.shadow_counts_transparent[i] = dA_INIT(int, 0);
+        drawData->lc_world.shadow_firsts_transparent[i] = dA_INIT(int, 0);
+    }
+    drawData->lc_world.shadow_sorted_chunk_indexes = dA_INIT(int, 0);
+    drawData->lc_world.shadow_sorted_chunk_transparent_indexes = dA_INIT(int, 0);
+
+    pass->lc.depthPrepass_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_depth.vert", "src/render/shaders/depth.frag", NULL);
     pass->lc.gBuffer_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_g_buffer.vert", "src/render/shaders/lc_world/lc_g_buffer.frag", NULL);
-    pass->lc.shadow_map_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_shadow_map.vert", "src/render/shaders/shadow_map.frag", "src/render/shaders/shadow_map.geo");
-    pass->lc.transparents_forward_shader = Shader_CompileFromFile("src/render/shaders/lc/", "src/render/shaders/lc/", "s");
+    pass->lc.shadow_map_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_shadow_map.vert", "src/render/shaders/shadow_map.frag", NULL);
+    pass->lc.transparents_forward_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_transparent_forward.vert", "src/render/shaders/lc_world/lc_transparent_forward.frag", NULL);
     pass->lc.chunk_process_shader = ComputeShader_CompileFromFile("src/render/shaders/lc_world/chunk_process.comp");
     pass->lc.occlussion_boxes_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_occlusion_boxes.vert", "src/render/shaders/lc_world/lc_occlusion_boxes.frag", NULL);
-
+    const char* define[1] = { "TRANSPARENT_SHADOWS" };
+    pass->lc.transparents_shadow_map_shader = Shader_CompileFromFileDefine("src/render/shaders/lc_world/lc_shadow_map.vert", "src/render/shaders/lc_world/lc_shadow_map.frag", NULL, define, 1);
+    const char* define2[1] = { "SEMI_TRANSPARENT" };
+    pass->lc.transparents_gBuffer_shader = Shader_CompileFromFileDefine("src/render/shaders/lc_world/lc_g_buffer.vert", "src/render/shaders/lc_world/lc_g_buffer.frag", NULL, define2, 1);
     //SETUP SHADER UNIFORMS
     glUseProgram(pass->lc.gBuffer_shader);
     Shader_SetInteger(pass->lc.gBuffer_shader, "texture_atlas", 0);
     Shader_SetInteger(pass->lc.gBuffer_shader, "texture_atlas_normal", 1);
     Shader_SetInteger(pass->lc.gBuffer_shader, "texture_atlas_mer", 2);
 
+    glUseProgram(pass->lc.transparents_gBuffer_shader);
+    Shader_SetInteger(pass->lc.transparents_gBuffer_shader, "texture_atlas", 0);
+    Shader_SetInteger(pass->lc.transparents_gBuffer_shader, "texture_atlas_normal", 1);
+    Shader_SetInteger(pass->lc.transparents_gBuffer_shader, "texture_atlas_mer", 2);
+
+
+    glUseProgram(pass->lc.transparents_forward_shader);
+    Shader_SetInteger(pass->lc.transparents_forward_shader, "texture_atlas", 0);
+    Shader_SetInteger(pass->lc.transparents_forward_shader, "texture_atlas_normal", 1);
+    Shader_SetInteger(pass->lc.transparents_forward_shader, "texture_atlas_mer", 2);
+
+    Shader_SetInteger(pass->lc.transparents_forward_shader, "brdfLUT", 3);
+    Shader_SetInteger(pass->lc.transparents_forward_shader, "irradianceMap", 4);
+    Shader_SetInteger(pass->lc.transparents_forward_shader, "preFilterMap", 5);
+
+    Shader_SetInteger(pass->lc.transparents_forward_shader, "momentMaps", 6);
+    Shader_SetInteger(pass->lc.transparents_forward_shader, "shadowMapsDepth", 7);
+
+    glUseProgram(pass->lc.transparents_shadow_map_shader);
+    Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "texture_atlas", 0);
 }
 
 static void Init_DeferredData()
@@ -328,18 +416,7 @@ static void Init_DeferredData()
     pass->deferred.gBuffer_shader = 0;
    // assert(pass->deferred.gBuffer_shader > 0);
     
-    pass->deferred.shading_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/deferred_scene.frag", NULL);
-    //assert(pass->deferred.shading_shader > 0);
-
-    glUseProgram(pass->deferred.shading_shader);
-    Shader_SetInteger(pass->deferred.shading_shader, "gNormalMetal", 0);
-    Shader_SetInteger(pass->deferred.shading_shader, "gColorRough", 1);
-    Shader_SetInteger(pass->deferred.shading_shader, "depth_texture", 2);
-    Shader_SetInteger(pass->deferred.shading_shader, "SSAO_texture", 3);
-    Shader_SetInteger(pass->deferred.shading_shader, "shadowMaps", 4);
-    Shader_SetInteger(pass->deferred.shading_shader, "brdfLUT", 5);
-    Shader_SetInteger(pass->deferred.shading_shader, "irradianceMap", 6);
-    Shader_SetInteger(pass->deferred.shading_shader, "preFilterMap", 7);
+    RInternal_UpdateDeferredShadingShader(true);
 
     //SETUP FRAMEBUFFER AND TEXTURES
     glGenFramebuffers(1, &pass->deferred.FBO);
@@ -352,7 +429,7 @@ static void Init_DeferredData()
 
     //DEPTH
     glBindTexture(GL_TEXTURE_2D, pass->deferred.depth_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, INIT_WIDTH, INIT_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, INIT_WIDTH, INIT_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -395,15 +472,20 @@ static void Init_MainSceneData()
 {
     //Shaders
     pass->scene.skybox_shader = Shader_CompileFromFile("src/render/shaders/skybox.vert", "src/render/shaders/skybox.frag", NULL);
+    pass->scene.oit_composite_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/oit_composite.frag", NULL);
 
     glUseProgram(pass->scene.skybox_shader);
     Shader_SetInteger(pass->scene.skybox_shader, "skybox_texture", 0);
 
     glGenFramebuffers(1, &pass->scene.FBO);
-    glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
+    glGenFramebuffers(1, &pass->scene.transparent_FBO);
 
     //Setup scene textures
     glGenTextures(1, &pass->scene.MainSceneColorBuffer);
+    glGenTextures(1, &pass->scene.transparent_accum_texture);
+    glGenTextures(1, &pass->scene.transparent_reveal_texture);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
 
     //Main scene hdr buffer
     glBindTexture(GL_TEXTURE_2D, pass->scene.MainSceneColorBuffer);
@@ -422,13 +504,43 @@ static void Init_MainSceneData()
 
     CheckBoundFrameBufferStatus("Main scene");
 
+    assert(pass->deferred.depth_texture > 0 && "Init deferred first");
+
+    //Transparent
+    glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.transparent_FBO);
+
+    //Accum texture
+    glBindTexture(GL_TEXTURE_2D, pass->scene.transparent_accum_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    //Reveal texture
+    glBindTexture(GL_TEXTURE_2D, pass->scene.transparent_reveal_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, INIT_WIDTH, INIT_HEIGHT, 0, GL_RED, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->scene.transparent_accum_texture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, pass->scene.transparent_reveal_texture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, pass->deferred.depth_texture, 0);
+    unsigned int attachments2[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+    glDrawBuffers(2, attachments2);
+
+    CheckBoundFrameBufferStatus("Transparents FBO");
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 static void Init_AoData()
 {
     //SETUP SHADER
-    pass->ao.shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/ssao.frag", NULL);
+    //pass->ao.shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/ssao.frag", NULL);
+    pass->ao.shader = ComputeShader_CompileFromFile("src/render/shaders/screen/ssao.comp");
     assert(pass->ao.shader > 0);
 
     //SETUP SHADER UNIFORMS
@@ -437,57 +549,40 @@ static void Init_AoData()
     Shader_SetInteger(pass->ao.shader, "noise_texture", 1);
     Shader_SetInteger(pass->ao.shader, "gNormalMetal", 2);
 
-    //SETUP FRAMEBUFFER AND TEXTURES
-    glGenFramebuffers(1, &pass->ao.FBO);
-    glGenFramebuffers(1, &pass->ao.BLURRED_FBO);
+    //SETUP TEXTURES 
     glGenTextures(1, &pass->ao.ao_texture);
     glGenTextures(1, &pass->ao.blurred_ao_texture);
     glGenTextures(1, &pass->ao.noise_texture);
    
-    glBindFramebuffer(GL_FRAMEBUFFER, pass->ao.FBO);
     glBindTexture(GL_TEXTURE_2D, pass->ao.ao_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RED, GL_FLOAT, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, INIT_WIDTH, INIT_HEIGHT, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     glBindTexture(GL_TEXTURE_2D, pass->ao.blurred_ao_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RED, GL_FLOAT, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, INIT_WIDTH, INIT_HEIGHT, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    vec3 ssao_noise[16];
+    vec2 ssao_noise[32];
     srand(time(NULL));
     for (int i = 0; i < 16; i++)
     {
         ssao_noise[i][0] = ((float)rand() / (float)RAND_MAX) * 2.0 - 1.0;
         ssao_noise[i][1] = ((float)rand() / (float)RAND_MAX) * 2.0 - 1.0;
-        ssao_noise[i][2] = 0.0f;
     }
 
     glBindTexture(GL_TEXTURE_2D, pass->ao.noise_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 4, 4, 0, GL_RGB, GL_FLOAT, ssao_noise);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG32F, 4, 4, 0, GL_RG, GL_FLOAT, ssao_noise);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->ao.ao_texture, 0);
-    
-    unsigned int attachments[1] = { GL_COLOR_ATTACHMENT0  };
-    glDrawBuffers(1, attachments);
-
-    CheckBoundFrameBufferStatus("AO");
-    
-    glBindFramebuffer(GL_FRAMEBUFFER, pass->ao.BLURRED_FBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->ao.blurred_ao_texture, 0);
-    glDrawBuffers(1, attachments);
-
-    CheckBoundFrameBufferStatus("AO");
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 static void Init_BloomData()
@@ -524,6 +619,33 @@ static void Init_BloomData()
     glDrawBuffers(1, attachments);
 
     CheckBoundFrameBufferStatus("Bloom");
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+static void Init_DofData()
+{
+    //SETUP SHADER
+    pass->dof.bohek_blur_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/dof_blur.frag", NULL);
+
+    glUseProgram(pass->dof.bohek_blur_shader);
+    Shader_SetInteger(pass->dof.bohek_blur_shader, "source_texture", 0);
+    Shader_SetInteger(pass->dof.bohek_blur_shader, "depth_texture", 1);
+
+    glGenFramebuffers(1, &pass->dof.FBO);
+    glGenTextures(1, &pass->dof.dof_texture);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, pass->dof.FBO);
+    glBindTexture(GL_TEXTURE_2D, pass->dof.dof_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->dof.dof_texture, 0);
+
+    CheckBoundFrameBufferStatus("DOF");
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
@@ -640,37 +762,70 @@ static void Init_ShadowMappingData()
 
     //SETUP FRAMEBUFFER
     glGenFramebuffers(1, &pass->shadow.FBO);
+    glGenTextures(1, &pass->shadow.moment_maps);
     glGenTextures(1, &pass->shadow.depth_maps);
 
-    glBindTexture(GL_TEXTURE_2D_ARRAY, pass->shadow.depth_maps);
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT16, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, SHADOW_CASCADE_LEVELS + 1, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, pass->shadow.moment_maps);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_R16, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, SHADOW_CASCADE_LEVELS, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
     float borderColor[] = { 1.0, 1.0, 1.0, 1.0 };
     glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, borderColor);
+
+    glBindTexture(GL_TEXTURE_2D_ARRAY, pass->shadow.depth_maps);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT16, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, SHADOW_CASCADE_LEVELS, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT , NULL);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, borderColor);
+
     glBindFramebuffer(GL_FRAMEBUFFER, pass->shadow.FBO);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, pass->shadow.moment_maps, 0);
     glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, pass->shadow.depth_maps, 0);
-    glDrawBuffer(GL_NONE);
-    glReadBuffer(GL_NONE);
+    //glDrawBuffer(GL_NONE);
+    //glReadBuffer(GL_NONE);
 
     CheckBoundFrameBufferStatus("Shadow");
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    //MATRICES UBO
-    glGenBuffers(1, &pass->shadow.light_space_matrices_ubo);
-    glBindBuffer(GL_UNIFORM_BUFFER, pass->shadow.light_space_matrices_ubo);
-    glBufferStorage(GL_UNIFORM_BUFFER, sizeof(mat4) * LIGHT_MATRICES_COUNT, NULL, GL_DYNAMIC_STORAGE_BIT);
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
-
     float z_far = 1500;
 
-    pass->shadow.cascade_levels[0] = z_far / 75.0f;
-    pass->shadow.cascade_levels[1] = z_far / 50.0f;
-    pass->shadow.cascade_levels[2] = z_far / 20.0f;
-    pass->shadow.cascade_levels[3] = z_far / 15.0f;
+    pass->shadow.cascade_levels[0] = z_far / 350.0f;
+    pass->shadow.cascade_levels[1] = z_far / 180.0f;
+    pass->shadow.cascade_levels[2] = z_far / 70.0f;
+    pass->shadow.cascade_levels[3] = z_far / 10.0f;
+}
+
+static void Init_ParticlePassData()
+{
+    pass->particles.particle_render_shader = Shader_CompileFromFile("src/render/shaders/particle_render.vert", "src/render/shaders/particle_render.frag", NULL);
+    pass->particles.particle_shadow_map_shader = Shader_CompileFromFile("src/render/shaders/particle_shadow_map.vert", "src/render/shaders/particle_shadow_map.frag", NULL);
+    pass->particles.particle_process_shader = ComputeShader_CompileFromFile("src/render/shaders/compute/particle_process.comp");
+    pass->particles.emitter_process_shader = ComputeShader_CompileFromFile("src/render/shaders/compute/emitter_process.comp");
+  
+    glUseProgram(pass->particles.particle_render_shader);
+    Shader_SetInteger(pass->particles.particle_render_shader, "texture_atlas", 0);
+    Shader_SetInteger(pass->particles.particle_render_shader, "shadowMaps", 1);
+
+#ifndef USE_BINDLESS_TEXTURES
+    GLint texture_array_location = glGetUniformLocation(pass->particles.particle_render_shader, "textures_arr");
+    int samplers[32];
+
+    for (int i = 0; i < 32; i++)
+    {
+        samplers[i] = i;
+    }
+
+    glUniform1iv(texture_array_location, 32, samplers);
+#endif
+
+    glUseProgram(pass->particles.particle_process_shader);
+    Shader_SetInteger(pass->particles.particle_process_shader, "depth_texture", 0);
+    Shader_SetInteger(pass->particles.particle_process_shader, "gNormal_texture", 1);
 }
 
 static void Init_PassData()
@@ -682,8 +837,10 @@ static void Init_PassData()
     Init_MainSceneData();
     Init_AoData();
     Init_BloomData();
+    Init_DofData();
     Init_IBLData();
     Init_ShadowMappingData();
+    Init_ParticlePassData();
 }
 
 static void Init_SceneData()
@@ -696,6 +853,26 @@ static void Init_SceneData()
 
     glBindBuffer(GL_UNIFORM_BUFFER, scene.scene_ubo);
     glBufferData(GL_UNIFORM_BUFFER, sizeof(R_SceneData), NULL, GL_DYNAMIC_DRAW);
+
+    //Init scene defaults
+    scene.scene_data.heightFogMin = 30;
+    scene.scene_data.heightFogMax = 11;
+    scene.scene_data.heightFogCurve = 1;
+    scene.scene_data.depthFogBegin = 10;
+    scene.scene_data.depthFogEnd = 100;
+    scene.scene_data.depthFogCurve = 0;
+    scene.scene_data.fogDensity = 1;
+
+    scene.scene_data.dirLightDirection[0] = 1;
+    scene.scene_data.dirLightDirection[1] = 1;
+    scene.scene_data.dirLightDirection[2] = 1;
+
+    scene.scene_data.dirLightColor[0] = 1;
+    scene.scene_data.dirLightColor[1] = 1;
+    scene.scene_data.dirLightColor[2] = 1;
+
+    scene.scene_data.dirLightAmbientIntensity = 8;
+    scene.scene_data.dirLightSpecularIntensity = 24;
 }
 
 static bool _initRenderThread()
@@ -735,10 +912,14 @@ static void Init_StorageBuffers()
 {
     memset(&storage, 0, sizeof(storage));
 
+    storage.particle_emitter_clients = FL_INIT(ParticleEmitterSettings);
+
+    storage.instances = RSB_Create(100, sizeof(vec4), RSB_FLAG__RESIZABLE);
     storage.point_lights = RSB_Create(100, sizeof(PointLight2), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE | RSB_FLAG__POOLABLE);
-    storage.particles = RSB_Create(200, sizeof(R_Particle), false, true, false, false, true);
-    storage.particle_emitters = RSB_Create(200, sizeof(R_ParticleEmitter), false, true, false, false, true);
-    storage.texture_handles = RSB_Create(100, sizeof(GLuint64), false, true, false, false, true);
+    storage.particles = DRB_Create(100000, 12, DRB_FLAG__POOLABLE | DRB_FLAG__RESIZABLE);
+    storage.particle_emitters = RSB_Create(200, sizeof(ParticleEmitterGL), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE | RSB_FLAG__POOLABLE);
+    storage.texture_handles = RSB_Create(100, sizeof(GLuint64), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE | RSB_FLAG__POOLABLE);
+    storage.collider_boxes = DRB_Create(1000, 30, DRB_FLAG__POOLABLE | DRB_FLAG__RESIZABLE);
 }
 
 static void Init_RendererResources()
@@ -797,7 +978,7 @@ static void Init_RendererResources()
     glEnableVertexAttribArray(1);
 }
 
-static void Init_SetupGLBindingPoints()
+void Init_SetupGLBindingPoints()
 {
     //BINDING POINTS ARE NEVER CHANGED
 
@@ -807,15 +988,39 @@ static void Init_SetupGLBindingPoints()
     //1: CAMERA
     glBindBufferBase(GL_UNIFORM_BUFFER, 1, scene.camera_ubo);
 
-
     //SSBOS
     //0: POINT LIGHTS
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, storage.point_lights.buffer);
+    //1: SPOT LIGHTS
+    //glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, storage.point_lights.buffer);
+    //2: POINT LIGHTS
+    //glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, storage.point_lights.buffer);
+    
+
+    //5: PARTICLE EMITTERS
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, storage.particle_emitters.buffer);
+
+    //6: PARTICLES
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, storage.particles.buffer);
+
+    //7: INSTANCE DATA
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, storage.instances.buffer);
+
+    //8: COLLISION DATA (USED FOR PARTICLE COLLISIONS)
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, storage.collider_boxes.buffer);
 }
 
 static void Init_SetupGLState()
 {
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+}
 
+static void Init_Inputs()
+{
+    Input_registerAction("Open-panel");
+
+    Input_setActionBinding("Open-panel", IT__KEYBOARD, GLFW_KEY_P, 0);
 }
 
 static int Init_Mem()
@@ -901,6 +1106,8 @@ int Renderer_Init(int p_initWidth, int p_initHeight)
 
     Init_SetupGLBindingPoints();
 
+    Init_Inputs();
+
     backend_data->screenSize[0] = INIT_WIDTH;
     backend_data->screenSize[1] = INIT_HEIGHT;
 
@@ -912,4 +1119,37 @@ int Renderer_Init(int p_initWidth, int p_initHeight)
     scene.camera.screen_size[1] = backend_data->screenSize[1];
 
     return true;
+}
+
+void Renderer_Exit()
+{
+    FL_Destruct(storage.particle_emitter_clients);
+
+    RSB_Destruct(&storage.instances);
+    RSB_Destruct(&storage.point_lights);
+    RSB_Destruct(&storage.particle_emitters);
+    RSB_Destruct(&storage.texture_handles);
+    
+    DRB_Destruct(&storage.particles);
+    DRB_Destruct(&storage.collider_boxes);
+    
+
+    for (int i = 0; i < 4; i++)
+    {
+        dA_Destruct(drawData->lc_world.shadow_counts[i]);
+        dA_Destruct(drawData->lc_world.shadow_firsts[i]);
+
+        dA_Destruct(drawData->lc_world.shadow_counts_transparent[i]);
+        dA_Destruct(drawData->lc_world.shadow_firsts_transparent[i]);
+    }
+    dA_Destruct(drawData->lc_world.shadow_sorted_chunk_indexes);
+    dA_Destruct(drawData->lc_world.shadow_sorted_chunk_transparent_indexes);
+
+    //Mem clean up
+    free(cmdBuffer->cmds_data);
+    free(cmdBuffer);
+    free(drawData);
+    free(pass);
+    free(backend_data);
+   
 }

@@ -9,7 +9,7 @@ layout (location = 0) out vec3 upsample;
 // Remember to use a floating-point texture format (for HDR)!
 // Remember to use edge clamping for this texture!
 uniform sampler2D source_texture;
-uniform float u_filterRadius;
+uniform float u_filterRadius = 0.005f;
 
 in vec2 TexCoords;
 
@@ -36,6 +36,8 @@ void main()
 	vec3 g = texture(source_texture, vec2(TexCoords.x - x, TexCoords.y - y)).rgb;
 	vec3 h = texture(source_texture, vec2(TexCoords.x,     TexCoords.y - y)).rgb;
 	vec3 i = texture(source_texture, vec2(TexCoords.x + x, TexCoords.y - y)).rgb;
+	
+
 
 	// Apply weighted distribution, by using a 3x3 tent filter:
 	//  1   | 1 2 1 |

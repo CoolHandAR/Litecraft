@@ -8,9 +8,11 @@ typedef unsigned int R_Shader;
 
 R_Shader Shader_CompileFromMemory(const char* p_vertexShader, const char* p_fragmentShader, const char* p_geometryShader);
 R_Shader Shader_CompileFromFile(const char* p_vertexShaderPath, const char* p_fragmentShaderPath, const char* p_geometryShaderPath);
+R_Shader Shader_CompileFromFileDefine(const char* p_vertexShaderPath, const char* p_fragmentShaderPath, const char* p_geometryShaderPath, const char** p_defines, int p_defineCount);
 R_Shader ComputeShader_CompileFromMemory(const char* p_computeShader);
 R_Shader ComputeShader_CompileFromFile(const char* p_computeShaderPath);
-   
+R_Shader ComputeShader_CompileFromFileDefine(const char* p_computeShaderPath, const char** p_defines, int p_defineCount);
+
 void Shader_SetFloat(R_Shader shader, const char* name, float value);
 void Shader_SetInteger(R_Shader shader, const char* name, int value);
 void Shader_SetUnsigned(R_Shader shader, const char* name, unsigned value);

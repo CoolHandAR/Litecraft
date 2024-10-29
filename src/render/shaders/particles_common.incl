@@ -1,0 +1,82 @@
+#define EMITTER_STATE_FLAG_NONE uint(0)
+#define EMITTER_STATE_FLAG_SKIP_DRAW uint(1)
+#define EMITTER_STATE_FLAG_EMITTING uint(2)
+#define EMITTER_STATE_FLAG_CLEAR uint(4)
+#define EMITTER_STATE_FLAG_FORCE_RESTART uint(8)
+#define EMITTER_STATE_FLAG_ANIMATION_PLAYING uint(16)
+
+#define EMITTER_SETTINGS_FLAG_NONE uint(0)
+#define EMITTER_SETTINGS_FLAG_ONE_SHOT uint(1)
+#define EMITTER_SETTINGS_FLAG_LOOP_ANIMATION uint(2)
+#define EMITTER_SETTINGS_FLAG_CAST_SHADOWS uint(4)
+#define EMITTER_SETTINGS_FLAG_ANIMATION uint(8)
+
+#define EMITTER_EMISSION_SHAPE_POINT uint(0)
+#define EMITTER_EMISSION_SHAPE_BOX uint(1)
+#define EMITTER_EMISSION_SHAPE_SPHERE uint(2)
+#define EMITTER_EMISSION_SHAPE_MAX uint(3)
+
+#define PARTICLE_STATE_FLAG_NONE uint(0)
+#define PARTICLE_STATE_FLAG_PREV_VISIBILE uint(1)
+#define PARTICLE_STATE_FLAG_EMITTING uint(2)
+
+struct ParticleEmitter
+{
+     mat4 xform;
+
+    vec4 aabb[2];
+    vec4 direction;
+
+    vec4 color;
+    vec4 end_color;
+
+    vec4 emission_size;
+
+    uint state_flags;
+    uint settings_flags;
+
+    float delta;
+    float time;
+    float prev_time;
+    float system_time;
+
+    float explosiveness;
+    float randomness;
+    float life_time;
+    float speed_scale;
+
+    float initial_velocity;
+    float anim_speed_scale;
+
+    float anim_frame_progress;
+
+     float spread;
+
+     float gravity;
+
+     float friction;
+
+      float linear_accel;
+
+      float scale;
+
+    float ambient_intensity;
+    float diffuse_intensity;
+    float specular_intensity;
+
+      int texture_index;
+
+     int collider_index;
+     int collider_amount;
+
+     uint emission_shape;
+
+     uint particle_amount;
+     uint cycle;
+
+     uint frame;
+     uint frame_offset;
+     uint frame_count;
+     uint h_frames;
+     uint v_frames;
+};

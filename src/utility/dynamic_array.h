@@ -336,6 +336,30 @@ void* dA_emplaceBack(dynamic_array* const p_dA)
 }
 
 /**
+Emplaces an item at the back of the array
+
+\param p_dA Pointer to the dynamic array
+
+\return Pointer to the last element
+*/
+void* dA_emplaceBackData(dynamic_array* const p_dA, const void* p_data)
+{
+    _dA_assertSetData(p_dA);
+
+    if (!_dA_handleAlloc(p_dA, 1))
+        return NULL;
+
+    void* last = dA_getLast(p_dA);
+
+    if (p_data)
+    {
+        memcpy(last, p_data, p_dA->alloc_size);
+    }
+
+    return last;
+}
+
+/**
 Emplaces multiple items at the back of the array
 
 \param p_dA Pointer to the dynamic array
@@ -477,17 +501,22 @@ bool dA_erase(dynamic_array* p_dA, size_t p_pos, size_t p_amount)
    // assert(next_elements_size >= 0 && "Deleting more items than the array holds");
 
     //address where we want to remove the data from
-    void* pos_address = (char*)p_dA->data + (p_pos * p_dA->alloc_size);
+    void* read_address = (char*)p_dA->data + ((p_pos + p_amount) * p_dA->alloc_size);
 
     //address after the deleted items
-    void* next_address = (char*)pos_address + (p_amount * p_dA->alloc_size);
+    void* write_address = (char*)p_dA->data + (p_pos * p_dA->alloc_size);
 
     //byte size of the items we are moving back
+    const size_t move_elements = p_dA->elements_size - (p_pos + p_amount);
+
+    const size_t byte_size = move_elements * p_dA->alloc_size;
     p_dA->elements_size -= p_amount;
-    const size_t byte_size = ((p_dA->elements_size) - (p_pos)) * p_dA->alloc_size;
 
-    memcpy(pos_address, next_address, byte_size);
+    //memcpy(pos_address, next_address, byte_size);
 
+    memmove(write_address, read_address, byte_size);
+
+ 
     return true;
 }
 

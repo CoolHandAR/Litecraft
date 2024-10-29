@@ -12,10 +12,19 @@
 #define DEFAULT_WINDOW_HEIGHT 720
 #define WINDOW_NAME "Litecraft"
 
+typedef struct
+{
+	DWORD gl_context_owner_thread_id;
+	bool is_full_screen;
+	bool cursor_enabled;
+} WindowState;
+
 extern void r_onWindowResize(ivec2 window_size);
+extern void RCore_onWindowResize(int width, int height);
+extern void PL_onMouseScroll(int yOffset);
 
 GLFWwindow* glfw_window;
-static DWORD gl_context_thread_id;
+static WindowState window_state;
 
 static void WinCallback_Framebuffer(GLFWwindow* window, int width, int height)
 {
@@ -26,6 +35,7 @@ static void WinCallback_Framebuffer(GLFWwindow* window, int width, int height)
 	vec[1] = height;
 
 	r_onWindowResize(vec);
+	RCore_onWindowResize(width, height);
 }
 
 static void WinCallback_MousePosition(GLFWwindow* window, double xpos, double ypos)
@@ -33,14 +43,26 @@ static void WinCallback_MousePosition(GLFWwindow* window, double xpos, double yp
 	LC_MouseUpdate(xpos, ypos);
 }
 
+static void WinCallback_ScrollBack(GLFWwindow* window, double xoffset, double yoffset)
+{
+	nk_gflw3_scroll_callback(window, xoffset, yoffset);
+
+	PL_onMouseScroll(yoffset);
+}
+
 
 int Window_Init()
 {
+	memset(&window_state, 0, sizeof(window_state));
+
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-
+	
 	glfw_window = glfwCreateWindow(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, WINDOW_NAME, NULL, NULL);
+	
+	//fullscreen
+	//glfwSetWindowMonitor(glfw_window, glfwGetPrimaryMonitor(), 0, 0, 1920, 1080, GLFW_DONT_CARE);
 
 	if (glfw_window == NULL)
 	{
@@ -52,13 +74,21 @@ int Window_Init()
 	glfwMakeContextCurrent(glfw_window);
 
 	//set callback functions
+	glfwSetMonitorCallback(WinCallback_Framebuffer);
+
+	glfwSetCharCallback(glfw_window, nk_glfw3_char_callback);
+	glfwSetMouseButtonCallback(glfw_window, nk_glfw3_mouse_button_callback);
+
+	glfwSetScrollCallback(glfw_window, WinCallback_ScrollBack);
 	glfwSetFramebufferSizeCallback(glfw_window, WinCallback_Framebuffer);
 	glfwSetCursorPosCallback(glfw_window, WinCallback_MousePosition);
-	glfwSwapInterval(1); //vsync;
+	glfwSwapInterval(0); //vsync;
 
 	glfwSetInputMode(glfw_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 	
-	gl_context_thread_id = GetCurrentThreadId();
+	window_state.gl_context_owner_thread_id = GetCurrentThreadId();
+
+	window_state.cursor_enabled = false;
 
 	return true;
 }
@@ -98,10 +128,10 @@ void Window_detachGLContext()
 
 	DWORD caller_thread_id = GetCurrentThreadId();
 
-	assert(caller_thread_id == gl_context_thread_id && "Calling thread mismatch");
+	assert(caller_thread_id == window_state.gl_context_owner_thread_id && "Calling thread mismatch");
 
 	glfwMakeContextCurrent(NULL);
-	gl_context_thread_id = 0;
+	window_state.gl_context_owner_thread_id = 0;
 }
 
 void Window_setGLContext()
@@ -111,11 +141,37 @@ void Window_setGLContext()
 	DWORD caller_thread_id = GetCurrentThreadId();
 
 	//is the gl context already set by the same thread?
-	if (caller_thread_id == gl_context_thread_id)
+	if (caller_thread_id == window_state.gl_context_owner_thread_id)
 		return;
 	
 	glfwMakeContextCurrent(glfw_window);
-	gl_context_thread_id = caller_thread_id;
+	window_state.gl_context_owner_thread_id = caller_thread_id;
+}
+
+void Window_toggleFullScreen()
+{
+	window_state.is_full_screen = !window_state.is_full_screen;
+
+	if (window_state.is_full_screen)
+	{
+		glfwSetWindowMonitor(glfw_window, glfwGetPrimaryMonitor(), 0, 0, 1920, 1080, GLFW_DONT_CARE);
+		glfwSetWindowSize(glfw_window, 1920, 1080);
+	}
+	else
+	{
+		glfwSetWindowMonitor(glfw_window, NULL, 0, 0, 1280, 720, GLFW_DONT_CARE);
+		glfwSetWindowSize(glfw_window, 1280, 720);
+	}
+}
+
+bool Window_isFullScreen()
+{
+	return window_state.is_full_screen;
+}
+
+bool Window_isCursorEnabled()
+{
+	return window_state.cursor_enabled;
 }
 
 GLFWwindow* Window_getPtr()
@@ -123,3 +179,40 @@ GLFWwindow* Window_getPtr()
 	return glfw_window;
 }
 
+void Window_EnableCursor()
+{
+	
+
+	//glfwSetInputMode(glfw_window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+
+	window_state.cursor_enabled = true;
+}
+
+void Window_DisableCursor()
+{
+
+
+	//glfwSetInputMode(glfw_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+
+	window_state.cursor_enabled = false;
+}
+
+void Window_EndFrame()
+{
+	if (window_state.cursor_enabled)
+	{
+		if (glfwGetInputMode(glfw_window, GLFW_CURSOR) != GLFW_CURSOR_NORMAL)
+		{
+			glfwSetInputMode(glfw_window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+		}
+	}
+	else if (!window_state.cursor_enabled)
+	{
+		if (glfwGetInputMode(glfw_window, GLFW_CURSOR) != GLFW_CURSOR_DISABLED)
+		{
+			glfwSetInputMode(glfw_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+		}
+	}
+
+	window_state.cursor_enabled = false;
+}

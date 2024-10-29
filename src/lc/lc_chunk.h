@@ -1,9 +1,8 @@
 #pragma once
 
 #include <cglm/cglm.h>
-#include "utility/dynamic_array.h"
-#include <open_simplex_noise_in_c/open-simplex-noise.h>
-#include "physics/p_physics_defs.h"
+#include <stdint.h>
+#include "render/r_renderer.h"
 
 #define LC_CHUNK_WIDTH 16
 #define LC_CHUNK_HEIGHT 16
@@ -12,34 +11,88 @@
 
 #define LC_BLOCK_STARTING_HP 7
 
-
-
-typedef struct LC_Block
+typedef enum
 {
-	int8_t hp;
-	uint8_t type;	
+	LC_Biome_None,
+	LC_Biome_SnowyMountains,
+	LC_Biome_RockyMountains,
+	LC_Biome_GrassyPlains,
+	LC_Biome_SnowyPlains,
+	LC_Biome_Desert,
+	LC_Biome_Max
+} LC_BiomeType;
+
+typedef struct
+{
+	int8_t position[3];
+	int8_t packed_norm_hp;
+	uint8_t block_type;
+} ChunkVertex;
+
+
+typedef struct
+{
+	uint8_t type;
 } LC_Block;
 
-typedef struct LC_Chunk
+typedef struct
 {
 	LC_Block blocks[LC_CHUNK_WIDTH][LC_CHUNK_HEIGHT][LC_CHUNK_LENGTH]; //Three dimensional array that stores blocks
 
 	ivec3 global_position; //Global Position of the first block
 
-	size_t vertex_count; //Total Vertex count
+	int opaque_index;
+	int transparent_index;
 
-	size_t vertex_start; //Start of the first vertex belonging to this chunk
+	int draw_cmd_index;
 
-	vec3 box[2]; //AABB of the entire chunk. Used for frustrum culling operations
+	int chunk_data_index;
 
-	int flags;
+	int aabb_tree_index;
 
-	uint16_t alive_blocks; //How many blocks are marked alive
+	int16_t alive_blocks; //How many blocks are actually active
+
+	int16_t opaque_blocks; //Num opaque blocks
+
+	int16_t transparent_blocks; //Num transparent blocks
+	
+	int16_t water_blocks; //Num water blocks
+
+	int16_t light_blocks; //Num blocks that emit light
+
+	size_t vertex_count;
+
+	size_t transparent_vertex_count;
+	
+	bool vertex_loaded;
+
+	bool user_modified;
 
 } LC_Chunk;
 
-void LC_Chunk_CreateEmpty(int p_gX, int p_gY, int p_gZ, LC_Chunk* chunk);
-void LC_Chunk_Generate(int p_gX, int p_gY, int p_gZ, struct osn_context* osn_ctx, LC_Chunk* chunk, int chunk_index, unsigned vbo, unsigned coby_vbo, unsigned* vertex_count);
-void LC_Chunk_Update(LC_Chunk* const p_chunk, int* last_index);
-void LC_Chunk_Destroy(LC_Chunk* chunk);
+typedef struct
+{
+	ChunkVertex* opaque_vertices;
+	ChunkVertex* transparent_vertices;
+} GeneratedChunkVerticesResult;
+
+uint8_t LC_getBlockInheritedType(uint8_t block_type);
+bool LC_isBlockOpaque(uint8_t block_type);
+bool LC_isBlockCollidable(uint8_t block_type);
+bool LC_isblockEmittingLight(uint8_t block_type);
+bool LC_isBlockTransparent(uint8_t block_type);
+bool LC_isBlockWater(uint8_t blockType);
+bool LC_isBlockProp(uint8_t blockType);
+AABB LC_getBlockTypeAABB(uint8_t blockType);
+const char* LC_getBlockName(uint8_t block_type);
+
+LC_BiomeType LC_getBiomeType(float p_x, float p_z);
+void LC_getBiomeNoiseVarianceData(LC_BiomeType p_biome, float* r_surfaceHeightMin, float* r_surfaceHeightMax);
+LC_Chunk LC_Chunk_Create(int p_x, int p_y, int p_z);
+void LC_Chunk_GenerateBlocks(LC_Chunk* const _chunk, int _seed);
+unsigned LC_Chunk_getAliveBlockCount(LC_Chunk* const _chunk);
+GeneratedChunkVerticesResult* LC_Chunk_GenerateVertices(LC_Chunk* const chunk);
+GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chunk);
+unsigned LC_generateBlockInfoGLBuffer();
+void LC_Chunk_CalculateWaterBounds(LC_Chunk* const _chunk, ivec3 dest[2]);
 

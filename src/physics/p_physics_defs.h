@@ -39,8 +39,7 @@ typedef enum Phys_Flags
 {
 	PF__AffectedByGravity = 1 << 0,
 	PF__Collidable = 1 << 1,
-	PF__ForceUpdateOnFrame = 1 << 2,
-	PF__Ducking = 1 << 3
+	PF__Ducking = 1 << 2
 } Phys_Flags;
 
 typedef enum
@@ -58,11 +57,11 @@ typedef struct
 
 	float ground_accel;
 	float air_accel;
-	float flying_accel;
 	float water_accel;
 
 	float ducking_scale;
 	float stop_speed;
+	float flying_speed;
 
 	float jump_height;
 } Phys_Config;

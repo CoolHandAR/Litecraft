@@ -37,12 +37,16 @@ PUBLIC FUNCTIONS
 ~~~~~~~~~~~~~~~~~
 */
 //Print to stdout and console
-void C_Printf(const char* fmt, ...);
+void Core_Printf(const char* fmt, ...);
 void C_ErrorPrintf(ErrorType p_errorType, const char* fmt, ...);
 size_t C_getTicks();
 size_t C_getPhysicsTicks();
 float C_getDeltaTime();
 float C_getPhysDeltaTime();
+double Core_getAlphaBlendTime();
+bool C_CheckForBlockedInputState();
+void C_BlockInputThisFrame();
+
 
 /*
 ~~~~~~~~~~~~~~~~~
@@ -66,7 +70,12 @@ void Window_setHeigth(float p_heigth);
 void Window_getSize(ivec2 r_windowSize);
 void Window_detachGLContext();
 void Window_setGLContext();
+void Window_toggleFullScreen();
+bool Window_isFullScreen();
+bool Window_isCursorEnabled();
 GLFWwindow* Window_getPtr();
+void Window_EnableCursor();
+void Window_DisableCursor();
 
 /*
 ~~~~~~~~~~~~~~~~~

@@ -6,6 +6,7 @@
 #include <cglm/clipspace/persp_rh_zo.h>
 #include <cglm/clipspace/view_rh_zo.h>
 #include "utility/u_math.h"
+#include "core/c_common.h"
 
 R_Camera* current_camera;
 
@@ -75,6 +76,11 @@ void Camera_updateFront(R_Camera* const p_cam)
 
 void Camera_ProcessMouse(R_Camera* const p_cam, double x, double y)
 {
+	if (C_CheckForBlockedInputState())
+	{
+		return;
+	}
+
 	static bool s_FirstMouse = true;
 
 	static float last_x = 0.0f;
@@ -134,6 +140,7 @@ void Camera_ProcessMove(R_Camera* const p_cam, int x, int y)
 
 void Camera_UpdateMatrices(R_Camera* const p_cam, float screen_width, float screen_height)
 {
+	return;
 	vec3 center;
 	glm_vec3_add(p_cam->data.position, p_cam->data.camera_front, center);
 

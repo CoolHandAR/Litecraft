@@ -1,0 +1,75 @@
+#version 460 core
+
+layout (local_size_x = 16, local_size_y = 1, local_size_z = 1) in;
+
+struct DrawArraysIndirectCommand
+{
+    uint count;
+    uint instanceCount;
+    uint first;
+    uint baseInstance;
+};
+
+struct Chunk_info_data
+{
+    vec4 min_point;
+    uint vertex_start;
+    uint vertex_count;
+};
+
+layout(std430, binding = 6) writeonly restrict buffer DRAW_BUFFER_CMDS
+{
+    DrawArraysIndirectCommand cmds[];
+};
+layout(std430, binding = 21) writeonly restrict buffer DISSOCLUDED_BUFFER_CMDS
+{
+    DrawArraysIndirectCommand data[];
+} dissocluded;
+
+layout(std430, binding = 8) readonly restrict buffer Chunks_info
+{
+   Chunk_info_data chunk_data[];
+};
+
+layout(std430, binding = 19) readonly restrict buffer VisibleChunkIndexes
+{
+    int data[];
+} visible_chunks;
+
+layout(std430, binding = 19) readonly restrict buffer PrevVisChunkIndexes
+{
+    int data[];
+} prev_visible_chunks;
+layout(binding = 0) uniform atomic_uint atomic_counter;
+layout(binding = 0) uniform atomic_uint dissocluded_counter;
+
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+
+    if(index >= 2)
+        return;
+
+    int visible = visible_chunks.data[index];
+
+    if(visible == 0)
+    {
+        return;
+    }
+
+    Chunk_info_data c_data = chunk_data[index];
+
+    DrawArraysIndirectCommand command;
+    command.count = c_data.vertex_count;
+    command.first = c_data.vertex_start;
+    command.instanceCount = 1;
+    command.baseInstance = 0;
+
+    cmds[atomicCounterIncrement(atomic_counter)] = command;     
+
+    if(prev_visible_chunks.data[index] == 1)
+        return;
+
+    dissocluded.data[atomicCounterIncrement(dissocluded_counter)] = command;
+}

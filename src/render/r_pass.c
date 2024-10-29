@@ -11,111 +11,85 @@ extern R_BackendData* backend_data;
 extern R_Cvars r_cvars;
 extern R_Scene scene;
 
+extern void Render_OpaqueScene(RenderPassState rpass_state);
+extern void Render_SemiOpaqueScene(RenderPassState rpass_state);
 extern void Render_Quad();
-extern void Render_OpaqueWorldChunks(bool p_TextureDraw);
-extern void Render_TransparentWorldChunks();
 extern void Render_Cube();
 extern void Render_DebugScene();
+extern void Render_Particles();
 extern void Render_DrawChunkOcclusionBoxes();
+extern void Render_UI();
+extern void Init_SetupGLBindingPoints();
 
-typedef enum
+
+static void Pass_GetRoundedDispatchGroupsForScreen(float p_x, float p_y, float p_xLocal, float p_yLocal, unsigned* r_x, unsigned* r_y)
 {
-	RPS__DEPTH_PREPASS,
-	RPS__SHADOW_MAPPING_PASS,
-	RPS__GBUFFER_PASS,
-	RPS__DEBUG_PASS,
-} RenderPassState;
-
-static void Render_OpaqueScene(RenderPassState rs)
-{
-	switch (rs)
-	{
-	case RPS__DEPTH_PREPASS:
-	{
-		//Render opaque world chunks
-		glUseProgram(pass->lc.depthPrepass_shader);
-		Render_OpaqueWorldChunks(false);
-		
-		//Render other opaque stuff
-
-		break;
-	}
-	case RPS__GBUFFER_PASS:
-	{
-		//Render opaque world chunks
-		glUseProgram(pass->lc.gBuffer_shader);
-		Render_OpaqueWorldChunks(true);
-
-		//Render other opaque stuff
-
-		break;
-	}
-	case RPS__SHADOW_MAPPING_PASS:
-	{
-		//Render opaque world chunks
-		glUseProgram(pass->lc.shadow_map_shader);
-		Render_OpaqueWorldChunks(false);
-
-		//Render other opaque stuff
-
-		break;
-	}
-	case RPS__DEBUG_PASS:
-	{
-		break;
-	}
-	default:
-		break;
-	}
+	*r_x = ceilf(p_x / p_xLocal);
+	*r_y = ceilf(p_y / p_yLocal);
 }
 
-static void Pass_depthPrepass()
-{
-	//Disable color mask since we are only writing to the depth buffer
-	glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-	
-	//draw all opaque objects
-	Render_OpaqueScene(RPS__DEPTH_PREPASS);
-
-	//Enable color mask again
-	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-}
 
 static void Pass_shadowMap()
 {
-	//if (!r_cvars.r_useDirShadowMapping->int_value)
-		//return;
+	if (!r_cvars.r_useDirShadowMapping->int_value)
+		return;
 
-	glDepthFunc(GL_LESS);
-	glEnable(GL_DEPTH_TEST);
-	glUseProgram(pass->shadow.depth_shader);
+	bool allow_transparent_shadows = (r_cvars.r_allowTransparentShadows->int_value == 1);
+	bool allow_particle_shadows = (r_cvars.r_allowParticleShadows->int_value == 1);
 
 	glBindFramebuffer(GL_FRAMEBUFFER, pass->shadow.FBO);
-
+	glEnable(GL_CULL_FACE);
+	glEnable(GL_DEPTH_CLAMP);
+	glEnable(GL_DEPTH_TEST);
 	glViewport(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+	glDisable(GL_BLEND);
+	glCullFace(GL_FRONT);
+	glEnable(GL_POLYGON_OFFSET_FILL);
 
-	glClear(GL_DEPTH_BUFFER_BIT);
+	for (int i = 0; i < 4; i++)
+	{
+		glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, pass->shadow.moment_maps, 0, i);
+		glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, pass->shadow.depth_maps, 0, i);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-	Render_OpaqueScene(RPS__SHADOW_MAPPING_PASS);
+		Render_OpaqueScene(RPass__SHADOW_MAPPING_SPLIT1 + i);
+
+		if (allow_transparent_shadows)
+		{
+			Render_SemiOpaqueScene(RPass__SHADOW_MAPPING_SPLIT1 + i);
+		}
+		if (allow_particle_shadows)
+		{
+			glUseProgram(pass->particles.particle_shadow_map_shader);
+			Shader_SetMatrix4(pass->particles.particle_shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[i]);
+			Render_Particles();
+		}
+
+	}
+	glDisable(GL_POLYGON_OFFSET_FILL);
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_BACK);
+	glDisable(GL_DEPTH_CLAMP);
 
 	glViewport(0, 0, backend_data->screenSize[0], backend_data->screenSize[1]);
 }
 
 static void Pass_gBuffer()
 {
-	//glDepthFunc(GL_EQUAL); //Skip occluded pixels since we did the depth pre pass already
-
-	 glDepthFunc(GL_LESS);
-	
-	 glEnable(GL_DEPTH_TEST);
-
 	//make sure we disable blend, even if we disabled it before
 	glDisable(GL_BLEND);
-
+	
 	//draw opaque scene
-	Render_OpaqueScene(RPS__GBUFFER_PASS);
+	Render_OpaqueScene(RPass__GBUFFER);
 
-	//glDepthFunc(GL_LESS);
+	//draw semi opaque scene
+	Render_SemiOpaqueScene(RPass__GBUFFER);
+}
+
+static void Pass_downsample()
+{
+	glBlitNamedFramebuffer(pass->deferred.FBO, pass->general.halfsize_fbo, 0, 0, backend_data->screenSize[0], backend_data->screenSize[1], 0, 0,
+			backend_data->halfScreenSize[0], backend_data->halfScreenSize[1], GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
 }
 
 static void Pass_AO()
@@ -126,50 +100,69 @@ static void Pass_AO()
 	int viewport_width = backend_data->screenSize[0];
 	int viewport_height = backend_data->screenSize[1];
 	
+	unsigned normal_tex = pass->deferred.gNormalMetal_texture;
+	unsigned depth_tex = pass->deferred.depth_texture;
 	if (r_cvars.r_ssaoHalfSize->int_value)
 	{
-		glViewport(0, 0, backend_data->halfScreenSize[0], backend_data->halfScreenSize[1]);
+		viewport_width >>= 1;
+		viewport_height >>= 1;
 
-		viewport_width = backend_data->halfScreenSize[0];
-		viewport_height = backend_data->halfScreenSize[1];
+		//Downsample depth and normal to half size
+		Pass_downsample();
+		
+		normal_tex = pass->general.normal_halfsize_texture;
+		depth_tex = pass->general.depth_halfsize_texture;
 	}
+	unsigned dispatch_x = 1;
+	unsigned dispatch_y = 1;
+	Pass_GetRoundedDispatchGroupsForScreen(viewport_width, viewport_height, 8, 8, &dispatch_x, &dispatch_y);
 
 	//SSAO 
-	glBindFramebuffer(GL_FRAMEBUFFER, pass->ao.FBO);
-	//glClearColor(0, 0, 0, 0);
-	//glDisable(GL_DEPTH_TEST);
-	//glDisable(GL_BLEND);
-	//glDisable(GL_CULL_FACE);
-	//glDisable(GL_STENCIL_TEST);
-	glClear(GL_COLOR_BUFFER_BIT);
-
-	glBindTextureUnit(0, pass->deferred.depth_texture);
+	glBindTextureUnit(0, depth_tex);
 	glBindTextureUnit(1, pass->ao.noise_texture);
-	glBindTextureUnit(2, pass->deferred.gNormalMetal_texture);
+	glBindTextureUnit(2, normal_tex);
 
 	glUseProgram(pass->ao.shader);
-	Shader_SetVector2f(pass->ao.shader, "u_viewportSize", viewport_width, viewport_height);
+	Shader_SetVector2f(pass->ao.shader, "u_viewportSize", backend_data->screenSize[0], backend_data->screenSize[1]);
+	Shader_SetFloat(pass->ao.shader, "u_uvMultiplier", (r_cvars.r_ssaoHalfSize->int_value) ? 2.0 : 1.0);
 
-	Render_Quad();
+	glBindImageTexture(0, pass->ao.ao_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8);
+
+	glDispatchCompute(dispatch_x, dispatch_y, 1);
+	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
 	//Box Blur the ssao texture
-	glBindFramebuffer(GL_FRAMEBUFFER, pass->ao.BLURRED_FBO);
-	glClear(GL_COLOR_BUFFER_BIT);
 	glUseProgram(pass->general.box_blur_shader);
 	glBindTextureUnit(0, pass->ao.ao_texture);
+	glBindImageTexture(0, pass->ao.blurred_ao_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8);
 	Shader_SetInteger(pass->general.box_blur_shader, "u_size", 2);
-	Render_Quad();
 
-	//make sure to reset the viewport size if it was changed
+	glDispatchCompute(dispatch_x, dispatch_y, 1);
+	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+
+	//Upsample the texture if needed
 	if (r_cvars.r_ssaoHalfSize->int_value)
 	{
-		glViewport(0, 0, backend_data->screenSize[0], backend_data->screenSize[1]);
+		dispatch_x = 1;
+		dispatch_y = 1;
+		Pass_GetRoundedDispatchGroupsForScreen(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8, &dispatch_x, &dispatch_y);
+
+		glUseProgram(pass->general.copy_shader);
+		glBindTextureUnit(0, pass->ao.blurred_ao_texture);
+		glBindImageTexture(0, pass->ao.ao_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8);
+
+		Shader_SetVector2f(pass->general.copy_shader, "u_viewportSize", backend_data->screenSize[0], backend_data->screenSize[1]);
+		Shader_SetFloat(pass->general.copy_shader, "u_uvMultiplier", 0.5);
+
+		glDispatchCompute(dispatch_x, dispatch_y, 1);
+		glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 	}
 }
 static void Pass_BloomTextureSample()
 {
-	//if (!r_cvars.r_useBloom->int_value)
-		//return;
+	if (!r_cvars.r_useBloom->int_value)
+		return;
 
 	glBindFramebuffer(GL_FRAMEBUFFER, pass->bloom.FBO);
 
@@ -200,7 +193,7 @@ static void Pass_BloomTextureSample()
 
 	//Upsample
 	glUseProgram(pass->general.upsample_shader);
-	Shader_SetFloat(pass->general.upsample_shader, "u_filterRadius", 0.0001);
+	Shader_SetFloat(pass->general.upsample_shader, "u_filterRadius", 0.1);
 
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_ONE, GL_ONE);
@@ -225,9 +218,26 @@ static void Pass_BloomTextureSample()
 	glViewport(0, 0, backend_data->screenSize[0], backend_data->screenSize[1]);
 }
 
+static void Pass_DepthOfField()
+{
+	if (!r_cvars.r_useDepthOfField->int_value)
+		return;
+
+	glUseProgram(pass->general.box_blur_shader);
+	
+	glBindTextureUnit(0, pass->scene.MainSceneColorBuffer);
+	glBindImageTexture(0, pass->dof.dof_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+	Shader_SetInteger(pass->general.box_blur_shader, "u_size", 6);
+
+	glDispatchCompute(backend_data->screenSize[0] / 8, backend_data->screenSize[1] / 8, 1);
+	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+}
+
 static void Pass_deferredShading()
 {
 	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_BLEND);
+	glDisable(GL_STENCIL_TEST);
 
 	//use shader
 	glUseProgram(pass->deferred.shading_shader);
@@ -236,13 +246,14 @@ static void Pass_deferredShading()
 	glBindTextureUnit(0, pass->deferred.gNormalMetal_texture);
 	glBindTextureUnit(1, pass->deferred.gColorRough_texture);
 	glBindTextureUnit(2, pass->deferred.depth_texture);
-	glBindTextureUnit(3, pass->ao.ao_texture);
-	glBindTextureUnit(4, pass->shadow.depth_maps);
+	glBindTextureUnit(3, (r_cvars.r_ssaoHalfSize->int_value == 1) ? pass->ao.ao_texture : pass->ao.blurred_ao_texture);
+	glBindTextureUnit(4, pass->shadow.moment_maps);
+	glBindTextureUnit(5, pass->shadow.depth_maps);
 	
 	//IBL Textures
-	glBindTextureUnit(5, pass->ibl.brdfLutTexture);
-	glBindTextureUnit(6, pass->ibl.irradianceCubemapTexture);
-	glBindTextureUnit(7, pass->ibl.prefilteredCubemapTexture);
+	glBindTextureUnit(6, pass->ibl.brdfLutTexture);
+	glBindTextureUnit(7, pass->ibl.irradianceCubemapTexture);
+	glBindTextureUnit(8, pass->ibl.prefilteredCubemapTexture);
 
 	//draw quad
 	Render_Quad();
@@ -279,43 +290,44 @@ static void Pass_Skybox()
 	glDepthMask(GL_TRUE);
 }
 
-static void Pass_TransparentForward()
+
+static void Pass_Transparents()
 {	
-	//Disable cull face, so that transparent faces don't dissapear
-	glDisable(GL_CULL_FACE);
-
-	glEnable(GL_BLEND);
-
 	//Render Transparent objects
-	//World Chunks
-	//glUseProgram(pass->lc.transparents_forward_pbr_shader);
-	Render_TransparentWorldChunks();
-
-	//Render other objects
-
-	//render water
-	
-	//render particles
 
 	glEnable(GL_CULL_FACE);
+	//Render_TransparentScene(RPS__STANDART_PASS);
+
+	glEnable(GL_BLEND);
+	//Render other objects
+	//render water
+	
+
+	
+	//render particles
+	glDisable(GL_CULL_FACE);
+	glUseProgram(pass->particles.particle_render_shader);
+	Render_Particles();
+
 	glDisable(GL_BLEND);
+	glDepthMask(GL_TRUE);
+	glDepthFunc(GL_LESS);
+
 }
 
-static void Pass_OcclussionBoxes()
+void Pass_OcclussionBoxes()
 {
 	glUseProgram(pass->lc.occlussion_boxes_shader);
-	glDisable(GL_CULL_FACE);
+	glDisable(GL_CULL_FACE); //always disable cull face, causes lots of issues otherwise
 	glEnable(GL_DEPTH_TEST);
 	glDepthMask(GL_FALSE);
 	glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
 	glEnable(GL_POLYGON_OFFSET_FILL);
 	glPolygonOffset(-1, -1);
 
-	//glViewport(0, 0, 1, 1);
 	Render_DrawChunkOcclusionBoxes();
 
-	//glViewport(0, 0, backend_data->screenSize[0], backend_data->screenSize[1]);
-	//glEnable(GL_CULL_FACE);
+	glEnable(GL_CULL_FACE);
 	glDepthMask(GL_TRUE);
 	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 	glDisable(GL_POLYGON_OFFSET_FILL);
@@ -333,7 +345,7 @@ static void Pass_PostProcess()
 	//draw the debug texture if needed
 	if (r_cvars.r_drawDebugTexture->int_value > -1)
 	{
-		//-1 disabled, 0 = Normal, 1 = Albedo, 2 = Depth, 3 = Metal, 4 = Rough, 5 = AO, 6 = BLOOM
+		//-1 disabled, 0 = Normal, 1 = Albedo, 2 = Depth, 3 = Metal, 4 = Rough, 5 = AO, 6 = Bloom
 		glUseProgram(pass->post.debug_shader);
 
 		Shader_SetInteger(pass->post.debug_shader, "u_selection", r_cvars.r_drawDebugTexture->int_value);
@@ -350,6 +362,7 @@ static void Pass_PostProcess()
 		glBindTextureUnit(0, pass->deferred.depth_texture);
 		glBindTextureUnit(1, pass->scene.MainSceneColorBuffer);
 		glBindTextureUnit(2, pass->bloom.mip_textures[0]);
+		glBindTextureUnit(3, pass->dof.dof_texture);
 		glUseProgram(pass->post.post_process_shader);
 	}
 	glDisable(GL_DEPTH_TEST);
@@ -358,6 +371,10 @@ static void Pass_PostProcess()
 	Render_Quad();
 }
 
+static void Pass_UI()
+{
+	Render_UI();
+}
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -370,24 +387,19 @@ void Pass_Main()
 	glClearColor(0, 0, 0, 0);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-	//Render all opaque objects into the depth buffer
-	//Pass_depthPrepass();
-
-	unsigned query = 0;
-	glGenQueries(1, &query);
-	glBeginQuery(GL_PRIMITIVES_GENERATED, query);
+	//Setup pre opaque render gl state
+	glEnable(GL_DEPTH_TEST);
+	glEnable(GL_CULL_FACE);
+	glDepthFunc(GL_LESS);
+	
 	///Render all opaque objects into g buffers
 	Pass_gBuffer();
-	glEndQuery(GL_PRIMITIVES_GENERATED);
-
-	int result = 0;
-	glGetQueryObjectiv(query, GL_QUERY_RESULT, &result);
-
-	printf("%i \n", result);
 	
-	//Opaque shadow mapping pass
+	//shadow mapping pass
 	Pass_shadowMap();
 
+	glDisable(GL_CULL_FACE);
+	
 	//SSAO pass, blur pass
 	Pass_AO();
 
@@ -402,30 +414,37 @@ void Pass_Main()
 	//Render skybox
 	Pass_Skybox();
 
-	//Downsample and then upsample the scene's color buffer for bloom effect
-	Pass_BloomTextureSample();
-
 	//Render boxes for oclussion culling
 	Pass_OcclussionBoxes();
 
-	//Render all transparent objects into the main's scene Buffer
-	//Pass_TransparentForward();
+	//Render all transparent objects
+	Pass_Transparents();
 
-	//Blit and blur the main scene buffer for Depth of field effects
+	glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
 
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_BLEND);
+
+	//Blur the main scene buffer for Depth of field effects
+	Pass_DepthOfField();
 	
+	glEnable(GL_DEPTH_TEST);
+	//Draw debug stuff
+	Pass_DebugPass();
 
 	//Bind to the default framebuffer
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	//Downsample and then upsample the scene's color buffer for bloom effect
+	Pass_BloomTextureSample();
 	
 	//Post process pass
 	Pass_PostProcess();
 
-	
-	//Draw debug stuff
-	//Pass_DebugPass();
+	//Render UI and other top level sprites
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glEnable(GL_BLEND);
 
-
-	//Render UI And other sprites
+	Pass_UI();
 }

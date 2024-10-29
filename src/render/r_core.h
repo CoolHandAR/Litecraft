@@ -7,13 +7,12 @@
 #include <string.h>
 #include <cglm/cglm.h>
 #include <glad/glad.h>
-
+#include "utility/u_math.h"
 #include "utility/u_utility.h"
-#include "r_sprite.h"
 #include "r_shader.h"
 #include "r_model.h"
 #include "core/cvar.h"
-#include "lc2/lc_world.h"
+#include "lc/lc_world.h"
 
 /*
 * ~~~~~~~~~~~~~~~~~~~~
@@ -22,7 +21,7 @@
 */
 typedef struct
 {
-	vec2 position;
+	vec3 position;
 	vec2 tex_coords;
 	unsigned packed_texIndex_Flags;
 	uint8_t color[4];
@@ -33,6 +32,14 @@ typedef struct
 	vec3 position;
 	uint8_t color[4];
 } BasicVertex;
+
+typedef struct
+{
+	vec3 position;
+	uint8_t color[4];
+	vec2 texOffset;
+	int texture_index;
+} TriangleVertex;
 
 typedef struct
 {
@@ -74,8 +81,13 @@ typedef enum
 typedef struct
 {
 	R_CMD_ProjectionType proj_type;
-	R_Sprite* sprite_ptr;
-} R_CMD_DrawSprite;
+	R_Texture* texture;
+	M_Rect2Df texture_region;
+	vec2 position;
+	vec2 scale;
+	vec4 color;
+	float rotation;
+} R_CMD_DrawTexture;
 
 typedef struct
 {
@@ -98,6 +110,14 @@ typedef struct
 	AABB aabb;
 	vec4 color;
 } R_CMD_DrawAABB;
+
+typedef struct
+{
+	vec3 box[2];
+	vec4 color;
+	M_Rect2Df texture_region;
+	R_Texture* texture;
+} R_CMD_DrawTextureCube;
 
 typedef struct 
 {
@@ -135,8 +155,9 @@ typedef struct
 typedef enum R_CMD
 {
 	//DRAWING
-	R_CMD__SPRITE,
+	R_CMD__TEXTURE,
 	R_CMD__AABB,
+	R_CMD__TEXTURED_CUBE,
 	R_CMD__TEXT,
 	R_CMD__LINE,
 	R_CMD__TRIANGLE,
@@ -202,9 +223,12 @@ typedef struct
 
 typedef struct
 {
-	BasicVertex vertices[TRIANGLE_VERTICES_BUFFER_SIZE];
+	TriangleVertex vertices[TRIANGLE_VERTICES_BUFFER_SIZE];
 	size_t vertices_count;
 	unsigned vao, vbo;
+
+	unsigned texture_ids[32];
+	int texture_index;
 } R_TriangleDrawData;
 
 #define TEXT_VERTICES_BUFFER_SIZE 1024
@@ -223,6 +247,19 @@ typedef struct
 	bool draw;
 	bool offset_update_consumed;
 	WorldRenderData* world_render_data;
+	dynamic_array* opaque_draw_cmds_array;
+
+	dynamic_array* shadow_firsts[4];
+	dynamic_array* shadow_counts[4];
+
+	dynamic_array* shadow_firsts_transparent[4];
+	dynamic_array* shadow_counts_transparent[4];
+
+	dynamic_array* shadow_sorted_chunk_indexes;
+	dynamic_array* shadow_sorted_chunk_transparent_indexes;
+
+	int shadow_sorted_chunk_offsets[4];
+	int shadow_sorted_chunk_transparent_offsets[4];
 } R_LCWorldDrawData;
 
 typedef struct
@@ -248,6 +285,8 @@ typedef struct
 	R_Shader transparents_forward_shader;
 	R_Shader chunk_process_shader;
 	R_Shader occlussion_boxes_shader;
+	R_Shader transparents_shadow_map_shader;
+	R_Shader transparents_gBuffer_shader;
 } RPass_LCSpecificData;
 
 typedef struct
@@ -267,14 +306,17 @@ typedef struct
 	unsigned FBO;
 	unsigned MainSceneColorBuffer;
 
+	unsigned transparent_FBO;
+	unsigned transparent_accum_texture;
+	unsigned transparent_reveal_texture;
+
 	R_Shader skybox_shader;
+	R_Shader oit_composite_shader;
 } RPass_MainScene;
 
 typedef struct
 {
 	R_Shader shader;
-	unsigned FBO;
-	unsigned BLURRED_FBO;
 	unsigned ao_texture;
 	unsigned blurred_ao_texture;
 	unsigned noise_texture;
@@ -287,6 +329,13 @@ typedef struct
 	unsigned mip_textures[BLOOM_MIP_COUNT];
 	vec2 mip_sizes[BLOOM_MIP_COUNT];
 } RPass_Bloom;
+
+typedef struct
+{
+	unsigned FBO;
+	unsigned dof_texture;
+	R_Shader bohek_blur_shader;
+} RPass_DOF;
 
 typedef struct
 {
@@ -307,10 +356,30 @@ typedef struct
 
 typedef struct
 {
+	R_Shader particle_process_shader;
+	R_Shader emitter_process_shader;
+	R_Shader particle_render_shader;
+	R_Shader particle_shadow_map_shader;
+
+	int total_particle_amount;
+	int total_emitter_amount;
+
+	unsigned texture_ids[32];
+} RPass_Particles;
+
+typedef struct
+{
 	R_Shader basic_3d_shader;
+	R_Shader triangle_3d_shader;
 	R_Shader box_blur_shader;
 	R_Shader upsample_shader;
+	R_Shader copy_shader;
 	R_Shader downsample_shader;
+	R_Shader depth_downsample_shader;
+
+	unsigned halfsize_fbo;
+	unsigned depth_halfsize_texture;
+	unsigned normal_halfsize_texture;
 }RPass_General;
 
 typedef struct
@@ -321,14 +390,16 @@ typedef struct
 
 #define SHADOW_CASCADE_LEVELS 4
 #define LIGHT_MATRICES_COUNT 5
-#define SHADOW_MAP_SIZE 1280
+#define SHADOW_MAP_SIZE 2048
 typedef struct
 {
 	R_Shader depth_shader;
 	unsigned FBO;
+	unsigned moment_maps;
 	unsigned depth_maps;
-	unsigned light_space_matrices_ubo;
 	vec4 cascade_levels;
+	mat4 cascade_projections[4];
+	float split_bias_scales[4];
 } RPass_ShadowMappingData;
 
 typedef struct
@@ -339,9 +410,11 @@ typedef struct
 	RPass_MainScene scene;
 	RPass_AO ao;
 	RPass_Bloom bloom;
+	RPass_DOF dof;
 	RPass_IBL ibl;
 	RPass_ProcessData post;
 	RPass_ShadowMappingData shadow;
+	RPass_Particles particles;
 } R_RenderPassData;
 
 /*
@@ -421,9 +494,18 @@ typedef struct
 	Cvar* cam_zFar;
 	Cvar* cam_mouseSensitivity;
 
+	//SHADOW
+	Cvar* r_allowParticleShadows;
+	Cvar* r_allowTransparentShadows;
+	Cvar* r_shadowNormalBias;
+	Cvar* r_shadowBias;
+	Cvar* r_shadowVarianceMin;
+	Cvar* r_shadowLightBleedReduction;
+
 	//DEBUG
 	Cvar* r_drawDebugTexture; //-1 disabled, 0 = Normal, 1 = Albedo, 2 = Depth, 3 = Metal, 4 = Rough, 5 = AO, 6 = BLOOM
 	Cvar* r_wireframe;
+	Cvar* r_drawPanel;
 } R_Cvars;
 
 /*
@@ -437,6 +519,8 @@ typedef struct
 	float previous_render_time;
 	float previous_fps_timed_time;
 	float frame_ticks_per_second;
+	float frame_time;
+	float prev_frame_time;
 	int fps;
 
 	size_t total_render_frame_count;
@@ -447,6 +531,8 @@ typedef struct
 	SCENE STRUCTS
 * ~~~~~~~~~~~~~~~~~~~
 */
+
+//Must match GL struct
 typedef struct
 {
 	mat4 viewProjectionMatrix;
@@ -462,10 +548,12 @@ typedef struct
 	float z_far;
 }R_SceneCameraData;
 
+//Must match GL struct
 typedef struct
 {	
 	vec4 dirLightColor;
 	vec4 dirLightDirection;
+	vec4 fogColor;
 
 	float dirLightAmbientIntensity;
 	float dirLightSpecularIntensity;
@@ -473,19 +561,54 @@ typedef struct
 	unsigned numPointLights;
 	unsigned numSpotLights;
 	
-	mat4 shadow_matrixes[LIGHT_MATRICES_COUNT];
-	float shadow_splits[LIGHT_MATRICES_COUNT];
+	float fogDensity;
+
+	float depthFogCurve;
+	float depthFogBegin;
+	float depthFogEnd;
+
+	float heightFogCurve;
+	float heightFogMin;
+	float heightFogMax;
+	
+
+	float shadow_light_bleed_reduction;
+	float shadow_variance_min;
+
+	vec4 shadow_splits;
+
+	mat4 shadow_matrixes[4];
 }R_SceneData;
+
+#define MAX_CULL_QUERY_BUFFER_ITEMS 5000
+#define MAX_CULL_LC_SHADOW_QUERY_BUFFER_ITEMS 7000
+typedef struct
+{
+	AABB_FrustrumCullQueryResult lc_world_frustrum_query_buffer[MAX_CULL_QUERY_BUFFER_ITEMS];
+	AABB_FrustrumCullQueryResult lc_world_frustrum_sorted_query_buffer[MAX_CULL_QUERY_BUFFER_ITEMS];
+
+	AABB_FrustrumCullQueryResult lc_world_frustrum_shadow_query_buffer[4][MAX_CULL_LC_SHADOW_QUERY_BUFFER_ITEMS];
+	AABB_FrustrumCullQueryResultTreeData lc_world_frustrum_shadow_sorted_query_buffer[4][MAX_CULL_LC_SHADOW_QUERY_BUFFER_ITEMS];
+
+	unsigned sorted_shadow_chunk_data_indexes[4][5000];
+
+	int lc_world_shadow_cull_count[4];
+	int lc_world_shadow_cull_transparent_count[4];
+
+	int lc_world_in_frustrum_count;
+
+} R_SceneCullData;
 
 typedef struct
 {
 	R_SceneCameraData camera;
 	R_SceneData scene_data;
 
+	R_SceneCullData cull_data;
+
 	unsigned camera_ubo;
 	unsigned scene_ubo;
-
-	float shadow_splits[5];
+	unsigned shadow_ubo;
 
 	bool dirty_cam;
 }R_Scene;
@@ -528,14 +651,50 @@ typedef struct
 */
 typedef struct
 {
+	int* particle_update_queue[256];
+	int particle_update_index;
+
+	FL_Head* particle_emitter_clients;
+
+	RenderStorageBuffer instances;
 	RenderStorageBuffer point_lights;
 	DynamicRenderBuffer mesh_vertices;
 	DynamicRenderBuffer mesh_indices;
-	RenderStorageBuffer particles;
+	DynamicRenderBuffer particles;
 	RenderStorageBuffer particle_emitters;
+	DynamicRenderBuffer collider_boxes;
 	RenderStorageBuffer materials;
 	RenderStorageBuffer texture_handles;
 	RenderStorageBuffer draw_elements_commands;
 } R_StorageBuffers;
+
+
+/*
+* ~~~~~~~~~~~~~~~~~~~~
+	INTERNAL FUNCTIONS
+	r_internal.c
+* ~~~~~~~~~~~~~~~~~~~
+*/
+void RInternal_UpdatePostProcessShader(bool p_recompile);
+void RInternal_UpdateDeferredShadingShader(bool p_recompile);
+
+/*
+* ~~~~~~~~~~~~~~~~~~~~
+	INTERNAL ENUMS
+* ~~~~~~~~~~~~~~~~~~~
+*/
+typedef enum
+{
+	RPass__STANDART,
+	RPass__DEPTH_PREPASS,
+	RPass__GBUFFER,
+	RPass__SHADOW_MAPPING_SPLIT1,
+	RPass__SHADOW_MAPPING_SPLIT2,
+	RPass__SHADOW_MAPPING_SPLIT3,
+	RPass__SHADOW_MAPPING_SPLIT4,
+	RPass__DEBUG_PASS,
+} RenderPassState;
+
+
 
 #endif // R_CORE_H

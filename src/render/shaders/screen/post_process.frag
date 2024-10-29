@@ -1,5 +1,8 @@
 #version 460 core
 
+#include "../scene_incl.incl"
+#include "../shader_commons.incl"
+
 layout(location = 0) out vec4 FragColor;
 
 in vec2 TexCoords;
@@ -7,7 +10,7 @@ in vec2 TexCoords;
 uniform sampler2D depth_texture;
 uniform sampler2D MainSceneTexture;
 uniform sampler2D BloomSceneTexture;
-uniform sampler2D BlurredSceneTexture;
+uniform sampler2D DofSceneTexture;
 
 uniform float u_Gamma;
 uniform float u_Exposure = 0.6;
@@ -15,6 +18,17 @@ uniform float u_BloomStrength;
 uniform float u_Brightness;
 uniform float u_Contrast;
 uniform float u_Saturation;
+
+//Fog
+uniform vec3 u_fogColor;
+uniform float u_fogDensity;
+uniform float u_heightFogMin;
+uniform float u_heightFogMax;
+uniform float u_heightFogCurve;
+
+uniform float u_depthFogBegin;
+uniform float u_depthFogEnd;
+uniform float u_depthFogCurve;
 
 vec3 Uncharted2ToneMapping(vec3 color, float gamma, float exposure)
 {
@@ -44,15 +58,58 @@ vec3 ReinhardMapping(vec3 color, float gamma, float exposure)
     return mapped;
 }
 
+// Adapted from https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl
+// (MIT License).
+vec3 tonemap_aces(vec3 color, float white) {
+	const float exposure_bias = 1.8f;
+	const float A = 0.0245786f;
+	const float B = 0.000090537f;
+	const float C = 0.983729f;
+	const float D = 0.432951f;
+	const float E = 0.238081f;
+
+	// Exposure bias baked into transform to save shader instructions. Equivalent to `color *= exposure_bias`
+	const mat3 rgb_to_rrt = mat3(
+			vec3(0.59719f * exposure_bias, 0.35458f * exposure_bias, 0.04823f * exposure_bias),
+			vec3(0.07600f * exposure_bias, 0.90834f * exposure_bias, 0.01566f * exposure_bias),
+			vec3(0.02840f * exposure_bias, 0.13383f * exposure_bias, 0.83777f * exposure_bias));
+
+	const mat3 odt_to_rgb = mat3(
+			vec3(1.60475f, -0.53108f, -0.07367f),
+			vec3(-0.10208f, 1.10813f, -0.00605f),
+			vec3(-0.00327f, -0.07276f, 1.07602f));
+
+	color *= rgb_to_rrt;
+	vec3 color_tonemapped = (color * (color + A) - B) / (color * (C * color + D) + E);
+	color_tonemapped *= odt_to_rgb;
+
+	white *= exposure_bias;
+	float white_tonemapped = (white * (white + A) - B) / (white * (C * white + D) + E);
+
+	return color_tonemapped / white_tonemapped;
+}
+
+
 vec3 tonemapColor(vec3 color)
 {   
-    return Uncharted2ToneMapping(color, 1.2, u_Gamma);
+    return Uncharted2ToneMapping(color, u_Gamma, u_Exposure);
+    //return tonemap_aces(color, 2.2);
 }
 
 vec3 applyBloom(vec2 coords, vec3 color, float strength)
 {
     vec3 bloom_color = texture(BloomSceneTexture, coords).rgb;
     return mix(color, bloom_color, strength);
+}
+vec3 applyDepthOfField(vec2 coords, vec3 color, float strength, float u_minDist, float u_maxDist)
+{
+    vec3 dof_color = texture(DofSceneTexture, coords).rgb;
+    float depth = depthToViewSpace(depth_texture, cam.invProj, coords);
+    float focus_depth = depthToViewSpace(depth_texture, cam.invProj, vec2(0.5));
+
+    float blur = smoothstep(u_minDist, u_maxDist, abs(depth - focus_depth));
+
+    return mix(color, dof_color, blur);
 }
 
 vec3 applyBrightnessContrastSaturation(vec3 color, float brightness, float contrast, float saturation)
@@ -63,6 +120,7 @@ vec3 applyBrightnessContrastSaturation(vec3 color, float brightness, float contr
 
 	return color;
 }
+
 // From https://alex.vlachos.com/graphics/Alex_Vlachos_Advanced_VR_Rendering_GDC2015.pdf
 // and https://www.shadertoy.com/view/MslGR8 (5th one starting from the bottom)
 // NOTE: `frag_coord` is in pixels (i.e. not normalized UV).
@@ -76,7 +134,7 @@ vec3 screen_space_dither(vec2 frag_coord)
 	return (dither.rgb - 0.5) / 255.0;
 }
 
-vec3 applyFXXA(vec3 color, float exposure)
+vec3 applyFXAA(vec3 color, float exposure)
 {
 //src https://www.geeks3d.com/20110405/fxaa-fast-approximate-anti-aliasing-demo-glsl-opengl-test-radeon-geforce/3/
 #define FXAA_REDUCE_MIN   (1.0/128.0)
@@ -131,6 +189,54 @@ vec3 applyFXXA(vec3 color, float exposure)
     return rgbB;
 }
 
+vec3 apply_fog(vec3 color, vec2 coords)
+{
+    vec3 ViewPos = depthToViewPos(depth_texture, cam.invProj, coords);
+    vec3 WorldPos = (cam.invView * vec4(ViewPos, 1.0)).xyz;
+
+    float depth = texture(depth_texture, coords).r;
+
+    //Fix for fog being in the skybox
+    if(depth >= 1.0)
+    {
+        //return color;
+    }
+
+    vec3 fog_color = (scene.dirLightColor.rgb * scene.dirLightAmbientIntensity);
+    vec3 emission = vec3(0.0);
+    float fog_amount = 0.0;
+
+    //Depth fog
+   {
+        float fog_depth_begin = scene.depthFogBegin;
+        float fog_depth_end = scene.depthFogEnd;
+
+        float fog_far = fog_depth_end > 0.0 ? fog_depth_end : cam.z_far;
+        float fog_z = smoothstep(fog_depth_begin, fog_far, length(ViewPos.xyz));
+
+        fog_amount = pow(fog_z, scene.depthFogCurve);
+
+        {
+            vec3 total_light = emission + color;
+             float transmit = pow(fog_z, 12);
+            //fog_color = mix(max(total_light, fog_color), fog_color, transmit);
+        }
+
+    }
+
+    //Height fog
+    fog_amount = max(fog_amount, pow(smoothstep(scene.heightFogMin, scene.heightFogMax, WorldPos.y), scene.heightFogCurve));
+
+    fog_amount *= scene.fogDensity;
+    
+    emission = emission * (1.0 - fog_amount) + fog_color * fog_amount;
+
+    color *= 1.0 - fog_amount;
+    color += emission;
+
+    return color;
+}
+
 void main()
 {
     vec3 scene_color = texture(MainSceneTexture, TexCoords).rgb;
@@ -138,12 +244,22 @@ void main()
     //EXPOSURE
     scene_color *= u_Exposure;
 
-    //FXXA
-    scene_color = applyFXXA(scene_color, u_Exposure);
+#ifdef USE_FXAA
+    //FXAA
+    scene_color = applyFXAA(scene_color, u_Exposure);
+#endif
+
+    //FOG
+   // scene_color = apply_fog(scene_color, TexCoords);
 
     //BLOOM
-    scene_color = applyBloom(TexCoords, scene_color, 0.07);
+  //  scene_color = applyBloom(TexCoords, scene_color, 0.01);
 
+#ifdef USE_DEPTH_OF_FIELD
+    //DEPTH OF FIELD
+    scene_color = applyDepthOfField(TexCoords, scene_color, 1.0, 10, 50);
+#endif
+    
     //TONEMAP
     scene_color = tonemapColor(scene_color);
 
@@ -152,6 +268,7 @@ void main()
 
     //DEBANDING
     scene_color.rgb += screen_space_dither(gl_FragCoord.xy);
+
 
     //FINAL COLOR
     FragColor = vec4(scene_color.rgb, 1.0);

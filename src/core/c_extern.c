@@ -15,8 +15,7 @@
 #include "cvar.h"
 #include "render/r_renderer.h"
 
-
-
+#define USE_NEW_RENDERER
 
 
 #define NK_INCLUDE_DEFAULT_FONT
@@ -44,7 +43,8 @@ static int INIT_WINDOW_WIDTH = 1024;
 static int INIT_WINDOW_HEIGHT = 720;
 static const char* WINDOW_NAME = "My window";
 
-extern int r_Init1();
+extern int Renderer_Init(int p_initWidth, int p_initHeight);
+extern void Renderer_Exit();
 extern int Window_Init();
 extern int Sound_Init();
 extern void Sound_Cleanup();
@@ -97,7 +97,7 @@ static void C_initNuklear()
 {
 	memset(&nk, 0, sizeof(NK_Data));
 
-	nk.ctx = nk_glfw3_init(&nk.glfw, glfw_window, NK_GLFW3_INSTALL_CALLBACKS);
+	nk.ctx = nk_glfw3_init(&nk.glfw, glfw_window, NK_GLFW3_DEFAULT);
 
 	struct nk_font_atlas* atlas;
 	nk_glfw3_font_stash_begin(&nk.glfw, &atlas);
@@ -127,9 +127,13 @@ bool C_init()
 	if (!C_initGlad()) return false;
 	if (!Sound_Init()) return false;
 	if (!Cvar_Init()) return false;
-	if (!r_Init()) return false;
 	if (!Input_Init()) return false;
-	//if (!r_Init1()) return false;
+	
+#ifdef USE_NEW_RENDERER
+	if (!Renderer_Init(0, 0)) return false;
+#else 
+	if (!r_Init()) return false;
+#endif
 
 	ThreadCore_Init();
 
@@ -155,4 +159,5 @@ void C_Exit()
 	C_NuklearCleanup();
 	Con_Cleanup();
 	ResourceManager_Cleanup();
+	Renderer_Exit();
 }

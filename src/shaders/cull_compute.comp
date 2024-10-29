@@ -1,6 +1,6 @@
 #version 460 core
 
-layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout (local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
 struct DrawArraysIndirectCommand
 {
@@ -12,7 +12,7 @@ struct DrawArraysIndirectCommand
 
 struct Chunk_info_data
 {
-    vec3 aabb[2];
+    vec4 min_point;
     uint vertex_start;
     uint vertex_count;
 };
@@ -27,7 +27,7 @@ layout(std430, binding = 4) readonly restrict buffer BOUNDS
     vec4 bounds[];
 };
 
-layout(std430, binding = 5) readonly restrict buffer CHUNK_INFO
+layout(std430, binding = 8) readonly restrict buffer CHUNK_INFO
 {
     Chunk_info_data chunk_data[];
 };
@@ -43,34 +43,53 @@ layout(binding = 0) uniform atomic_uint atomic_counter;
 uniform mat4 u_viewProj;
 uniform mat4 u_view;
 uniform mat4 u_proj;
+uniform vec3 u_viewFront;
+uniform vec3 u_viewPos;
+uniform vec3 u_viewUp;
+uniform vec3 u_viewRight;
 
 uniform sampler2D HiZBuffer;
 
+vec4 projectSphere(vec3 C, float r, float znear, float P00, float P11, vec4 aabb)
+{
+	if (C.z < r + znear)
+		return aabb;
+
+	vec2 cx = -C.xz;
+	vec2 vx = vec2(sqrt(dot(cx, cx) - r * r), r);
+	vec2 minx = mat2(vx.x, vx.y, -vx.y, vx.x) * cx;
+	vec2 maxx = mat2(vx.x, -vx.y, vx.y, vx.x) * cx;
+
+	vec2 cy = -C.yz;
+	vec2 vy = vec2(sqrt(dot(cy, cy) - r * r), r);
+	vec2 miny = mat2(vy.x, vy.y, -vy.y, vy.x) * cy;
+	vec2 maxy = mat2(vy.x, -vy.y, vy.y, vy.x) * cy;
+
+	aabb = vec4(minx.x / minx.y * P00, miny.x / miny.y * P11, maxx.x / maxx.y * P00, maxy.x / maxy.y * P11);
+	aabb = aabb.xwzy * vec4(0.5f, -0.5f, 0.5f, -0.5f) + vec4(0.5f); // clip space -> uv space
+
+	return aabb;
+}
 
 void main()
 {
-    uint index = gl_WorkGroupID.x;
+    uint index = gl_GlobalInvocationID.x;
 
-    if(data_SSBO[index] == 1)
-    {
-        DrawArraysIndirectCommand command;
-        command.count = chunk_data[index].vertex_count;
-        command.first = chunk_data[index].vertex_start;
-        command.instanceCount = 1;
-        command.baseInstance = 0;
+    if(index >= 1)
+        return;
 
-        cmds[atomicCounterIncrement(atomic_counter)] = command;
-    }
-
-    /*
+    
     vec4 Bounds = bounds[index];  
     
-    if(Bounds.w < 0)
+    if(Bounds.w <= 0)
     {
         return;
     }
 
+    if(chunk_data[index].vertex_count <= 0)
+        return;
 
+ 
     vec3 view_eye = -vec3(u_view[0].w, u_view[1].w, u_view[2].w);
 
     float CameraSphereDistance = distance( view_eye, Bounds.xyz );
@@ -130,7 +149,7 @@ void main()
         // This will result in a mip level where the object takes up at most
         // 2x2 texels such that the 4 sampled points have depths to compare
         // against.
-    float W = fSphereWidthNDC * max(800, 600);
+    float W = fSphereWidthNDC * max(1024, 720);
     float fLOD = ceil(log2( W ));
 
       // fetch depth samples at the corners of the square to compare against
@@ -154,31 +173,54 @@ void main()
     {
         Visible = 1;
     }
+    vec3 center = Bounds.xyz;
+    //center *= -1;
 
-    //data_SSBO[index] = Visible;
+    vec4 aabb = vec4(-1.0);
+    aabb = projectSphere(center, 32, 0.1, u_proj[0][0], u_proj[1][1], aabb); 
+    if(aabb.x >= 0)
+    {
+            float width = (aabb.z - aabb.x) * 1024;
+			float height = (aabb.w - aabb.y) * 720;
 
-   // Visible = 1;
+			float level = floor(log2(max(width, height)));
 
-   //memoryBarrierAtomicCounter();
+			// Sampler is set up to do min reduction, so this computes the minimum depth of a 2x2 texel quad
+			
+			float depth = textureLod(HiZBuffer, (aabb.xy + aabb.zw) * 0.5, level).x;
+			float depthSphere = 11 / (Bounds.z - 32);
 
-    
-    uint atomic = atomicCounter(atomic_counter);
+			if(depthSphere >= depth)
+            {
+                Visible = 1;
+            }
+    }
+    else 
+    {
+        //Visible = 0;
+    }
 
     if(Visible == 1)
     {
+
+
         DrawArraysIndirectCommand command;
         command.count = chunk_data[index].vertex_count;
         command.first = chunk_data[index].vertex_start;
         command.instanceCount = 1;
         command.baseInstance = 0;
 
-       cmds[atomicCounterIncrement(atomic_counter)] = command;
-        
+      // cmds[atomicCounterIncrement(atomic_counter)] = command;
+        cmds[0] = command;
     }
-   */
-   
+    else
+    {
+        DrawArraysIndirectCommand command;
+        command.count = 0;
+        command.first = 0;
+        command.instanceCount = 0;
+        command.baseInstance = 0;
 
-   
-
-   
+        cmds[0] = command;
+    }
 }

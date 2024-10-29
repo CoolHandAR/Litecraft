@@ -1,7 +1,52 @@
 #include "p_aabb_tree.h"
 #include <assert.h>
+#include <lc/lc_world.h>
+
+//inspired by https://web.archive.org/web/20240328144640/https://www.azurefromthetrenches.com/introductory-guide-to-aabb-tree-collision-detection/
 
 #define AABB_NODE_NULL -1
+
+
+typedef struct
+{
+	int index;
+	int fully_within;
+} LocalStackItem;
+
+//Util
+typedef struct
+{
+	LocalStackItem _arr[64];
+	int _index;
+} LocalIndexStack64;
+
+static inline LocalIndexStack64 LocalIndexStack_Create()
+{
+	LocalIndexStack64 stack;
+	
+	stack._index = 0;
+
+	return stack;
+}
+
+static inline void LocalIndexStack_Push(LocalIndexStack64* p_stack, int p_value, bool p_fullyWithin)
+{
+	LocalStackItem item;
+	item.index = p_value;
+	item.fully_within = p_fullyWithin;
+
+	p_stack->_arr[p_stack->_index] = item;
+	p_stack->_index++;
+}
+static inline void LocalIndexStack_Pop(LocalIndexStack64* p_stack)
+{
+	p_stack->_arr[p_stack->_index].index = -1;
+	p_stack->_index--;
+}
+static inline LocalStackItem LocalIndexStack_GetTop(LocalIndexStack64* p_stack)
+{
+	return p_stack->_arr[p_stack->_index - 1];
+}
 
 typedef struct AABB_Node
 {
@@ -13,11 +58,16 @@ typedef struct AABB_Node
 static void ReleaseNode(AABB_Tree* const p_tree, int p_index)
 {
 	AABB_Node* array = p_tree->nodes->pool->data;
-	memset(&array[p_index], 0, sizeof(AABB_Node));
-	array[p_index].parent = AABB_NODE_NULL;
-	array[p_index].left = AABB_NODE_NULL;
-	array[p_index].right = AABB_NODE_NULL;
-	Object_Pool_Free(p_tree->nodes, p_index, true);
+	
+	AABB_Node* node = &array[p_index];
+	memset(node, 0, sizeof(AABB_Node));
+
+	node->parent = AABB_NODE_NULL;
+	node->left = AABB_NODE_NULL;
+	node->right = AABB_NODE_NULL;
+	node->data = NULL;
+
+	Object_Pool_Free(p_tree->nodes, p_index, false);
 }
 
 static void fixUpwardsTree(AABB_Tree* const p_tree, int p_index)
@@ -72,7 +122,7 @@ static void insertLeaf(AABB_Tree* const p_tree, int p_index)
 		AABB_MergeWith(&itr_node->box, &leaf_node->box, &combined_aabb);
 
 		float new_parent_cost = 2.0f * AABB_GetSurfaceArea(&combined_aabb);
-		float min_push_down_cost = 2.0f * (AABB_GetSurfaceArea(&combined_aabb) - AABB_GetSurfaceArea(&itr_node));
+		float min_push_down_cost = 2.0f * (AABB_GetSurfaceArea(&combined_aabb) - AABB_GetSurfaceArea(&itr_node->box));
 
 		float cost_left = 0;
 		float cost_right = 0;
@@ -246,7 +296,30 @@ int AABB_Tree_Insert(AABB_Tree* const p_tree, AABB* const p_AABB, void* const p_
 void AABB_Tree_Remove(AABB_Tree* const p_tree, int p_index)
 {
 	removeLeaf(p_tree, p_index);
-	Object_Pool_Free(p_tree->nodes, p_index, true);
+	
+	AABB_Node* array = p_tree->nodes->pool->data;
+
+	AABB_Node* node = &array[p_index];
+
+	memset(node, 0, sizeof(AABB_Node));
+	node->left = AABB_NODE_NULL;
+	node->right = AABB_NODE_NULL;
+	node->parent = AABB_NODE_NULL;
+	node->data = NULL;
+
+	Object_Pool_Free(p_tree->nodes, p_index, false);
+}
+
+void* AABB_Tree_GetIndexData(AABB_Tree* const p_tree, int p_index)
+{
+	AABB_Node* node = dA_at(p_tree->nodes->pool, p_index);
+
+	if (!node)
+	{
+		return NULL;
+	}
+
+	return node->data;
 }
 
 dynamic_array* AABB_Tree_QueryOverlaps(AABB_Tree* const p_tree, AABB* const p_AABB, void* const p_data)
@@ -398,4 +471,223 @@ dynamic_array* AABB_Tree_QueryPlaneRay(AABB_Tree* const p_tree, vec3 from, vec3 
 	free(stack);
 
 	return overlaps;
+}
+
+bool AABB_FullPlaneCheck(vec3 box[2], vec4 planes[6])
+{
+	float* p, dp;
+	int    i;
+
+	for (i = 0; i < 6; i++) {
+		p = planes[i];
+		dp = p[0] * box[p[0] < 0.0f][0]
+			+ p[1] * box[p[1] < 0.0f][1]
+			+ p[2] * box[p[2] < 0.0f][2];
+
+		if (dp < -p[3])
+			return false;
+	}
+
+	return true;
+}
+
+bool AABB_FrustrumCheck(vec3 box[2], vec4 planes[6], bool* r_fullyWithin)
+{
+	if (glm_aabb_frustum(box, planes))
+	{
+		if (AABB_FullPlaneCheck(box, planes))
+		{
+			*r_fullyWithin = true;
+			return true;
+		}
+
+		*r_fullyWithin = false;
+		return true;
+	}
+
+	*r_fullyWithin = false;
+
+	return false;
+}
+
+int AABB_Tree_IntersectsFrustrumPlanes(AABB_Tree* const p_tree, vec4 frusturm_planes[6], int p_maxCullCount, AABB_FrustrumCullQueryResult* r_query, AABB_FrustrumCullQueryResult* r_queryVisibles)
+{
+	LocalIndexStack64 stack = LocalIndexStack_Create();
+
+	LocalIndexStack_Push(&stack, p_tree->root, false);
+
+	int hit_count = 0;
+
+	AABB_Node* node_array = p_tree->nodes->pool->data;
+	while (stack._index > 0)
+	{
+		
+		LocalStackItem stack_item = LocalIndexStack_GetTop(&stack);
+		LocalIndexStack_Pop(&stack);
+
+		int node_index = stack_item.index;
+
+		if (node_index == AABB_NODE_NULL)
+			continue;
+
+
+
+		AABB_Node* node = &node_array[node_index];
+
+
+		bool fully_within = false;
+		
+		if (stack_item.fully_within == false)
+		{
+			vec3 box[2];
+			glm_vec3_copy(node->box.position, box[0]);
+			glm_vec3_copy(node->box.position, box[1]);
+
+			box[1][0] += node->box.width;
+			box[1][1] += node->box.height;
+			box[1][2] += node->box.length;
+
+			//failed frustrum check
+			if (!AABB_FrustrumCheck(box, frusturm_planes, &fully_within))
+			{
+				continue;
+			}
+
+			stack_item.fully_within = fully_within;
+
+			
+		}
+
+		if (node->left == AABB_NODE_NULL)
+		{
+			if (hit_count >= p_maxCullCount)
+			{
+				return hit_count;
+			}
+
+			LCTreeData* tree_data = node->data;;
+
+			if (r_query)
+			{
+				int node_index2 = tree_data->chunk_data_index;
+
+				int query_index = node_index2 / 32;
+
+				AABB_FrustrumCullQueryResult* r = &r_query[query_index];
+
+				int local_index = node_index2 % 32;
+
+				r->data |= 1 << local_index;
+			}
+			if (r_queryVisibles)
+			{
+				AABB_FrustrumCullQueryResult* r2 = &r_queryVisibles[hit_count];
+
+				r2->data = tree_data->chunk_data_index;
+
+			}
+
+			hit_count++;
+
+		}
+		else
+		{
+			LocalIndexStack_Push(&stack, node->left, stack_item.fully_within);
+			LocalIndexStack_Push(&stack, node->right, stack_item.fully_within);
+		}
+	}
+
+	return hit_count;
+}
+
+int AABB_Tree_IntersectsFrustrumBox(AABB_Tree* const p_tree, vec3 p_box[2], int p_maxCullCount, AABB_FrustrumCullQueryResult* r_query, AABB_FrustrumCullQueryResult* r_queryVisibles, AABB_FrustrumCullQueryResultTreeData* r_queryVertexIndex)
+{
+	LocalIndexStack64 stack = LocalIndexStack_Create();
+
+	LocalIndexStack_Push(&stack, p_tree->root, false);
+
+	int hit_count = 0;
+
+	AABB_Node* node_array = p_tree->nodes->pool->data;
+	while (stack._index > 0)
+	{
+
+		LocalStackItem stack_item = LocalIndexStack_GetTop(&stack);
+		LocalIndexStack_Pop(&stack);
+
+		int node_index = stack_item.index;
+
+		if (node_index == AABB_NODE_NULL)
+			continue;
+
+
+		AABB_Node* node = &node_array[node_index];
+
+
+		if (stack_item.fully_within == false)
+		{
+			vec3 box[2];
+			glm_vec3_copy(node->box.position, box[0]);
+			glm_vec3_copy(node->box.position, box[1]);
+
+			box[1][0] += node->box.width;
+			box[1][1] += node->box.height;
+			box[1][2] += node->box.length;
+
+			//failed frustrum check
+			if (!glm_aabb_aabb(p_box, box))
+			{
+				continue;
+			}
+
+			stack_item.fully_within = glm_aabb_contains(p_box, box);
+
+		}
+
+		if (node->left == AABB_NODE_NULL)
+		{
+			if (hit_count >= p_maxCullCount)
+			{
+				return hit_count;
+			}
+			LCTreeData* tree_data = node->data;;
+
+			if (r_query)
+			{
+				int node_index2 = tree_data->chunk_data_index;
+
+				int query_index = node_index2 / 32;
+
+				AABB_FrustrumCullQueryResult* r = &r_query[query_index];
+
+				int local_index = node_index2 % 32;
+
+				r->data |= 1 << local_index;
+			}
+			if (r_queryVisibles)
+			{
+				AABB_FrustrumCullQueryResult* r2 = &r_queryVisibles[hit_count];
+
+				r2->data = tree_data->chunk_data_index;
+
+			}
+			if (r_queryVertexIndex)
+			{
+				AABB_FrustrumCullQueryResultTreeData* r2 = &r_queryVertexIndex[hit_count];
+
+				r2->data = tree_data;
+			}
+
+			hit_count++;
+
+			//printf(" fully within %i \n", stack_item.fully_within);
+		}
+		else
+		{
+			LocalIndexStack_Push(&stack, node->left, stack_item.fully_within);
+			LocalIndexStack_Push(&stack, node->right, stack_item.fully_within);
+		}
+	}
+
+	return hit_count;
 }

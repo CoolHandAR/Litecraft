@@ -11,5 +11,7 @@ void main()
 {
     gl_Position = cam.viewProjection * vec4(a_Pos, 1.0);
 
-    Color = vec4(a_Color.r / 255, a_Color.g / 255, a_Color.b / 255, a_Color.a / 255);
+    vec4 fColor = vec4(a_Color);
+
+    Color = vec4(fColor.r / 255.0, fColor.g / 255.0, fColor.b / 255.0, fColor.a / 255.0);
 }

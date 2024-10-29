@@ -1,0 +1,241 @@
+#version 460 core
+
+layout (local_size_x = 8, local_size_y = 8) in;
+
+#define MAX_THICKNESS 0.001
+
+
+uniform sampler2D depth_texture;
+uniform sampler2D g_normal;
+uniform sampler2D g_color;
+uniform mat4 u_proj;
+uniform mat4 u_InverseProj;
+uniform mat4 u_view;
+
+const ivec2 screen_size = ivec2(1280, 720);
+
+ 
+vec3 calcViewPos(vec2 coords)
+{
+    float depth = textureLod(depth_texture, coords, 0).r;
+
+    vec4 ndc = vec4(coords.x * 2.0 - 1.0, coords.y * 2.0 - 1.0, depth, 1.0);
+
+    vec4 view_space = u_InverseProj * ndc;
+
+    view_space.xyz = view_space.xyz / view_space.w;
+
+    return view_space.xyz;
+}
+
+void ComputePosAndReflection2(uvec2 uid, vec3 normalInVs, out vec3 outSamplePosInTS, out vec3 outReflDirInTS, out float outMaxDistance)
+{
+    float sampleDepth = textureLod(depth_texture, uid, 0).r;
+    vec4 samplePosInCS =  vec4(((vec2(uid) + 0.5 ) / screen_size) * 2-1.0, sampleDepth, 1);
+    samplePosInCS.y *= -1;
+
+    vec4 samplePosInVS = u_InverseProj * samplePosInCS;
+    samplePosInVS /= samplePosInVS.w;
+
+    vec3 vCamToSampleInVS = normalize(samplePosInVS.xyz);
+    vec4 vReflectionInVS = vec4(reflect(vCamToSampleInVS.xyz,  normalInVs.xyz),0);
+
+    vec4 vReflectionEndPosInVS = samplePosInVS + vReflectionInVS * 1000;
+	vReflectionEndPosInVS /= (vReflectionEndPosInVS.z < 0 ? vReflectionEndPosInVS.z : 1);
+    vec4 vReflectionEndPosInCS = u_proj * vec4(vReflectionEndPosInVS.xyz, 1);
+    vReflectionEndPosInCS /= vReflectionEndPosInCS.w;
+    vec3 vReflectionDir = normalize((vReflectionEndPosInCS - samplePosInCS).xyz);
+
+    // Transform to texture space
+    samplePosInCS.xy *= vec2(0.5f, -0.5f);
+    samplePosInCS.xy += vec2(0.5f, 0.5f);
+    
+    vReflectionDir.xy *= vec2(0.5f, -0.5f);
+    
+    outSamplePosInTS = samplePosInCS.xyz;
+    outReflDirInTS = vReflectionDir;
+    
+	// Compute the maximum distance to trace before the ray goes outside of the visible area.
+    outMaxDistance = outReflDirInTS.x>=0 ? (1 - outSamplePosInTS.x)/outReflDirInTS.x  : -outSamplePosInTS.x/outReflDirInTS.x;
+    outMaxDistance = min(outMaxDistance, outReflDirInTS.y<0 ? (-outSamplePosInTS.y/outReflDirInTS.y) : ((1-outSamplePosInTS.y)/outReflDirInTS.y));
+    outMaxDistance = min(outMaxDistance, outReflDirInTS.z<0 ? (-outSamplePosInTS.z/outReflDirInTS.z) : ((1-outSamplePosInTS.z)/outReflDirInTS.z));
+}
+
+float FindIntersection_Linear(vec3 samplePosInTS, vec3 vReflDirInTS, float maxTraceDistance, out vec3 outIntersection)
+{
+    vec3 vReflectionEndPosInTS = samplePosInTS + vReflDirInTS * maxTraceDistance;
+    
+    vec3 dp = vReflectionEndPosInTS.xyz - samplePosInTS.xyz;
+    ivec2 sampleScreenPos = ivec2(samplePosInTS.xy * screen_size);
+    ivec2 endPosScreenPos = ivec2(vReflectionEndPosInTS.xy * screen_size);
+    ivec2 dp2 = endPosScreenPos - sampleScreenPos;
+    const uint max_dist = max(abs(dp2.x), abs(dp2.y));
+    dp /= max_dist;
+    
+    vec4 rayPosInTS = vec4(samplePosInTS.xyz + dp, 0);
+    vec4 vRayDirInTS = vec4(dp.xyz, 0);
+	vec4 rayStartPos = rayPosInTS;
+
+    int hitIndex = -1;
+    int max_iterations = 20;
+    for(int i = 0;i<=max_dist && i< max_iterations;i += 4)
+    {
+        float depth0 = 0;
+        float depth1 = 0;
+        float depth2 = 0;
+        float depth3 = 0;
+
+        vec4 rayPosInTS0 = rayPosInTS+vRayDirInTS*0;
+        vec4 rayPosInTS1 = rayPosInTS+vRayDirInTS*1;
+        vec4 rayPosInTS2 = rayPosInTS+vRayDirInTS*2;
+        vec4 rayPosInTS3 = rayPosInTS+vRayDirInTS*3;
+
+        depth3 = textureLod(depth_texture, rayPosInTS3.xy, 0).x;
+        depth2 = textureLod(depth_texture, rayPosInTS2.xy, 0).x;
+        depth1 = textureLod(depth_texture, rayPosInTS1.xy, 0).x;
+        depth0 = textureLod(depth_texture, rayPosInTS0.xy, 0).x;
+
+        {
+            float thickness = rayPosInTS0.z - depth0;
+			if(thickness>=0 && thickness < MAX_THICKNESS)
+			{
+				hitIndex = i+0;
+				break;
+			}
+        }
+		{
+			float thickness = rayPosInTS1.z - depth1;
+			if(thickness>=0 && thickness < MAX_THICKNESS)
+			{
+				hitIndex = i+1;
+				break;
+			}
+		}
+		{
+			float thickness = rayPosInTS2.z - depth2;
+			if(thickness>=0 && thickness < MAX_THICKNESS)
+			{
+				hitIndex = i+2;
+				break;
+			}
+		}
+		{
+			float thickness = rayPosInTS3.z - depth3;
+			if(thickness>=0 && thickness < MAX_THICKNESS)
+			{
+				hitIndex = i+3;
+				break;
+			}
+		}
+
+        if(hitIndex != -1) break;
+
+        rayPosInTS = rayPosInTS3 + vRayDirInTS;
+    }
+
+    bool intersected = hitIndex >= 0;
+    outIntersection = rayStartPos.xyz + vRayDirInTS.xyz * hitIndex;
+	
+	float intensity = intersected ? 1 : 0;
+	
+    return intensity;
+}
+
+vec3 viewSpacePosAtScreenUV(vec2 uv)
+{
+     float depth = textureLod(depth_texture, uv, 0).r;
+    vec3 view_space = (u_InverseProj * (vec4(uv * 2.0 - 1.0, 1.0, 1.0))).xyz;
+
+    return calcViewPos(uv);
+}
+
+vec3 viewSpacePosAtPixelPosition(vec2 vpos)
+{
+    vec2 uv = vpos * textureSize(depth_texture, 0);
+    return viewSpacePosAtScreenUV(uv);
+}
+
+vec3 accurateNormalFromDepth(vec2 coords)
+{   
+    vec2 depth_size = textureSize(depth_texture, 0);
+
+    // screen uv from vpos
+    vec2 uv = coords;
+    //vec2 uv = coords / depth_size;
+
+    // current pixel's depth
+    float c = textureLod(depth_texture, uv, 0).r;
+
+    // get current pixel's view space position
+    vec3 viewSpacePos_c = viewSpacePosAtScreenUV(uv);
+
+    // get view space position at 1 pixel offsets in each major direction
+    vec3 viewSpacePos_l = viewSpacePosAtScreenUV(uv + vec2(-1.0, 0.0) * depth_size);
+    vec3 viewSpacePos_r = viewSpacePosAtScreenUV(uv + vec2( 1.0, 0.0) * depth_size);
+    vec3 viewSpacePos_d = viewSpacePosAtScreenUV(uv + vec2( 0.0,-1.0) * depth_size);
+    vec3 viewSpacePos_u = viewSpacePosAtScreenUV(uv + vec2( 0.0, 1.0) * depth_size);
+
+    // get the difference between the current and each offset position
+    vec3 l = viewSpacePos_c - viewSpacePos_l;
+    vec3 r = viewSpacePos_r - viewSpacePos_c;
+    vec3 d = viewSpacePos_c - viewSpacePos_d;
+    vec3 u = viewSpacePos_u - viewSpacePos_c;
+
+    // get depth values at 1 & 2 pixels offsets from current along the horizontal axis
+    vec4 H = vec4(
+        textureLod(depth_texture, uv - vec2(1 / depth_size.x, 0), 0).r,
+         textureLod(depth_texture, uv + vec2(1 / depth_size.x, 0), 0).r,
+         textureLod(depth_texture, uv - vec2(2 / depth_size.x, 0), 0).r,
+         textureLod(depth_texture, uv + vec2(2 / depth_size.x, 0), 0).r
+    );
+
+    // get depth values at 1 & 2 pixels offsets from current along the vertical axis
+    vec4 V = vec4(
+         textureLod(depth_texture, uv - vec2(0, 1 / depth_size.y), 0).r,
+         textureLod(depth_texture, uv + vec2(0, 1 / depth_size.y), 0).r,
+         textureLod(depth_texture, uv - vec2(0, 2 / depth_size.y), 0).r,
+         textureLod(depth_texture, uv + vec2(0, 2 / depth_size.y), 0).r
+    );
+
+    // current pixel's depth difference from slope of offset depth samples
+    // differs from original article because we're using non-linear depth values
+    // see article's comments
+    vec2 he = abs(H.xy * H.zw * (1 / (2 * H.zw * H.xy)) - 1/c);
+    vec2 ve = abs(V.xy * V.zw * (1 / (2 * V.zw * V.xy)) - 1/c);
+
+    // pick horizontal and vertical diff with the smallest depth difference from slopes
+    vec3 hDeriv = he.x < he.y ? l : r;
+    vec3 vDeriv = ve.x < ve.y ? d : u;
+
+    // get view space normal from the cross product of the best derivatives
+    vec3 viewNormal = normalize(cross(hDeriv, vDeriv));
+
+    return viewNormal;
+}
+
+void main()
+{
+  vec4 normal_color = vec4(0.0);
+  vec3 depth_normal = vec3(0.0);
+  vec4 color = vec4(0.0);
+  vec4 reflection_color = vec4(0.0);
+  int reflection_mask = int(floor(normal_color.a));
+
+  float intensity = 0;
+  vec3 intersection = vec3(0.0);
+  if(reflection_mask == 1)
+  {
+    vec3 sample_pos_in_ts = vec3(0.0);
+    vec3 refl_dir_in_ts = vec3(0.0);
+    float max_trace_distance = 0;
+
+    //ComputePosAndReflection2(tex_coords, normal, sample_pos_in_ts, refl_dir_in_ts, max_trace_distance);
+
+    intensity = FindIntersection_Linear(sample_pos_in_ts, refl_dir_in_ts, max_trace_distance, intersection);
+
+    reflection_color = texture(g_color, intersection.xy) * intensity;
+  }
+ 
+  //fragColor = vec4(intersection * intensity, 1.0);
+  
+}

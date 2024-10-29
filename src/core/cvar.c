@@ -29,15 +29,49 @@ typedef struct CvarCore
 
 static CvarCore s_cvarCore;
 
-static void _updateCvarNumValues(Cvar* p_cvar)
+static void Cvar_CopyNumValueToStrValue(Cvar* p_cvar)
 {
+	int v_len = 0;
+	char value_buf[256];
+	memset(value_buf, 0, sizeof(value_buf));
+
+	//Determine if we should it's a true floating point number or a int one
+	float fraction = fmodf(p_cvar->float_value, 1.0);
+
+	//int type
+	if (fraction == 0)
+	{
+		v_len = snprintf(value_buf, 256, "%i", p_cvar->int_value);
+	}
+	//float type
+	else
+	{
+		v_len = snprintf(value_buf, 256, "%f", p_cvar->float_value);
+	}
+
+	//alloc and copy
+	if (v_len > 0)
+	{
+		p_cvar->str_value = malloc(v_len + 1);
+
+		if (p_cvar->str_value)
+		{
+			strncpy(p_cvar->str_value, value_buf, v_len + 1);
+		}
+	}
+}
+
+static bool _updateCvarNumValues(Cvar* p_cvar, const char* p_strValue)
+{
+	bool num_value = false;
+
 	//check for boolean types
-	if (!_strcmpi(p_cvar->str_value, "true"))
+	if (!_strcmpi(p_strValue, "true"))
 	{
 		p_cvar->int_value = 1;
 		p_cvar->float_value = 1;
 	}
-	else if (!_strcmpi(p_cvar->str_value, "false"))
+	else if (!_strcmpi(p_strValue, "false"))
 	{
 		p_cvar->int_value = 0;
 		p_cvar->float_value = 0;
@@ -45,21 +79,24 @@ static void _updateCvarNumValues(Cvar* p_cvar)
 	else
 	{
 		//both of these functions return 0 if they can't convert the values to a number
-		p_cvar->int_value = strtol(p_cvar->str_value, (char**)NULL, 10);
-		p_cvar->float_value = strtod(p_cvar->str_value, (char**)NULL);
+		p_cvar->int_value = strtol(p_strValue, (char**)NULL, 10);
+		p_cvar->float_value = strtod(p_strValue, (char**)NULL);
 
 		//limit values
 		if (p_cvar->float_value > p_cvar->max_value)
 		{
 			p_cvar->float_value = p_cvar->max_value;
 			p_cvar->int_value = p_cvar->max_value;
+			num_value = true;
 		}
 		else if (p_cvar->float_value < p_cvar->min_value)
 		{
 			p_cvar->float_value = p_cvar->min_value;
 			p_cvar->int_value = p_cvar->min_value;
+			num_value = true;
 		}
 	}
+	return num_value;
 }
 
 static bool _validateString(const char *p_string)
@@ -174,7 +211,7 @@ static Cvar* _createCvar(const char* p_name, const char* p_value, const char* p_
 	var->max_value = p_maxValue;
 	var->modified = true;
 
-	_updateCvarNumValues(var);
+	_updateCvarNumValues(var, p_value);
 
 	var->next = s_cvarCore.next;
 	s_cvarCore.next = var;
@@ -274,8 +311,6 @@ bool Cvar_PrintAllToFile(const char* p_filePath)
 
 bool Cvar_LoadAllFromFile(const char* p_filePath)
 {
-	//maybe move this to json later
-
 	char* parsed_string = File_Parse(p_filePath, NULL);
 
 	if (!parsed_string)
@@ -391,6 +426,7 @@ int Cvar_StartWith(const char* p_startsWith, Cvar* r_cvars[5])
 
 	return matching_cvars_count;
 }
+
 bool Cvar_setValueDirect(Cvar* const p_cvar, const char* p_value)
 {
 	if (!p_cvar)
@@ -411,14 +447,21 @@ bool Cvar_setValueDirect(Cvar* const p_cvar, const char* p_value)
 	{
 		if (!String_usingEmptyString(p_cvar->str_value))
 			free(p_cvar->str_value);
-
-		p_cvar->str_value = String_safeCopy(p_value);
-
-		if (p_cvar->str_value)
+		
+		//if the value was clamped in any way that mean's it was a number
+		//so we can then copy the clamped value from the num values
+		if (_updateCvarNumValues(p_cvar, p_value))
 		{
-			_updateCvarNumValues(p_cvar);
+			Cvar_CopyNumValueToStrValue(p_cvar);
 		}
+		//otherwise simple str copy
 		else
+		{
+			p_cvar->str_value = String_safeCopy(p_value);
+		}	
+
+		//failed for whatever reason
+		if(!p_cvar->str_value)
 		{
 			p_cvar->float_value = 0;
 			p_cvar->int_value = 0;
@@ -429,6 +472,43 @@ bool Cvar_setValueDirect(Cvar* const p_cvar, const char* p_value)
 		p_cvar->modified = true;
 	}
 	return true;
+}
+
+bool Cvar_setValueDirectInt(Cvar* const p_cvar, int p_value)
+{
+	char buf[12];
+	memset(buf, 0, sizeof(buf));
+
+	sprintf(buf, "%i", p_value);
+
+	Cvar_setValueDirect(p_cvar, buf);
+}
+
+bool Cvar_setValueDirectFloat(Cvar* const p_cvar, float p_value)
+{
+	char buf[32];
+	memset(buf, 0, sizeof(buf));
+
+	sprintf(buf, "%f", p_value);
+
+	Cvar_setValueDirect(p_cvar, buf);
+}
+
+void Cvar_setValueToDefaultDirect(Cvar* const p_cvar)
+{
+	Cvar_setValueDirect(p_cvar, p_cvar->default_value);
+}
+
+void Cvar_setValueToDefault(const char* p_varName)
+{
+	Cvar* cvar = Cvar_get(p_varName);
+
+	if (!cvar)
+	{
+		return;
+	}
+	
+	Cvar_setValueDirect(cvar, cvar->default_value);
 }
 
 bool Cvar_setValue(const char* p_varName, const char* p_value)

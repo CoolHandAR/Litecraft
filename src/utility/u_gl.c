@@ -159,6 +159,7 @@ RenderStorageBuffer RSB_Create(size_t p_initReserveSize, size_t p_itemSize, unsi
 	if (p_rsbFlags & RSB_FLAG__READABLE)
 	{
 		rsb.buffer_flags |= GL_MAP_READ_BIT;
+		//rsb.buffer_flags |= GL_CLIENT_STORAGE_BIT;
 	}
 	if (p_rsbFlags & RSB_FLAG__WRITABLE)
 	{
@@ -174,12 +175,11 @@ RenderStorageBuffer RSB_Create(size_t p_initReserveSize, size_t p_itemSize, unsi
 	{
 		rsb.buffer_flags |= GL_MAP_READ_BIT; //need this bit when reallocating the buffer
 	}
-
+	rsb.buffer_flags |= GL_DYNAMIC_STORAGE_BIT;
 
 	glCreateBuffers(1, &rsb.buffer);
 	glNamedBufferStorage(rsb.buffer, p_itemSize * p_initReserveSize, NULL, rsb.buffer_flags);
-	//glBindBuffer(GL_SHADER_STORAGE_BUFFER, rsb.buffer);
-	//glBufferData(GL_SHADER_STORAGE_BUFFER, p_itemSize * p_initReserveSize, NULL, GL_STATIC_DRAW);
+
 
 	rsb.reserve_size = p_initReserveSize;
 	rsb.item_size = p_itemSize;
@@ -219,7 +219,10 @@ void RSB_Destruct(RenderStorageBuffer* const rsb)
 	}
 	glDeleteBuffers(1, &rsb->buffer);
 	
-	dA_Destruct(rsb->free_list);
+	if (rsb->free_list)
+	{
+		dA_Destruct(rsb->free_list);
+	}
 }
 
 unsigned RSB_Request(RenderStorageBuffer* const rsb)
@@ -314,7 +317,7 @@ void RSB_IncreaseSize(RenderStorageBuffer* const rsb, unsigned p_toAdd)
 		return;
 
 	assert(!rsb->_data_map);
-	rsb->buffer = ReallocGlBuffer(rsb->item_size * rsb->used_size, rsb->reserve_size + p_toAdd, rsb->buffer, rsb->buffer_flags);
+	rsb->buffer = ReallocGlBuffer(rsb->item_size * rsb->used_size, (rsb->reserve_size + p_toAdd) * rsb->item_size, rsb->buffer, rsb->buffer_flags);
 	rsb->reserve_size = rsb->reserve_size + p_toAdd;
 }
 
@@ -430,6 +433,8 @@ DynamicRenderBuffer DRB_Create(size_t p_initReserveSize, size_t p_initItemCount,
 	{
 		drb.buffer_flags |= GL_MAP_READ_BIT; //need this bit when reallocating the buffer
 	}
+	drb.buffer_flags |= GL_DYNAMIC_STORAGE_BIT;
+	drb.buffer_flags |= GL_MAP_WRITE_BIT;
 
 	glCreateBuffers(1, &drb.buffer);
 	glNamedBufferStorage(drb.buffer, p_initReserveSize, NULL, drb.buffer_flags);
@@ -461,7 +466,7 @@ void DRB_Destruct(DynamicRenderBuffer* const drb)
 	DRB_Assert(drb);
 
 	//unmap if currently mapped
-	DRB_Unmap(drb->_data_map);
+	DRB_Unmap(drb);
 
 	glDeleteBuffers(1, &drb->buffer);
 	
@@ -469,8 +474,10 @@ void DRB_Destruct(DynamicRenderBuffer* const drb)
 	{
 		free(drb->_back_buffer);
 	}
-
-	dA_Destruct(drb->item_list);
+	if (drb->item_list)
+	{
+		dA_Destruct(drb->item_list);
+	}
 }
 
 unsigned DRB_EmplaceItem(DynamicRenderBuffer* const drb, size_t p_len, const void* p_data)
@@ -494,10 +501,13 @@ unsigned DRB_EmplaceItem(DynamicRenderBuffer* const drb, size_t p_len, const voi
 	{
 		drb_item = dA_emplaceBack(drb->item_list);
 		drb_item_index = drb->item_list->elements_size - 1;
+
+		drb_item->offset = drb->used_bytes;
 	}
 
+	assert(drb_item->count == 0);
+
 	drb_item->offset = drb->used_bytes;
-	drb_item->count = p_len;
 	
 	drb->used_bytes += p_len;
 
@@ -511,6 +521,17 @@ void DRB_ChangeData(DynamicRenderBuffer* const drb, size_t p_len, const void* p_
 {
 	DRB_Assert(drb);
 	assert(p_drbItemIndex < drb->item_list->elements_size && "Invalid item index");
+
+	if (drb->drb_flags & DRB_FLAG__POOLABLE)
+	{
+		for (int i = 0; i < drb->_free_list->elements_size; i++)
+		{
+			unsigned* free_list_index = dA_at(drb->_free_list, i);
+
+			assert(*free_list_index != p_drbItemIndex && "Index in free list, Invalid!");
+		}
+	}
+	
 	
 	DRB_Item* array = drb->item_list->data;
 
@@ -533,12 +554,14 @@ void DRB_ChangeData(DynamicRenderBuffer* const drb, size_t p_len, const void* p_
 					previously_mapped = true;
 				}
 
+				size_t new_size = drb->reserve_size + drb->_resize_chunk_size + p_len;
+
 				if (drb->drb_flags & DRB_FLAG__USE_CPU_BACK_BUFFER)
 				{
 					//the old size is 0, since our data is stored in the back buffer
-					drb->buffer = ReallocGlBuffer(0, drb->reserve_size + p_len, drb->buffer, drb->buffer_flags);
+					drb->buffer = ReallocGlBuffer(0, new_size, drb->buffer, drb->buffer_flags);
 
-					void* reallocated_ptr = realloc(drb->_back_buffer, drb->reserve_size + p_len);
+					void* reallocated_ptr = realloc(drb->_back_buffer, new_size);
 
 					if (!reallocated_ptr)
 					{
@@ -553,10 +576,10 @@ void DRB_ChangeData(DynamicRenderBuffer* const drb, size_t p_len, const void* p_
 				}
 				else
 				{
-					drb->buffer = ReallocGlBuffer(drb->used_bytes, drb->reserve_size + p_len, drb->buffer, drb->buffer_flags);
+					drb->buffer = ReallocGlBuffer(drb->used_bytes, new_size, drb->buffer, drb->buffer_flags);
 				}
 
-				drb->reserve_size = drb->reserve_size + p_len;
+				drb->reserve_size = new_size;
 				
 				//remap
 				if (previously_mapped)
@@ -577,7 +600,39 @@ void DRB_ChangeData(DynamicRenderBuffer* const drb, size_t p_len, const void* p_
 			}
 		}
 	}
-	
+	//Do we want to memset?
+	//we need to do before moving anyhting
+	//Redundant code???
+	if (!p_data)
+	{
+		if (drb_item->count > 0)
+		{
+			void* null_data = malloc(drb_item->count);
+			if (null_data)
+			{
+				//stupid way to memset data, since you can't pass NULL as data
+				//glclearnamedbuffersubdata would be better, but it is pretty confusing to use
+				memset(null_data, 0, drb_item->count);
+
+				if (drb->drb_flags & DRB_FLAG__USE_CPU_BACK_BUFFER)
+				{
+					memcpy((char*)drb->_back_buffer + drb_item->offset, null_data, drb_item->count);
+
+					if (drb_item->offset < drb->_modified_offset)
+					{
+						drb->_modified_offset = drb_item->offset;
+					}
+					drb->_modified_size += drb_item->count;
+				}
+				else
+				{
+					glNamedBufferSubData(drb->buffer, drb_item->offset, drb_item->count, null_data);
+				}
+
+				free(null_data);
+			}
+		}
+	}
 
 	if (drb_item->count != p_len)
 	{
@@ -588,6 +643,11 @@ void DRB_ChangeData(DynamicRenderBuffer* const drb, size_t p_len, const void* p_
 		assert(size_to_move >= 0);
 		int64_t to_offset = max(drb_item->count, p_len) - min(drb_item->count, p_len);
 		
+		if (drb_item->count > p_len)
+		{
+			to_offset = -to_offset;
+		}
+
 		//move data forward or backwards if the old size does not match the new size
 		if (size_to_move > 0)
 		{
@@ -645,10 +705,6 @@ void DRB_ChangeData(DynamicRenderBuffer* const drb, size_t p_len, const void* p_
 			//update offset of all items
 			DRB_Item* array = drb->item_list->data;
 
-			if (drb_item->count > p_len)
-			{
-				to_offset = -to_offset;
-			}
 			for (int i = 0; i < drb->item_list->elements_size; i++)
 			{
 				DRB_Item* item = &array[i];
@@ -687,11 +743,15 @@ void DRB_ChangeData(DynamicRenderBuffer* const drb, size_t p_len, const void* p_
 			glNamedBufferSubData(drb->buffer, drb_item->offset, p_len, p_data);
 		}
 	}
+
 	drb_item->count = p_len;
 }
 
 void DRB_RemoveItem(DynamicRenderBuffer* const drb, unsigned p_drbItemIndex)
 {
+	DRB_Item item = DRB_GetItem(drb, p_drbItemIndex);
+	size_t old_size = item.count;
+
 	DRB_ChangeData(drb, 0, NULL, p_drbItemIndex);
 
 	if (drb->drb_flags & DRB_FLAG__POOLABLE)
@@ -699,8 +759,6 @@ void DRB_RemoveItem(DynamicRenderBuffer* const drb, unsigned p_drbItemIndex)
 		//add the index id to the free list
 		unsigned* emplaced = dA_emplaceBack(drb->_free_list);
 		*emplaced = p_drbItemIndex;
-
-		DRB_Item* item = dA_at(drb->item_list, p_drbItemIndex);
 	}
 	else
 	{
@@ -792,10 +850,6 @@ void* DRB_MapItem(DynamicRenderBuffer* const drb, unsigned p_drbItemIndex, unsig
 DRB_Item DRB_GetItem(DynamicRenderBuffer* const drb, unsigned p_drbItemIndex)
 {
 	DRB_Assert(drb);
-	if (p_drbItemIndex >= drb->item_list->elements_size)
-	{
-		float x = 0;
-	}
 
 	assert(p_drbItemIndex < drb->item_list->elements_size && "Invalid item index");
 
@@ -838,6 +892,11 @@ void DRB_WriteDataToGpu(DynamicRenderBuffer* const drb)
 
 	drb->_modified_size = 0;
 	drb->_modified_offset = SIZE_MAX;
+}
+
+void DRB_setResizeChunkSize(DynamicRenderBuffer* const drb, size_t p_chunkSize)
+{
+	drb->_resize_chunk_size = p_chunkSize;
 }
 
 

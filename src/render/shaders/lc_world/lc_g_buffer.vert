@@ -91,7 +91,6 @@ const ivec2 POS_INDEX_TABLE[6] =
 	ivec2(-1, 2)
 };
 
-
 out VS_OUT
 {
     mat3 TBN;
@@ -102,7 +101,7 @@ out VS_OUT
 
 void main()
 {
-    vec3 worldPos = chunk_data.data[gl_DrawID].min_point.xyz + a_Pos.xyz;
+    vec3 worldPos = chunk_data.data[gl_BaseInstance].min_point.xyz + a_Pos.xyz;
 
     int unpacked_hp = (a_PackedNormHp & ~(7 << 3));
     int unpacked_norm = a_PackedNormHp >> 3;
@@ -117,11 +116,15 @@ void main()
     ivec2 absPosIndex = abs(posIndex);
     int xPosSign = sign(posIndex.x);
 
-
     vs_out.TBN = TBN;
     vs_out.TexCoords = vec2((worldPos.x * xPosSign) + (worldPos[absPosIndex.x]) * xPosSign, -worldPos[absPosIndex.y]);
 	vs_out.TexOffset = vec2(texture_offset % 25, texture_offset / 25);
     vs_out.Block_hp = unpacked_hp;
+
+#ifdef SEMI_TRANSPARENT
+	float posOffset = block_info.data[a_BlockType].position_offset;
+	worldPos.xz -= (posOffset * normal.xz);
+#endif
 
 	gl_Position = cam.viewProjection * vec4(worldPos - 0.5, 1.0);
 }

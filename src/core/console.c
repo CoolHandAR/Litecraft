@@ -26,14 +26,17 @@ typedef struct
 	struct nk_text_edit input_edit;
 	char scroll_buffer[40000];
 	char input_buffer[1024];
+	char prev_input_buffer[1024];
 
 	int scroll_total_lines;
 
 	int suggestion_selection;
+	int suggestion_count;
 
 	struct nk_rect main_window_bounds;
 
 	bool opened;
+	bool force_input_edit_focus;
 } ConsoleCore;
 
 static ConsoleCore con_core;
@@ -50,7 +53,7 @@ static void Con_processCvarInput()
 
 	char* token;
 	char* search = " ";
-	token = strtok(con_core.input_buffer, search);
+	token = strtok(con_core.input_buffer, search); //bug strtok modifies the buffer
 
 	if (token)
 	{
@@ -114,9 +117,15 @@ static void Con_submitToScrollBuffer()
 		
 		Con_processCvarInput();
 
+		//store the prev input
+		memset(con_core.prev_input_buffer, 0, sizeof(con_core.prev_input_buffer));
+		memcpy(con_core.prev_input_buffer, con_core.input_buffer, strlen(con_core.input_buffer));
+
 		//clean up the input buffer
 		memset(con_core.input_buffer, 0, sizeof(con_core.input_buffer));
 		nk_textedit_delete(&con_core.input_edit, 0, nk_str_len(&con_core.input_edit.string));
+		con_core.input_edit.select_start = 0;
+		con_core.input_edit.select_end = 0;
 	}
 }
 static void Con_handleInput()
@@ -131,20 +140,53 @@ static void Con_handleInput()
 	}
 	else if (nk_input_is_key_pressed(&nk.ctx->input, NK_KEY_TEXT_REDO))
 	{
-		nk_textedit_undo(&con_core.input_edit);
+		nk_textedit_redo(&con_core.input_edit);
 	}
 	else if (nk_input_is_key_pressed(&nk.ctx->input, NK_KEY_TEXT_SELECT_ALL))
 	{
 		nk_textedit_select_all(&con_core.input_edit);
 	}
-	else if (nk_input_is_key_pressed(&nk.ctx->input, NK_KEY_DOWN))
+	else if (nk_input_is_key_pressed(&nk.ctx->input, NK_KEY_DOWN) && con_core.suggestion_count > 0)
 	{
 		con_core.suggestion_selection++;
 	}
-	else if (nk_input_is_key_pressed(&nk.ctx->input, NK_KEY_UP))
+	else if (nk_input_is_key_pressed(&nk.ctx->input, NK_KEY_UP) && con_core.suggestion_count > 0)
 	{
 		con_core.suggestion_selection--;
 	}
+	else if (nk_input_is_key_pressed(&nk.ctx->input, NK_KEY_ENTER) && con_core.suggestion_selection == -1)
+	{
+		Con_submitToScrollBuffer();
+	}
+	else if (nk_input_is_key_pressed(&nk.ctx->input, NK_KEY_DOWN) && con_core.suggestion_count <= 0)
+	{
+		memcpy(con_core.input_buffer, con_core.prev_input_buffer, sizeof(con_core.prev_input_buffer));
+		nk_textedit_text(&con_core.input_edit, con_core.input_buffer, strlen(con_core.input_buffer));
+	}
+
+	//Hack!!! this is so that when you press backspace to delete input, the nk code only check if pressed on this frame
+	//so we need to reset the backspace state to false
+	static float backspace_timer = 0;
+	backspace_timer += C_getDeltaTime();
+	
+	//make backspace delete faster when, backspace is held longer
+	static float backspace_threshold = 0.0;
+	if (nk_input_is_key_down(&nk.ctx->input, NK_KEY_BACKSPACE))
+	{
+		if (backspace_timer > backspace_threshold)
+		{
+			nk_input_key(nk.ctx, NK_KEY_BACKSPACE, nk_false);
+			backspace_timer = 0;
+		}
+
+		backspace_threshold = max(backspace_threshold - C_getDeltaTime(), 0.03);
+	}
+	else
+	{
+		backspace_threshold = 0.7;
+		backspace_timer = 0;
+	}
+
 }
 
 static void Con_HandleTextEditContextMenu(struct nk_rect p_triggerBounds)
@@ -174,7 +216,10 @@ static void Con_drawSuggestionsWindow()
 	const int input_str_len = nk_str_len(&con_core.input_edit.string);
 
 	if (input_str_len <= 0)
+	{
+		con_core.suggestion_selection = -1;
 		return;
+	}
 
 	char buffer[1024];
 	//we need to copy to a c buffer since nk str is not null terminated
@@ -183,10 +228,14 @@ static void Con_drawSuggestionsWindow()
 	Cvar* cvars_suggestions[5];
 	
 	int suggestion_count = Cvar_StartWith(buffer, cvars_suggestions);
+	con_core.suggestion_count = suggestion_count;
 
 	//no suggestions found??
 	if (suggestion_count <= 0)
+	{
+		con_core.suggestion_selection = -1;
 		return;
+	}
 
 	//strech the window width to the max cvar name and value len 
 	int max_str_len = 0;
@@ -204,7 +253,7 @@ static void Con_drawSuggestionsWindow()
 
 	//draw the suggestion box always below the main window
 	if (!nk_begin(nk.ctx, "Cvar-Suggestions", nk_rect(con_core.main_window_bounds.x, con_core.main_window_bounds.y + (con_core.main_window_bounds.h),
-		9.5 * max_str_len, 100), NK_WINDOW_DYNAMIC))
+		9.5 * max_str_len, 100), NK_WINDOW_DYNAMIC | NK_WINDOW_NO_SCROLLBAR))
 		return;
 
 	//clamp selection index
@@ -214,9 +263,14 @@ static void Con_drawSuggestionsWindow()
 	if (nk_input_is_key_pressed(&nk.ctx->input, NK_KEY_ENTER))
 	{
 		nk_str_clear(&con_core.input_edit.string);
-		nk_str_append_str_char(&con_core.input_edit.string, cvars_suggestions[con_core.suggestion_selection]->name);
+		nk_textedit_text(&con_core.input_edit, cvars_suggestions[con_core.suggestion_selection]->name, strlen(cvars_suggestions[con_core.suggestion_selection]->name));
+		nk_textedit_text(&con_core.input_edit, " ", 1); //add space after entering, so it is easier to input the value after
 
-		con_core.input_edit.cursor = strlen(cvars_suggestions[con_core.suggestion_selection]->name);
+		con_core.input_edit.cursor = strlen(cvars_suggestions[con_core.suggestion_selection]->name) + 1;
+
+		con_core.input_edit.active = 1;
+
+		con_core.force_input_edit_focus = true;
 	}
 
 	static bool selected = false;
@@ -236,12 +290,21 @@ static void Con_drawSuggestionsWindow()
 		
 		if (nk_selectable_label(nk.ctx, buffer, NK_TEXT_LEFT, &selected))
 		{
-			nk_str_clear(&con_core.input_edit.string);
-			nk_str_append_str_char(&con_core.input_edit.string, cvars_suggestions[i]->name);
+			con_core.suggestion_selection = i;
 
-			con_core.input_edit.cursor = strlen(cvars_suggestions[i]->name);
+			nk_str_clear(&con_core.input_edit.string);
+			nk_textedit_text(&con_core.input_edit, cvars_suggestions[con_core.suggestion_selection]->name, strlen(cvars_suggestions[con_core.suggestion_selection]->name));
+			nk_textedit_text(&con_core.input_edit, " ", 1); //add space after entering, so it is easier to input the value after
+
+			con_core.input_edit.cursor = strlen(cvars_suggestions[con_core.suggestion_selection]->name) + 1;
+
+			con_core.input_edit.active = 1;
+
+			con_core.force_input_edit_focus = true;
 		}
 	}
+	//always make sure the window is focused
+	nk_window_set_focus(nk.ctx, "Console");
 
 	nk_end(nk.ctx);
 }
@@ -253,10 +316,12 @@ static void Con_drawWindow()
 		| NK_WINDOW_TITLE | NK_WINDOW_NO_SCROLLBAR | NK_WINDOW_CLOSABLE))
 	{
 		con_core.opened = false;
-		glfwSetInputMode(glfw_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 		nk_end(nk.ctx);
 		return;
 	}
+
+	//always make sure the window is focused
+	nk_window_set_focus(nk.ctx, "Console");
 
 	//Draw scroll buffer log
 	struct nk_vec2 window_size = nk_window_get_size(nk.ctx);
@@ -280,7 +345,9 @@ static void Con_drawWindow()
 	struct nk_rect input_edit_bounds = nk_widget_bounds(nk.ctx);
 
 	//input buffer
-	nk_edit_buffer(nk.ctx, NK_EDIT_FIELD, &con_core.input_edit, 0);
+	nk_edit_focus(nk.ctx, 0);
+
+	nk_edit_buffer(nk.ctx, NK_EDIT_FIELD , &con_core.input_edit, 0);
 
 	//text edit context menu
 	Con_HandleTextEditContextMenu(input_edit_bounds);
@@ -335,30 +402,33 @@ void Con_Update()
 	if (nk_input_is_key_pressed(&nk.ctx->input, NK_KEY_TAB))
 	{
 		con_core.opened = !con_core.opened;
-
-		if (con_core.opened)
-			glfwSetInputMode(glfw_window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-		else
-			glfwSetInputMode(glfw_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 	}
+
+	if (con_core.opened)
+	{
+		Window_EnableCursor();
+	}
+	
 	if (!con_core.opened)
 		return;
 
+	//Handle kb input
 	Con_handleInput();
-	Con_drawWindow();
-
+	
 	if (con_core.input_edit.active)
 	{
 		Con_drawSuggestionsWindow();
 	}
+
+	Con_drawWindow();
 }
 
 int Con_Init()
 {
 	memset(&con_core, 0, sizeof(ConsoleCore));
 
-	nk_textedit_init_fixed(&con_core.input_edit, con_core.input_buffer, 1024);
-	nk_textedit_init_fixed(&con_core.scroll_edit, con_core.scroll_buffer, 40000);
+	nk_textedit_init_fixed(&con_core.input_edit, con_core.input_buffer, sizeof(con_core.input_buffer));
+	nk_textedit_init_fixed(&con_core.scroll_edit, con_core.scroll_buffer, sizeof(con_core.scroll_buffer));
 	
 	con_core.suggestion_selection = -1;
 }

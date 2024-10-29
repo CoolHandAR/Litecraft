@@ -43,34 +43,82 @@ static void _copyToCmdBuffer(R_CMD p_cmdEnum, void* p_cmdData, unsigned int p_cm
 	cmdBuffer->cmds_counter++;
 }
 
-void Draw_ScreenSprite(R_Sprite* const p_sprite)
+void Draw_ScreenTexture(R_Texture* p_texture, M_Rect2Df* p_textureRegion, float p_x, float p_y, float p_xScale, float p_yScale, float p_rotation)
 {
-	R_CMD_DrawSprite cmd;
+	if (!p_texture)
+	{
+		return;
+	}
 
+	R_CMD_DrawTexture cmd;
 	cmd.proj_type = R_CMD_PT__SCREEN;
-	cmd.sprite_ptr = p_sprite;
+	cmd.texture = p_texture;
+	cmd.position[0] = p_x;
+	cmd.position[1] = p_y;
+	
+	cmd.scale[0] = p_xScale;
+	cmd.scale[1] = p_yScale;
 
-	_copyToCmdBuffer(R_CMD__SPRITE, &cmd, sizeof(R_CMD_DrawSprite));
+	cmd.rotation = p_rotation;
+
+	glm_vec4_copy(DEFAULT_COLOR, cmd.color);
+
+	if (p_textureRegion)
+	{
+		cmd.texture_region = *p_textureRegion;
+	}
+	else
+	{
+		cmd.texture_region.x = 0;
+		cmd.texture_region.y = 0;
+		cmd.texture_region.width = p_texture->width;
+		cmd.texture_region.height = p_texture->height;
+	}
+
+	_copyToCmdBuffer(R_CMD__TEXTURE, &cmd, sizeof(R_CMD_DrawTexture));
 }
 
-void Draw_3DSprite(R_Sprite* const p_sprite)
+void Draw_ScreenTextureColored(R_Texture* p_texture, M_Rect2Df* p_textureRegion, float p_x, float p_y, float p_xScale, float p_yScale, float p_rotation, float p_r, float p_g, float p_b, float p_a)
 {
-	R_CMD_DrawSprite cmd;
+	if (!p_texture)
+	{
+		return;
+	}
 
-	cmd.proj_type = R_CMD_PT__3D;
-	cmd.sprite_ptr = p_sprite;
+	R_CMD_DrawTexture cmd;
+	cmd.proj_type = R_CMD_PT__SCREEN;
+	cmd.texture = p_texture;
+	cmd.position[0] = p_x;
+	cmd.position[1] = p_y;
 
-	_copyToCmdBuffer(R_CMD__SPRITE, &cmd, sizeof(R_CMD_DrawSprite));
+	cmd.scale[0] = p_xScale;
+	cmd.scale[1] = p_yScale;
+
+	cmd.rotation = p_rotation;
+
+	cmd.color[0] = p_r;
+	cmd.color[1] = p_g;
+	cmd.color[2] = p_b;
+	cmd.color[3] = p_a;
+
+	if (p_textureRegion)
+	{
+		cmd.texture_region = *p_textureRegion;
+	}
+	else
+	{
+		cmd.texture_region.x = 0;
+		cmd.texture_region.y = 0;
+		cmd.texture_region.width = p_texture->width;
+		cmd.texture_region.height = p_texture->height;
+	}
+
+	_copyToCmdBuffer(R_CMD__TEXTURE, &cmd, sizeof(R_CMD_DrawTexture));
 }
 
-void Draw_BillboardSprite(R_Sprite* const p_sprite)
+void Draw_ScreenTexture2(R_Texture* p_texture, M_Rect2Df* p_textureRegion, vec2 p_position)
 {
-	R_CMD_DrawSprite cmd;
-
-	cmd.proj_type = R_CMD_PT__BILLBOARD_3D;
-	cmd.sprite_ptr = p_sprite;
-
-	_copyToCmdBuffer(R_CMD__SPRITE, &cmd, sizeof(R_CMD_DrawSprite));
+	Draw_ScreenTexture(p_texture, p_textureRegion, p_position[0], p_position[1], 0, 0, 0, 0);
 }
 
 
@@ -102,6 +150,69 @@ void Draw_AABB(AABB p_aabb, vec4 p_fillColor)
 
 	_copyToCmdBuffer(R_CMD__AABB, &cmd, sizeof(R_CMD_DrawAABB));
 }
+
+void Draw_TexturedCube(vec3 p_box[2], R_Texture* p_tex, M_Rect2Df* p_texRegion)
+{
+	R_CMD_DrawTextureCube cmd;
+
+	memset(&cmd, 0, sizeof(cmd));
+
+	glm_vec3_copy(p_box[0], cmd.box[0]);
+	glm_vec3_copy(p_box[1], cmd.box[1]);
+
+	cmd.texture = p_tex;
+	if (p_texRegion)
+	{
+		cmd.texture_region = *p_texRegion;
+	}
+	else
+	{
+		if (p_tex)
+		{
+			cmd.texture_region.width = p_tex->width;
+			cmd.texture_region.height = p_tex->height;
+		}
+		
+	}
+	
+	glm_vec4_copy(DEFAULT_COLOR, cmd.color);
+
+	_copyToCmdBuffer(R_CMD__TEXTURED_CUBE, &cmd, sizeof(R_CMD_DrawTextureCube));
+}
+
+void Draw_TexturedCubeColored(vec3 p_box[2], R_Texture* p_tex, M_Rect2Df* p_texRegion, float p_r, float p_g, float p_b, float p_a)
+{
+	R_CMD_DrawTextureCube cmd;
+
+	memset(&cmd, 0, sizeof(cmd));
+
+	glm_vec3_copy(p_box[0], cmd.box[0]);
+	glm_vec3_copy(p_box[1], cmd.box[1]);
+
+	cmd.texture = p_tex;
+	if (p_texRegion)
+	{
+		cmd.texture_region = *p_texRegion;
+	}
+	else
+	{
+		if (p_tex)
+		{
+			cmd.texture_region.width = p_tex->width;
+			cmd.texture_region.height = p_tex->height;
+		}
+
+	}
+	
+	cmd.color[0] = p_r;
+	cmd.color[1] = p_g;
+	cmd.color[2] = p_b;
+	cmd.color[3] = p_a;
+
+
+	_copyToCmdBuffer(R_CMD__TEXTURED_CUBE, &cmd, sizeof(R_CMD_DrawTextureCube));
+}
+
 
 void Draw_Line(vec3 p_from, vec3 p_to, vec4 p_color)
 {
@@ -182,6 +293,18 @@ void RScene_SetDirLight(DirLight p_dirLight)
 
 	scene.scene_data.dirLightAmbientIntensity = p_dirLight.ambient_intensity;
 	scene.scene_data.dirLightSpecularIntensity = p_dirLight.specular_intensity;
+}
+
+void RScene_SetFog(FogSettings p_fog_settings)
+{
+	glm_vec3_copy(p_fog_settings.fog_color, scene.scene_data.fogColor);
+	scene.scene_data.fogDensity = p_fog_settings.density;
+	scene.scene_data.heightFogMin = p_fog_settings.heightFogMin;
+	scene.scene_data.heightFogMax = p_fog_settings.heightFogMax;
+	scene.scene_data.heightFogCurve = p_fog_settings.heightFogCurve;
+	scene.scene_data.depthFogBegin = p_fog_settings.depthFogBegin;
+	scene.scene_data.depthFogEnd = p_fog_settings.depthFogEnd;
+	scene.scene_data.depthFogCurve = p_fog_settings.depthFogCurve;
 }
 
 LightID RScene_RegisterPointLight(PointLight2 p_pointLight)
@@ -303,4 +426,70 @@ void RScene_SetSkyboxTexturePanorama(const char* p_path)
 ModelID RScene_RegisterModel(R_Model* p_model)
 {
 	return 0;
+}
+
+ParticleEmitterSettings* Particle_RegisterEmitter()
+{
+	FL_Node* node = FL_emplaceFront(storage.particle_emitter_clients);
+
+	ParticleEmitterSettings* emitter = node->value;
+
+	emitter->_gl_emitter_index = RSB_Request(&storage.particle_emitters);
+	emitter->_particle_drb_index = DRB_EmplaceItem(&storage.particles, 0, NULL);
+	emitter->settings.collider_index = -1;
+	emitter->_collision_drb_index = -1;
+
+	return emitter;
+}
+
+void Particle_MarkUpdate(ParticleEmitterSettings* p_emitter)
+{
+	storage.particle_update_queue[storage.particle_update_index] = p_emitter;
+
+	storage.particle_update_index++;
+}
+
+void Particle_Emit(ParticleEmitterSettings* p_emitter)
+{
+	p_emitter->settings.state_flags |= EMITTER_STATE_FLAG__EMITTING;
+
+	Particle_MarkUpdate(p_emitter);
+}
+
+void Particle_EmitTransformed(ParticleEmitterSettings* p_emitter, vec3 direction, vec3 origin)
+{
+	p_emitter->settings.direction[0] = direction[0];
+	p_emitter->settings.direction[1] = direction[1];
+	p_emitter->settings.direction[2] = direction[2];
+
+	p_emitter->settings.xform[3][0] = origin[0];
+	p_emitter->settings.xform[3][1] = origin[1];
+	p_emitter->settings.xform[3][2] = origin[2];
+
+	glm_mat4_mulv3(p_emitter->settings.xform, p_emitter->aabb[0], 1.0, p_emitter->settings.aabb[0]);
+	glm_mat4_mulv3(p_emitter->settings.xform, p_emitter->aabb[1], 1.0, p_emitter->settings.aabb[1]);
+
+	Particle_Emit(p_emitter);
+}
+
+void Particle_AssignCollisionBoxes(ParticleEmitterSettings* p_emiiter, vec4* extents, int num_boxes)
+{
+	if (num_boxes <= 0)
+	{
+		return;
+	}
+
+	if (p_emiiter->_collision_drb_index < 0)
+	{
+		p_emiiter->_collision_drb_index = DRB_EmplaceItem(&storage.collider_boxes, 0, NULL);
+	}
+
+	DRB_ChangeData(&storage.collider_boxes, (sizeof(vec4) * 2) * num_boxes, extents, p_emiiter->_collision_drb_index);
+
+	DRB_Item item = DRB_GetItem(&storage.collider_boxes, p_emiiter->_collision_drb_index);
+
+	p_emiiter->settings.collider_index = item.offset / sizeof(vec4);
+	p_emiiter->settings.collider_amount = num_boxes;
+
+	Particle_MarkUpdate(p_emiiter);
 }

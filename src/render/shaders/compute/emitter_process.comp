@@ -1,0 +1,157 @@
+
+#version 460 core
+
+#include "../scene_incl.incl"
+#include "../particles_common.incl"
+
+layout (local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+
+bool AABB_In_Frustrum(vec4 aabb[2], vec4 frustrum_planes[6])
+{
+    vec4 p;
+    float dp;
+
+    for(int i = 0; i < 6; i++)
+    {
+        p = frustrum_planes[i];
+
+        int i1 = int(p.x > 0.0);
+        int i2 = int(p.y > 0.0);
+        int i3 = int(p.z > 0.0);
+
+        dp = p.x * aabb[i1].x + 
+             p.y * aabb[i2].y +
+             p.z * aabb[i3].z;
+
+        if(dp < -p.w)
+            return false;
+    }
+
+    return true;
+}
+
+
+layout(std430, binding = 5) restrict buffer ParticleEmittersBuffer
+{
+    ParticleEmitter data[];
+} emitters;
+
+uniform int u_totalEmitterCount;
+uniform float u_cpuDelta;
+
+void main()
+{
+	uint emitter_index = gl_GlobalInvocationID.x;
+
+	if(emitter_index > u_totalEmitterCount)
+	{
+		return;
+	}
+
+#define EMITTER emitters.data[emitter_index]
+
+	float local_delta = u_cpuDelta * EMITTER.speed_scale;
+	
+	EMITTER.prev_time = EMITTER.time;
+
+	EMITTER.time += local_delta;
+
+	if(EMITTER.time > EMITTER.life_time)
+	{
+		EMITTER.time = mod(EMITTER.time, EMITTER.life_time);
+		EMITTER.cycle++;
+
+		if(EMITTER.cycle > 0 && bool(EMITTER.settings_flags & EMITTER_SETTINGS_FLAG_ONE_SHOT))
+		{
+			EMITTER.cycle = 0;	
+			EMITTER.state_flags &= ~EMITTER_STATE_FLAG_EMITTING;
+		}
+
+		if(EMITTER.anim_speed_scale > 0 && bool(EMITTER.settings_flags & EMITTER_SETTINGS_FLAG_ANIMATION) && !bool(EMITTER.settings_flags & EMITTER_SETTINGS_FLAG_LOOP_ANIMATION))
+		{
+			EMITTER.frame = 0;
+		}
+	}
+
+	if(bool(EMITTER.state_flags & EMITTER_STATE_FLAG_EMITTING))
+	{
+		if(AABB_In_Frustrum(EMITTER.aabb, cam.frustrum_planes))
+		{
+			EMITTER.state_flags &= ~EMITTER_STATE_FLAG_SKIP_DRAW;
+		}
+		else
+		{
+			EMITTER.state_flags |= EMITTER_STATE_FLAG_SKIP_DRAW;
+		}
+	}
+
+	
+
+	EMITTER.system_time = EMITTER.time / EMITTER.life_time;
+
+	EMITTER.delta = local_delta;
+
+
+	//ANIMATION SYSTEM UPDATE
+	if(EMITTER.anim_speed_scale > 0 && bool(EMITTER.settings_flags & EMITTER_SETTINGS_FLAG_ANIMATION) && EMITTER.frame_count > 0 && bool(EMITTER.state_flags & EMITTER_STATE_FLAG_EMITTING))
+	{
+		float remaining = local_delta;
+
+		int i = 0;
+
+		while(remaining >= 0)
+		{
+			float speed = 64;
+			float abs_speed = abs(speed);
+
+			if (speed == 0)
+			{
+				break;
+			}
+
+			int frame_count = int(EMITTER.frame_count);
+
+			int last_frame = frame_count - 1;
+
+			if(speed > 0)
+			{
+				if (EMITTER.anim_frame_progress >= 1.0)
+				{
+					//anim restart
+					if (EMITTER.frame >= last_frame)
+					{
+
+						if(bool(EMITTER.settings_flags & EMITTER_SETTINGS_FLAG_LOOP_ANIMATION))
+						{
+							EMITTER.frame = 0;	
+						}
+						else
+						{
+							//EMITTER.state_flags &= ~EMITTER_STATE_FLAG_ANIMATION_PLAYING;
+							EMITTER.frame = last_frame;
+						}
+					}
+					else
+					{
+						EMITTER.frame++;
+					}
+					EMITTER.anim_frame_progress = 0.0;
+				}
+
+				float to_process = min((1.0 - EMITTER.anim_frame_progress) / abs_speed, remaining);
+				EMITTER.anim_frame_progress += to_process * abs_speed;
+				remaining -= to_process;
+			}
+
+			i++;
+			if (i > frame_count) 
+			{
+				break; 
+			}
+		}
+	}
+
+	
+
+}

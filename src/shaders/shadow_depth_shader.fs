@@ -1,6 +1,6 @@
 #version 460 core
 
-#define BIAS 1.01
+#define BIAS 0.01
 
 void main()
 {             

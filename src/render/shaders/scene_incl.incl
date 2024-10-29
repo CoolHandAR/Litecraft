@@ -1,4 +1,4 @@
-#define SHADOW_CASCADE_COUNT 5 
+#define SHADOW_CASCADE_COUNT 4
 
 struct CameraData
 {
@@ -19,22 +19,32 @@ struct SceneData
 {
     vec4 dirLightColor;
 	vec4 dirLightDirection;
+    vec4 fogColor;
 
 	float dirLightAmbientIntensity;
 	float dirLightSpecularIntensity;
 
 	uint numPointLights;
 	uint numSpotLights;
-	
-	mat4 shadow_matrixes[SHADOW_CASCADE_COUNT];
-    float shadow_splits[SHADOW_CASCADE_COUNT];
+    
+    float fogDensity;
+
+	float depthFogCurve;
+	float depthFogBegin;
+	float depthFogEnd;
+
+	float heightFogCurve;
+	float heightFogMin;
+	float heightFogMax;
+
+    float shadow_light_bleed_reduction;
+	float shadow_variance_min;
+
+    vec4 shadow_splits;
+
+	mat4 shadow_matrixes[4];
 };
 
-struct ShadowData
-{
-    mat4 shadow_matrixes[SHADOW_CASCADE_COUNT];
-    float shadow_splits[SHADOW_CASCADE_COUNT];
-};
 
 layout (std140, binding = 0) uniform Scene
 {
@@ -44,3 +54,4 @@ layout (std140, binding = 1) uniform Camera
 {
 	CameraData cam;
 };
+

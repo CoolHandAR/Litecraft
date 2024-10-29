@@ -10,7 +10,7 @@
 FILE UTILITES
 ~~~~~~~~~~~~~
 */
-void* File_Parse(const char* p_filePath, int* r_length);
+unsigned char* File_Parse(const char* p_filePath, int* r_length);
 bool File_PrintString(const char* p_string, const char* p_filePath);
 int File_GetLength(FILE* p_file);
 
@@ -20,9 +20,11 @@ STRING UTILITES
 ~~~~~~~~~~~~~
 */
 bool String_StartsWith(const char* p_str, const char* p_starts, bool p_caseSensitive);
+bool String_Contains(const char* p_str, const char* p_contains);
 char* String_safeCopy(const char* p_source);
 bool String_usingEmptyString(const char* p_str);
 int String_findLastOfIndex(const char* p_str, int p_char);
+int String_findFirstOfIndex(const char* p_str, int p_char);
 
 /*
 ~~~~~~~~~~~~~
@@ -120,6 +122,7 @@ typedef struct
 	void* _back_buffer;
 	size_t _modified_offset;
 	size_t _modified_size;
+	size_t _resize_chunk_size;
 	dynamic_array* _free_list;
 } DynamicRenderBuffer;
 
@@ -135,3 +138,4 @@ void* DRB_MapItem(DynamicRenderBuffer* const drb, unsigned p_drbItemIndex, unsig
 DRB_Item DRB_GetItem(DynamicRenderBuffer* const drb, unsigned p_drbItemIndex);
 void DRB_Unmap(DynamicRenderBuffer* const drb);
 void DRB_WriteDataToGpu(DynamicRenderBuffer* const drb);
+void DRB_setResizeChunkSize(DynamicRenderBuffer* const drb, size_t p_chunkSize);

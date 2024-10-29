@@ -9,7 +9,7 @@ bool String_StartsWith(const char* p_str, const char* p_starts, bool p_caseSensi
 {
 	int length = strlen(p_starts);
 	
-	if (length < 0 || length > strlen(p_str))
+	if (length <= 0 || length > strlen(p_str))
 	{
 		return false;
 	}
@@ -35,6 +35,23 @@ bool String_StartsWith(const char* p_str, const char* p_starts, bool p_caseSensi
 		}
 	}
 	return true;	
+}
+
+bool String_Contains(const char* p_str, const char* p_contains)
+{
+	int length = strlen(p_contains);
+
+	if (length <= 0 || length > strlen(p_str))
+	{
+		return false;
+	}
+
+	if (strstr(p_str, p_contains))
+	{
+		return true;
+	}
+
+	return false;
 }
 
 
@@ -82,4 +99,21 @@ int String_findLastOfIndex(const char* p_str, int p_char)
 	}
 
 	return last_index;
+}
+
+int String_findFirstOfIndex(const char* p_str, int p_char)
+{
+	int str_len = strlen(p_str);
+
+	for (int i = 0; i < str_len; i++)
+	{
+		char ch = p_str[i];
+
+		if (ch == p_char)
+		{
+			return i;
+		}
+	}
+
+	return -1;
 }

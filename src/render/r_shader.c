@@ -7,7 +7,7 @@
 
 #define PRINT_AND_FAIL_ON_INVALID_UNIFORM_LOCATION 1
 
-static bool checkCompileErrors(unsigned int p_object, const char* p_type)
+static bool Shader_checkCompileErrors(unsigned int p_object, const char* p_type)
 {
 	int success;
 	char infoLog[1024];
@@ -35,7 +35,7 @@ static bool checkCompileErrors(unsigned int p_object, const char* p_type)
 	return true;
 }
 
-static char* handleIncludeDirective(const char* p_srcPath, const char* p_buffer, int p_bufferSize)
+static char* handleIncludeDirective(const char* p_srcPath, const char* p_buffer, int* p_bufferSize)
 {
 	if (!p_srcPath || !p_buffer)
 	{
@@ -45,7 +45,7 @@ static char* handleIncludeDirective(const char* p_srcPath, const char* p_buffer,
 	//current active buffer
 	char* cur_buf = p_buffer;
 
-	int buf_size = p_bufferSize;
+	int buf_size = *p_bufferSize;
 
 	//Look up if we have any includes
 	char* look_up = strstr(cur_buf, "#include ");
@@ -135,8 +135,99 @@ static char* handleIncludeDirective(const char* p_srcPath, const char* p_buffer,
 			look_up = strstr(cur_buf, "#include ");
 	}
 
+	*p_bufferSize = buf_size;
+
 	return cur_buf;
 }
+
+static unsigned char* Shader_InsertDefinesIntoCharBuf(const char* p_src, int p_bufferSize, const char** p_defines, int p_defineCount)
+{
+	if (p_defineCount <= 0)
+	{
+		return p_src;
+	}
+	const char* def_char = "#define ";
+	int def_strlen = strlen(def_char);
+
+	const char* parsed_defines[32];
+	int defines_lengths[32];
+	int total_length = 0;
+
+	for (int i = 0; i < 32 && i < p_defineCount; i++)
+	{
+		parsed_defines[i] = (const char*)p_defines[i];
+		defines_lengths[i] = (int)strlen(p_defines[i]);
+
+		if (parsed_defines[i] == "")
+		{
+			total_length += defines_lengths[i] + 1;
+		}
+		else
+		{
+			total_length += defines_lengths[i] + def_strlen + 1; // '\n' char
+		}
+	}
+	int new_length = p_bufferSize + total_length + 1 + 1 + 32; // two '\n' and extra for carefulness sake
+	//we need to reallocate for the increased size. Current buffer size + total define strlen count + 1
+	char* reallocated_buffer = realloc(p_src, new_length);
+
+	if (!reallocated_buffer)
+	{
+		return NULL;
+	}
+
+	memset(reallocated_buffer + new_length - 1, 0, 1); //null terminate the buffer
+
+	char* find = reallocated_buffer;
+	size_t offset = 0;
+	if (!strncmp(reallocated_buffer, "#version", strlen("#version")))
+	{
+		for (int i = 0; i < 50; i++)
+		{
+			if (find[0] == '\n')
+			{
+				find++;
+				break;
+			}
+			find++;
+
+			offset++;
+		}
+	}
+	else
+	{
+		printf("Failed to include defines into shader \n");
+		return NULL;
+	}
+
+	memmove(find + total_length, find, p_bufferSize - offset);
+
+	for (int i = 0; i < 32 && i < p_defineCount && i < total_length; i++)
+	{
+		if (parsed_defines[i] == "")
+		{
+			//Add a new line
+			memset(find, 10, 1);
+			find += 1;
+			continue;
+		}
+
+		//Add the #DEFINE
+		memcpy(find, def_char, def_strlen);
+		find += def_strlen;
+
+		//Copy the define str
+		memcpy(find, parsed_defines[i], defines_lengths[i]);
+		find += defines_lengths[i];
+
+		//Add a new line
+		memset(find, 10, 1);
+		find += 1;
+	}
+
+	return reallocated_buffer;
+}
+
 
 R_Shader Shader_CompileFromMemory(const char* p_vertexShader, const char* p_fragmentShader, const char* p_geometryShader)
 {
@@ -146,14 +237,14 @@ R_Shader Shader_CompileFromMemory(const char* p_vertexShader, const char* p_frag
 	vertex_shader = glCreateShader(GL_VERTEX_SHADER);
 	glShaderSource(vertex_shader, 1, &p_vertexShader, NULL);
 	glCompileShader(vertex_shader);
-	if (!checkCompileErrors(vertex_shader, "VERTEX"))
+	if (!Shader_checkCompileErrors(vertex_shader, "VERTEX"))
 		return 0;
 
 	//fragment shader
 	fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
 	glShaderSource(fragment_shader, 1, &p_fragmentShader, NULL);
 	glCompileShader(fragment_shader);
-	if (!checkCompileErrors(fragment_shader, "FRAGMENT"))
+	if (!Shader_checkCompileErrors(fragment_shader, "FRAGMENT"))
 		return 0;
 
 	if (p_geometryShader != NULL)
@@ -161,7 +252,7 @@ R_Shader Shader_CompileFromMemory(const char* p_vertexShader, const char* p_frag
 		geometry_shader = glCreateShader(GL_GEOMETRY_SHADER);
 		glShaderSource(geometry_shader, 1, &p_geometryShader, NULL);
 		glCompileShader(geometry_shader);
-		if (!checkCompileErrors(geometry_shader, "GEOMETRY"))
+		if (!Shader_checkCompileErrors(geometry_shader, "GEOMETRY"))
 			return 0;
 	}
 
@@ -178,7 +269,7 @@ R_Shader Shader_CompileFromMemory(const char* p_vertexShader, const char* p_frag
 	}
 
 	glLinkProgram(shader_id);
-	if (!checkCompileErrors(shader_id, "PROGRAM"))
+	if (!Shader_checkCompileErrors(shader_id, "PROGRAM"))
 		return false;
 
 	//CLEANUP
@@ -230,12 +321,12 @@ R_Shader Shader_CompileFromFile(const char* p_vertexShaderPath, const char* p_fr
 	}
 	
 	//HANDLE INCLUDES
-	vertex_buf = handleIncludeDirective(p_vertexShaderPath, vertex_buf, vertex_length);
-	fragment_buf = handleIncludeDirective(p_fragmentShaderPath, fragment_buf, fragment_length);
+	vertex_buf = handleIncludeDirective(p_vertexShaderPath, vertex_buf, &vertex_length);
+	fragment_buf = handleIncludeDirective(p_fragmentShaderPath, fragment_buf, &fragment_length);
 
 	if (p_geometryShaderPath && geo_buf)
 	{
-		geo_buf = handleIncludeDirective(p_geometryShaderPath, geo_buf, geo_length);
+		geo_buf = handleIncludeDirective(p_geometryShaderPath, geo_buf, &geo_length);
 	}
 
 	//COMPILE
@@ -258,22 +349,78 @@ R_Shader Shader_CompileFromFile(const char* p_vertexShaderPath, const char* p_fr
 	return compiled_shader;
 }
 
-static void Shader_InsertDefinesIntoCharBuf(const char* p_src, const char* p_defines, int p_defineCount)
+R_Shader Shader_CompileFromFileDefine(const char* p_vertexShaderPath, const char* p_fragmentShaderPath, const char* p_geometryShaderPath, const char** p_defines, int p_defineCount)
 {
-	char* find_core = strstr(p_src, "core");
+	int vertex_length = 0;
+	int fragment_length = 0;
+	int geo_length = 0;
 
-	
+	char* vertex_buf = File_Parse(p_vertexShaderPath, &vertex_length);
+	char* fragment_buf = File_Parse(p_fragmentShaderPath, &fragment_length);
+	char* geo_buf = NULL;
 
+	if (p_geometryShaderPath)
+	{
+		geo_buf = File_Parse(p_geometryShaderPath, &geo_length);
+	}
+	if (!vertex_buf)
+	{
+		printf("Failed to open vertex shader file!\n");
+		return 0;
+	}
+	if (!fragment_buf)
+	{
+		printf("Failed to open fragment shader file!\n");
+		free(vertex_buf);
+		return 0;
+	}
+	if (p_geometryShaderPath)
+	{
+		if (!geo_buf)
+		{
+			free(vertex_buf);
+			free(fragment_buf);
+			printf("Failed to open geometry shader file!\n");
+			return 0;
+		}
+	}
+	//HANDLE INCLUDES
+	vertex_buf = handleIncludeDirective(p_vertexShaderPath, vertex_buf, &vertex_length);
+	fragment_buf = handleIncludeDirective(p_fragmentShaderPath, fragment_buf, &fragment_length);
+
+	if (p_geometryShaderPath && geo_buf)
+	{
+		geo_buf = handleIncludeDirective(p_geometryShaderPath, geo_buf, &geo_length);
+	}
+
+	//HANDLE DEFINES
+	vertex_buf = Shader_InsertDefinesIntoCharBuf(vertex_buf, vertex_length, p_defines, p_defineCount);
+	fragment_buf = Shader_InsertDefinesIntoCharBuf(fragment_buf, fragment_length, p_defines, p_defineCount);
+	if (p_geometryShaderPath && geo_buf)
+	{
+		geo_buf = Shader_InsertDefinesIntoCharBuf(geo_buf, geo_length, p_defines, p_defineCount);
+	}
+
+	//COMPILE
+	R_Shader compiled_shader = Shader_CompileFromMemory(vertex_buf, fragment_buf, geo_buf);
+
+	//CLEAN UP
+	if (vertex_buf)
+	{
+		free(vertex_buf);
+	}
+	if (fragment_buf)
+	{
+		free(fragment_buf);
+	}
+	if (p_geometryShaderPath && geo_buf)
+	{
+		free(geo_buf);
+	}
+
+	return compiled_shader;
 }
 
-static R_Shader Shader_CompileFromMemoryDefines(const char* p_vertexShader, const char* p_fragmentShader, const char* p_geometryShader, const char* p_defines, int p_defineCount)
-{
-	
-
-	unsigned int vertex_shader, fragment_shader, geometry_shader;
-
-	//return R_Shader();
-}
 
 
 R_Shader ComputeShader_CompileFromMemory(const char* p_computeShader)
@@ -281,14 +428,14 @@ R_Shader ComputeShader_CompileFromMemory(const char* p_computeShader)
 	unsigned compute_shader = glCreateShader(GL_COMPUTE_SHADER);
 	glShaderSource(compute_shader, 1, &p_computeShader, NULL);
 	glCompileShader(compute_shader);
-	if (!checkCompileErrors(compute_shader, "COMPUTE"))
+	if (!Shader_checkCompileErrors(compute_shader, "COMPUTE"))
 		return 0;
 
 
 	R_Shader program = glCreateProgram();
 	glAttachShader(program, compute_shader);
 	glLinkProgram(program);
-	if (!checkCompileErrors(program, "PROGRAM"))
+	if (!Shader_checkCompileErrors(program, "PROGRAM"))
 		return 0;
 
 	glDeleteShader(compute_shader);
@@ -309,7 +456,37 @@ R_Shader ComputeShader_CompileFromFile(const char* p_computeShaderPath)
 	}
 
 	//HANDLE INCLUDES
-	comp_buf = handleIncludeDirective(p_computeShaderPath, comp_buf, comp_length);
+	comp_buf = handleIncludeDirective(p_computeShaderPath, comp_buf, &comp_length);
+
+	//COMPILE
+	R_Shader compiled_shader = ComputeShader_CompileFromMemory(comp_buf);
+
+	//CLEAN UP
+	if (comp_buf)
+	{
+		free(comp_buf);
+	}
+
+	return compiled_shader;
+}
+
+R_Shader ComputeShader_CompileFromFileDefine(const char* p_computeShaderPath, const char** p_defines, int p_defineCount)
+{
+	int comp_length = 0;
+
+	char* comp_buf = File_Parse(p_computeShaderPath, &comp_length);
+
+	if (!comp_buf)
+	{
+		printf("Failed to open compute shader file: %s !\n", p_computeShaderPath);
+		return 0;
+	}
+
+	//HANDLE INCLUDES
+	comp_buf = handleIncludeDirective(p_computeShaderPath, comp_buf, &comp_length);
+	
+	//HANDLE DEFINES
+	comp_buf = Shader_InsertDefinesIntoCharBuf(comp_buf, comp_length, p_defines, p_defineCount);
 
 	//COMPILE
 	R_Shader compiled_shader = ComputeShader_CompileFromMemory(comp_buf);

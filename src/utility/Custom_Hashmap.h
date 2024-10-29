@@ -10,21 +10,25 @@ Usage
 #include "Custom_Hashmap.h"
 */
 
+#include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <assert.h>
 #include "dynamic_array.h"
 
 typedef uint32_t(*CHMap_HashFun)(const void* _key);
+typedef int(*CHMap_CompareFun)(const void* _key, const void* _other);
 
 typedef struct
 {
 	CHMap_HashFun hash_function;
+	CHMap_CompareFun compare_function;
 	dynamic_array* item_data;
 	dynamic_array* hash_table;
 	size_t key_bit_size;
 	size_t num_items;
-
+	
+	bool _is_key_string;
 	void* _next;
 } CHMap;
 
@@ -34,13 +38,15 @@ extern "C" {
 /**
 * Init the custom hashmap
 \param HASH_FUN The function that will be used to hash the key. If NULL, the default buffer hash function will be used
-\param T The type of key that will be used
+\param T The type of key that will be used. 
 \param U The type of item that will be stored
 \param RESERVE_SIZE The amount of item that can be stored initially
 \return SHMap
 */
-#define CHMAP_INIT(HASH_FUN, T, U, RESERVE_SIZE) _CHMap_Init(HASH_FUN, sizeof(T), sizeof(U), RESERVE_SIZE)
+#define CHMAP_INIT(HASH_FUN, CMP_FUN, T, U, RESERVE_SIZE) _CHMap_Init(HASH_FUN, CMP_FUN, sizeof(T), sizeof(U), RESERVE_SIZE)
+#define CHMAP_INIT_STRING(U, RESERVE_SIZE) _CHMap_Init(NULL, NULL, 0, sizeof(U), RESERVE_SIZE)
 	extern void* CHMap_Find(CHMap* const chmap, const void* p_key);
+	extern int CHMap_getItemIndex(CHMap* const chmap, const void* p_key);
 	extern bool CHMap_Has(CHMap* const chmap, const void* p_key);
 	extern void* CHMap_Insert(CHMap* const chmap, const void* p_key, const void* p_data);
 	extern void CHMap_Erase(CHMap* const chmap, const void* p_key);
@@ -65,12 +71,12 @@ typedef struct
 } _CHMap_item;
 
 #define CHM_HASHTABLE_BLOCK_ALLOCATION_SIZE 256
-static CHMap _CHMap_Init(CHMap_HashFun p_hashFun, size_t p_keyBitSize, size_t p_allocSize, size_t p_initReserveSize)
+static CHMap _CHMap_Init(CHMap_HashFun p_hashFun, CHMap_CompareFun p_cmpFun,size_t p_keyBitSize, size_t p_allocSize, size_t p_initReserveSize)
 {
 	assert(p_allocSize > 0);
-	assert(p_keyBitSize > 0);
 
 	CHMap map;
+	memset(&map, 0, sizeof(CHMap));
 	map._next = NULL;
 
 	map.item_data = dA_INIT2(p_allocSize, p_initReserveSize);
@@ -79,7 +85,13 @@ static CHMap _CHMap_Init(CHMap_HashFun p_hashFun, size_t p_keyBitSize, size_t p_
 	map.hash_table = dA_INIT(sizeof(_CHMap_item*), hash_table_size);
 
 	map.hash_function = p_hashFun;
+	map.compare_function = p_cmpFun;
 	map.key_bit_size = p_keyBitSize;
+
+	if (map.key_bit_size == 0)
+	{
+		map._is_key_string = true;
+	}
 
 	return map;
 }
@@ -95,6 +107,23 @@ This is for preventing greying out of the implementation section.
 #ifndef CHM_C
 #define CHM_C
 
+uint32_t _CHMap_Hash_string(const char* p_str)
+{
+	//src: https://theartincode.stanis.me/008-djb2/
+
+	const unsigned char* chr = (const unsigned char*)p_str;
+
+	uint32_t hash = 5381;
+	uint32_t c = *chr++;
+
+	while (c)
+	{
+		hash = ((hash << 5) + hash) ^ c; /* hash * 33 ^ c */
+		c = *chr++;
+	}
+
+	return hash;
+}
 
 //src https://github.com/godotengine/godot/blob/master/core/templates/hashfuncs.h
 uint32_t _CHMap_hash_rotl32(uint32_t x, int8_t r)
@@ -162,7 +191,7 @@ uint32_t _CHMap_hash_buffer(const void* key, int length)
 	return _CHMap_hash_fmix32(h1);
 }
 
-uint32_t _CHMap_Hash(CHMap* const chmap, const void* p_key)
+uint32_t CHMap_Hash(CHMap* const chmap, const void* p_key)
 {
 	uint32_t hash = 0;
 
@@ -170,6 +199,11 @@ uint32_t _CHMap_Hash(CHMap* const chmap, const void* p_key)
 	if (chmap->hash_function)
 	{
 		hash = (*chmap->hash_function)((const int*)p_key);
+	}
+	//string
+	else if (chmap->_is_key_string)
+	{
+		hash = _CHMap_Hash_string(p_key);
 	}
 	//otherwise we will do hash function on the buffer
 	else
@@ -180,6 +214,20 @@ uint32_t _CHMap_Hash(CHMap* const chmap, const void* p_key)
 	return hash;
 }
 
+bool _CHMap_Compare(CHMap* const chmap, const void* p_key, const void* p_otherKey)
+{
+	//If a compare function is provided, call it
+	if (chmap->compare_function)
+	{
+		return (*chmap->compare_function)(p_key, p_otherKey);
+	}
+	else if (chmap->_is_key_string)
+	{
+		return strcmp(p_key, p_otherKey) == 0;
+	}
+
+	return memcmp(p_key, p_otherKey, chmap->key_bit_size) == 0;
+}
 
 void* _CHMap_getItemData(CHMap* const chmap, _CHMap_item* item)
 {
@@ -188,7 +236,7 @@ void* _CHMap_getItemData(CHMap* const chmap, _CHMap_item* item)
 
 _CHMap_item* _CHMap_findItem(CHMap* const chmap, const void* p_key)
 {
-	uint32_t hash = _CHMap_Hash(chmap, p_key);
+	uint32_t hash = CHMap_Hash(chmap, p_key);
 	hash &= chmap->hash_table->capacity - 1;
 
 	_CHMap_item** hash_array = chmap->hash_table->data;
@@ -197,7 +245,7 @@ _CHMap_item* _CHMap_findItem(CHMap* const chmap, const void* p_key)
 	for (item = hash_array[hash]; item; item = item->hash_next)
 	{
 		//found
-		if (*(char*)item->key == *(char*)p_key && !memcmp(item->key, p_key, chmap->key_bit_size))
+		if (*(char*)item->key == *(char*)p_key && _CHMap_Compare(chmap, item->key, p_key))
 		{
 			return item;
 		}
@@ -219,7 +267,7 @@ void _CHMap_hashTableReserve(CHMap* const chmap, size_t p_toReserve)
 	_CHMap_item* item = NULL;
 	for (item = chmap->_next; item; item = item->next)
 	{
-		uint32_t item_hash = _CHMap_Hash(chmap, item->key);
+		uint32_t item_hash = CHMap_Hash(chmap, item->key);
 
 		uint32_t old_hash_index = item_hash & (old_hash_table_capacity - 1);
 		uint32_t new_hash_index = item_hash & (new_hash_table_capacity - 1);
@@ -292,6 +340,20 @@ void* CHMap_Find(CHMap* const chmap, const void* p_key)
 	return _CHMap_getItemData(chmap, find_item);
 }
 
+
+int CHMap_getItemIndex(CHMap* const chmap, const void* p_key)
+{
+	_CHMap_item* find_item = _CHMap_findItem(chmap, p_key);
+
+	if (!find_item)
+	{
+		return -1;
+	}
+
+	return find_item->data_array_index;
+}
+
+
 bool CHMap_Has(CHMap* const chmap, const void* p_key)
 {
 	_CHMap_item* find_item = _CHMap_findItem(chmap, p_key);
@@ -317,7 +379,14 @@ void* CHMap_Insert(CHMap* const chmap, const void* p_key, const void* p_data)
 	}
 	memset(item, 0, sizeof(_CHMap_item));
 
-	item->key = malloc(chmap->key_bit_size);
+	if (chmap->_is_key_string)
+	{
+		item->key = malloc(strlen(p_key) + 1);
+	}
+	else
+	{
+		item->key = malloc(chmap->key_bit_size);
+	}
 
 	if (!item->key)
 	{
@@ -325,7 +394,15 @@ void* CHMap_Insert(CHMap* const chmap, const void* p_key, const void* p_data)
 		return NULL;
 	}
 	//copy the key data
-	memcpy(item->key, p_key, chmap->key_bit_size);
+	if (chmap->_is_key_string)
+	{
+		strcpy(item->key, p_key);
+	}
+	else
+	{
+		memcpy(item->key, p_key, chmap->key_bit_size);
+	}
+	
 
 	//emplace the item in the data array
 	void* data_ptr = dA_emplaceBack(chmap->item_data);
@@ -337,7 +414,7 @@ void* CHMap_Insert(CHMap* const chmap, const void* p_key, const void* p_data)
 		_CHMap_hashTableReserve(chmap, chmap->hash_table->capacity + CHM_HASHTABLE_BLOCK_ALLOCATION_SIZE);
 	}
 
-	uint32_t hash = _CHMap_Hash(chmap, p_key);
+	uint32_t hash = CHMap_Hash(chmap, p_key);
 	hash &= chmap->hash_table->capacity - 1;
 
 	_CHMap_item** hash_array = chmap->hash_table->data;
@@ -368,7 +445,7 @@ void CHMap_Erase(CHMap* const chmap, const void* p_key)
 
 	_CHMap_item** hash_array = chmap->hash_table->data;
 
-	uint32_t hash = _CHMap_Hash(chmap, p_key);
+	uint32_t hash = CHMap_Hash(chmap, p_key);
 	hash &= chmap->hash_table->capacity - 1;
 
 	bool item_found = false;
@@ -379,7 +456,7 @@ void CHMap_Erase(CHMap* const chmap, const void* p_key)
 	for (item = hash_array[hash]; item; item = item->hash_next)
 	{
 		//Found the item
-		if (*(char*)item->key == *(char*)p_key && !memcmp(item->key, p_key, chmap->key_bit_size))
+		if (*(char*)item->key == *(char*)p_key && _CHMap_Compare(chmap, item->key, p_key))
 		{
 			data_array_index = item->data_array_index;
 
@@ -480,17 +557,22 @@ void CHMap_Clear(CHMap* const chmap)
 
 void CHMap_Destruct(CHMap* chmap)
 {
-	_CHMap_item* item = NULL;
+	_CHMap_item* item = chmap->_next;
 
-	for (item = chmap->_next; item; item = item->next)
+	while (item)
 	{
+		_CHMap_item* next = item->next;
+
 		if (item->key)
 		{
 			free(item->key);
 		}
 
 		free(item);
+
+		item = next;
 	}
+
 	dA_Destruct(chmap->hash_table);
 	dA_Destruct(chmap->item_data);
 }

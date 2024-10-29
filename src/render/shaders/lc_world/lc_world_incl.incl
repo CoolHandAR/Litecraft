@@ -16,11 +16,12 @@ struct ChunkData
 struct BlockMaterialData
 {
 	int texture_offsets[6];
+    float position_offset;
 };
 
 layout (shared, binding = 5) uniform BlockDataBuffer
 {
-    BlockMaterialData data[14];
+    BlockMaterialData data[22];
 } block_info;
 
 layout (std430, binding = 15) restrict buffer ChunkDataBuffer

@@ -6,8 +6,4 @@
 #include "render/r_camera.h"
 
 
-
-void LC_Player_Create(vec3 pos);
-void LC_Player_Update(R_Camera* const cam, float delta);
-void LC_Player_ProcessInput(GLFWwindow* const window, R_Camera* const cam);
-void LC_Player_getPos(vec3 dest);
+void LC_Player_getPosition(vec3 dest);

@@ -1,108 +1,276 @@
 #version 460 core
+#extension GL_ARB_bindless_texture : require
 
 out vec4 f_color;
 
-struct VecOutput
+in VS_Out
 {
-   vec3 v_FragPos;
-   vec3 v_Normal;
-   vec2 v_texCoords;
-   vec3 v_tangentLightPos;
-   vec3 v_tangentViewPos;
-   vec3 v_tangentFragPos;
+    vec2 tex_coords;
+    vec3 world_pos;
+    vec3 normal;
+    vec3 frag_pos;
+    vec3 tangent_view_pos;
+    vec3 tangent_frag_pos;
+    vec3 tangent_light_pos;
+} FS_in;
+
+struct Material
+{
+    uint flags;
+    int albedo_map;
+    int metalic_map;
+    int roughness_map;
+    int normal_map;
+    int ao_map;
+    float metallic_ratio;
+    float roughness_ratio;
+
+    vec4 color;
 };
 
-layout (location = 0) in VecOutput v_Output;
+struct DirLight 
+{
+    vec3 direction;
+	
+    vec3 color;
+    float ambient_intensity;
+    float specular_intensity;
+};
+struct PointLight
+{
+    vec3 position;
+
+    vec3 color;
+    float ambient_intensity;
+    float specular_intensity;
+
+    float linear;
+    float quadratic;
+    float radius;
+    float constant;
+};
+struct SpotLight
+{
+    vec3 position;
+    vec3 direction;
+
+    vec3 color;
+    float ambient_intensity;
+    float specular_intensity;
+
+    float cutOff;
+    float outerCutOff;
+
+    float constant;
+    float linear;
+    float quadratic;
+};
+
+layout (location = 0) flat in int v_materialIndex;
 
 uniform vec3 u_viewPos;
+uniform DirLight u_dirLight;
+uniform PointLight u_pointLight;
 
-uniform sampler2D texture_normal1;
-uniform sampler2D texture_diffuse1;
-uniform sampler2D texture_height1;
-uniform sampler2D texture_specular1;
-uniform samplerCube skybox_texture;
+layout (std430, binding = 26) readonly restrict buffer Textures
+{
+    sampler2D data[];
+} textures;
 
-uniform float u_heightScale;
+layout (std430, binding = 27) readonly restrict buffer Materials
+{
+    Material data[];
+} Mats;
 
+const float PI = 3.14159265359;
+float DistributionGGX(vec3 N, vec3 H, float roughness)
+{
+    float a = roughness*roughness;
+    float a2 = a*a;
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH*NdotH;
 
-vec2 ParallaxMapping(vec2 texCoords, vec3 viewDir)
-{ 
-    // number of depth layers
-    const float minLayers = 8;
-    const float maxLayers = 32;
-    float numLayers = mix(maxLayers, minLayers, abs(dot(vec3(0.0, 0.0, 1.0), viewDir)));  
-    // calculate the size of each layer
-    float layerDepth = 1.0 / numLayers;
-    // depth of current layer
-    float currentLayerDepth = 0.0;
-    // the amount to shift the texture coordinates per layer (from vector P)
-    vec2 P = viewDir.xy / viewDir.z * u_heightScale; 
-    vec2 deltaTexCoords = P / numLayers;
-  
-    // get initial values
-    vec2  currentTexCoords     = texCoords;
-    float currentDepthMapValue = texture(texture_height1, currentTexCoords).r;
-      
-    while(currentLayerDepth < currentDepthMapValue)
-    {
-        // shift texture coordinates along direction of P
-        currentTexCoords -= deltaTexCoords;
-        // get depthmap value at current texture coordinates
-        currentDepthMapValue = texture(texture_height1, currentTexCoords).r;  
-        // get depth of next layer
-        currentLayerDepth += layerDepth;  
-    }
+    float nom   = a2;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+
+    return nom / denom;
+}
+float GeometrySchlickGGX(float NdotV, float roughness)
+{
+    float r = (roughness + 1.0);
+    float k = (r*r) / 8.0;
+
+    float nom   = NdotV;
+    float denom = NdotV * (1.0 - k) + k;
+
+    return nom / denom;
+}
+float GeometrySmith(float NdotV, float NdotL, float roughness)
+{
+    float ggx2 = GeometrySchlickGGX(NdotV, roughness);
+    float ggx1 = GeometrySchlickGGX(NdotL, roughness);
+
+    return ggx1 * ggx2;
+}
+vec3 fresnelSchlick(float cosTheta, vec3 F0)
+{
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+vec3 getNormalFromMap(uint normal_index)
+{
+    vec3 tangentNormal = texture(textures.data[normal_index], FS_in.tex_coords).xyz * 2.0 - 1.0;
+
+    vec3 Q1  = dFdx(FS_in.world_pos);
+    vec3 Q2  = dFdy(FS_in.world_pos);
+    vec2 st1 = dFdx(FS_in.tex_coords);
+    vec2 st2 = dFdy(FS_in.tex_coords);
+
+    vec3 N   = normalize(FS_in.normal);
+    vec3 T  = normalize(Q1*st2.t - Q2*st1.t);
+    vec3 B  = -normalize(cross(N, T));
+    mat3 TBN = mat3(T, B, N);
+
+    return normalize(TBN * tangentNormal);
+}
+
+vec3 dirLightCalc(DirLight light, vec3 normal, vec3 view_dir, vec3 albedo, float roughness, float metallic, float shadow, vec3 F0)
+{
+    vec3 light_dir = normalize(light.direction);
+    vec3 halfway_dir = normalize(light_dir + view_dir);
+    vec3 radiance = light.color * light.ambient_intensity;
+    float NdotV = max(dot(normal, view_dir), 0.0);
+    float NdotL = max(dot(normal, light_dir), 0.0);
+
+    // Cook-Torrance BRDF
+    float NDF = DistributionGGX(normal, halfway_dir, roughness);   
+    float G   = GeometrySmith(NdotV, NdotL, roughness);      
+    vec3 F    = fresnelSchlick(max(dot(halfway_dir, view_dir), 0.0), F0);
+
+    vec3 numerator    = NDF * G * F; 
+    float denominator = 4.0 * NdotV * NdotL;
+    vec3 specular = numerator / max (denominator, 0.0001);
     
-    // get texture coordinates before collision (reverse operations)
-    vec2 prevTexCoords = currentTexCoords + deltaTexCoords;
+    vec3 kS = F;
+    vec3 kD = vec3(1.0) - kS;
+    kD *= 1.0 - metallic;	  
 
-    // get depth after and before collision for linear interpolation
-    float afterDepth  = currentDepthMapValue - currentLayerDepth;
-    float beforeDepth = texture(texture_height1, prevTexCoords).r - currentLayerDepth + layerDepth;
- 
-    // interpolation of texture coordinates
-    float weight = afterDepth / (afterDepth - beforeDepth);
-    vec2 finalTexCoords = prevTexCoords * weight + currentTexCoords * (1.0 - weight);
+    specular *= light.specular_intensity;
 
-    return finalTexCoords;
+    vec3 value = (kD * albedo / PI + specular) * radiance * NdotL;
+
+   // return_value *= (1.0 - shadow);
+
+    return value;
+}
+
+vec3 pointLightCalc(PointLight light, vec3 normal, vec3 view_dir, vec3 albedo, float roughness, float metallic, float shadow, vec3 F0)
+{
+    float dist = (length(light.position - FS_in.frag_pos) / max(light.radius, 0.00001));
+    vec3 light_dir = normalize(light.position - FS_in.frag_pos);
+    vec3 halfway_dir = normalize(light_dir + view_dir);
+    vec3 radiance = light.color * light.ambient_intensity;
+    float NdotV = max(dot(normal, view_dir), 0.0);
+    float NdotL = max(dot(normal, light_dir), 0.0);
+    //ATTENUATION
+    float attenuation = 1.0 / (light.constant + light.linear * dist + light.quadratic * (dist * dist)); 
+    //APPLY ATTENUATION
+    radiance *= attenuation;
+
+    // Cook-Torrance BRDF
+    float NDF = DistributionGGX(normal, halfway_dir, roughness);   
+    float G   = GeometrySmith(NdotV, NdotL, roughness);      
+    vec3 F    = fresnelSchlick(max(dot(halfway_dir, view_dir), 0.0), F0);
+
+    vec3 numerator    = NDF * G * F; 
+    float denominator = 4.0 * NdotV * NdotL;
+    vec3 specular = numerator / max (denominator, 0.0001);
+
+    vec3 kS = F;
+    vec3 kD = vec3(1.0) - kS;
+    kD *= 1.0 - metallic;	  
+
+    specular *= light.specular_intensity;
+
+    vec3 value = (kD * albedo / PI + specular) * radiance * NdotL;
+
+    return value;  
+}
+vec3 spotLightCalc(SpotLight light, vec3 normal, vec3 view_dir, vec3 albedo, float roughness, float metallic, float shadow, vec3 F0)
+{
+    vec3 light_dir = normalize(light.position - FS_in.frag_pos);
+    vec3 halfway_dir = normalize(light_dir + view_dir);
+    float NdotV = max(dot(normal, view_dir), 0.0);
+    float NdotL = max(dot(normal, light_dir), 0.0);
+    //ATTENUATION
+    float dist = length(light.position - FS_in.frag_pos);
+    float attenuation = 1.0 / (light.constant + light.linear * dist + light.quadratic * (dist * dist)); 
+    //SPOTLIGHT INTENSITY
+    float theta = dot(light_dir, normalize(-light.direction));
+    float epsilon = light.cutOff - light.outerCutOff;
+    float intensity = clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
+    //APPLY ATTENUATION AND SPOTLIGHT INTENSITY
+    float att_ins = attenuation * intensity;
+    vec3 radiance = light.color * light.ambient_intensity;
+    radiance *= att_ins;
+
+    // Cook-Torrance BRDF
+    float NDF = DistributionGGX(normal, halfway_dir, roughness);   
+    float G   = GeometrySmith(NdotV, NdotL, roughness);      
+    vec3 F    = fresnelSchlick(max(dot(halfway_dir, view_dir), 0.0), F0);
+
+    vec3 numerator    = NDF * G * F; 
+    float denominator = 4.0 * NdotV * NdotL;
+    vec3 specular = numerator / max (denominator, 0.0001);
+
+    vec3 kS = F;
+    vec3 kD = vec3(1.0) - kS;
+    kD *= 1.0 - metallic;	  
+
+    specular *= light.specular_intensity;
+
+    vec3 value = (kD * albedo / PI + specular) * radiance * NdotL;
+
+    return value;
+}
+
+
+vec3 F0calc(float metallic, float specular, vec3 albedo)
+{
+    float dielectric = 0.16 * specular * specular;
+    return mix(vec3(dielectric), albedo, vec3(metallic));
 }
 
 void main()
 {
-    vec4 tex_color = texture(texture_diffuse1, v_Output.v_texCoords);
+    int mat_index = int(v_materialIndex);
+    Material material = Mats.data[mat_index];
 
-    vec3 I = normalize(v_Output.v_FragPos - u_viewPos);
-    vec3 R = reflect(I, normalize(v_Output.v_Normal));
-    vec3 refracte = refract(I, normalize(v_Output.v_Normal), 1.0/1.33);
-    vec4 reflected_color = texture(skybox_texture, R);
-    vec4 refraced_color = texture(skybox_texture, refracte);
-    vec4 enviroment_color = mix(reflected_color, refraced_color, 0.5);
+    vec3 albedo = pow(texture(textures.data[material.albedo_map], FS_in.tex_coords).rgb, vec3(2.2));
+    float metallic = texture(textures.data[material.metalic_map], FS_in.tex_coords).r;
+    float roughness = texture(textures.data[material.roughness_map], FS_in.tex_coords).r;
+    float ao = texture(textures.data[material.ao_map], FS_in.tex_coords).r;
+    vec3 normal = getNormalFromMap(material.normal_map);
 
+    vec3 F0 = F0calc(metallic, 0.5, albedo); 
+
+    vec3 Lo = vec3(0.0);
+    vec3 view_dir = normalize(u_viewPos - FS_in.world_pos);
+
+    vec3 dir_lighting = dirLightCalc(u_dirLight, normal, view_dir, albedo, roughness, metallic, 1.0, F0);
     
-       // obtain normal from normal map in range [0,1]
-    vec3 normal = texture(texture_normal1, v_Output.v_texCoords).rgb;
-    // transform normal vector to range [-1,1]
-    normal = normalize(normal * 2.0 - 1.0);  // this normal is in tangent space
-   
-    // get diffuse color
-    vec3 color = tex_color.rgb;
-    // ambient
-    vec3 ambient = 0.5 * color;
-    // diffuse
-    vec3 lightDir = normalize(v_Output.v_tangentLightPos - v_Output.v_tangentFragPos);
-    float diff = max(dot(lightDir, normal), 0.0);
-    vec3 diffuse = diff * color;
-    // specular
-    vec3 viewDir = normalize(v_Output.v_tangentFragPos - v_Output.v_tangentFragPos);
-    vec3 reflectDir = reflect(-lightDir, normal);
-    vec3 halfwayDir = normalize(lightDir + viewDir);  
-    float spec = pow(max(dot(normal, halfwayDir), 0.0), 32.0);
+    Lo += dir_lighting;
+    Lo += pointLightCalc(u_pointLight,  normal, view_dir, albedo, roughness, metallic, 1.0, F0);
+    
+    vec3 ambient = vec3(0.03) * albedo * ao;
+    
+    vec3 color = ambient + Lo;
 
-    vec3 specular_tex = texture(texture_specular1, v_Output.v_texCoords).rgb;
+    // HDR tonemapping
+    color = color / (color + vec3(1.0));
+    // gamma correct
+    color = pow(color, vec3(1.0/2.2)); 
 
-    vec3 specular = vec3(1) * spec * specular_tex;
-    vec4 light_color = vec4(ambient + diffuse + specular, 1.0);
-
-   // f_color = mix(tex_color, enviroment_color, 0.1);
-    f_color = mix(f_color, light_color, 1.0);
+    f_color = vec4(color, 1.0);
 }

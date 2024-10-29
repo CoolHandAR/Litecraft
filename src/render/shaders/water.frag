@@ -18,7 +18,7 @@ uniform sampler2D normal_map;
 
 void main()
 {
-
+    FragColor = vec4(1, 1, 1, 1);
 }
 
 

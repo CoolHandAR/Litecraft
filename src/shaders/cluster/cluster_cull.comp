@@ -1,0 +1,214 @@
+#version 460 core
+layout(local_size_x = 16, local_size_y = 9, local_size_z = 4) in;
+
+struct PointLight
+{
+    vec4 position;
+
+    vec4 color;
+    float ambient_intensity;
+    float specular_intensity;
+
+    float linear;
+    float quadratic;
+    float radius;
+    float constant;
+};
+
+struct LightGrid
+{
+    uint offset;
+    uint count;
+};
+
+struct VolumeTileAABB
+{
+    vec4 minPoint;
+    vec4 maxPoint;
+};
+struct Camera_data
+{
+    vec4 frustrum_planes[6];
+};   
+layout(std140, binding = 1) uniform CAMERA_INFO
+{
+    Camera_data camera_data;
+};
+
+layout (std430, binding = 1) restrict buffer clusterAABB
+{
+    VolumeTileAABB cluster[ ];
+};
+
+layout (std430, binding = 3) readonly restrict buffer lightSSBO
+{
+    PointLight pointLight[];
+};
+
+layout (std430, binding = 4) writeonly restrict buffer lightIndexSSBO
+{
+    uint globalLightIndexList[];
+};
+
+layout (std430, binding = 5) writeonly restrict buffer lightGridSSBO
+{
+    LightGrid lightGrid[];
+};
+
+layout (std430, binding = 6) writeonly restrict buffer globalIndexCountSSBO
+{
+    uint globalIndexCount;
+};
+layout (std430, binding = 7) buffer activeClustersCount
+{
+    uint activeClustersCountData;
+};
+layout (std430, binding = 8) buffer uniqueActiveClusters
+{
+    uint uniqueActiveClustersData[];
+};
+
+
+ivec4 u_tileSizes = ivec4(16, 9, 24, ceil(1280.0 / 16.0));
+ivec2 u_screenSize = ivec2(1280, 720);
+
+shared PointLight sharedLights[16*9*4];
+
+uniform mat4 u_view;
+uniform int u_pointLightCount;
+
+bool FrustrumIntersectsSphere(vec3 center, float radius)
+{
+    for(int i = 0; i < 6; i++)
+    {
+        float dist_to_center = dot(camera_data.frustrum_planes[i].xyz, center) + camera_data.frustrum_planes[i].w;
+
+        if(dist_to_center < -radius)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+float sqDistPointAABB(vec3 point, uint tile)
+{
+    float sqDist = 0.0;
+    VolumeTileAABB currentCell = cluster[tile];
+    cluster[tile].maxPoint[2] = tile;
+    for(int i = 0; i < 2; ++i){
+        float v = point[i];
+        if(v < currentCell.minPoint[i]){
+            sqDist += (currentCell.minPoint[i] - v) * (currentCell.minPoint[i] - v);
+        }
+        if(v > currentCell.maxPoint[i]){
+            sqDist += (v - currentCell.maxPoint[i]) * (v - currentCell.maxPoint[i]);
+        }
+    }
+
+    return sqDist;
+}
+
+bool intersectsAbb(vec3 point, float sphereRadius, uint tile)
+{
+    VolumeTileAABB currentCell = cluster[tile];
+    cluster[tile].maxPoint[2] = tile;
+
+   float x = max(currentCell.minPoint.x, min(point.x, currentCell.maxPoint.x));
+   float y = max(currentCell.minPoint.y, min(point.y, currentCell.maxPoint.y));
+   float z = max(currentCell.minPoint.z, min(point.z, currentCell.maxPoint.z));
+
+    float distance = sqrt(
+    (x - point.x) * (x - point.x) +
+      (y - point.y) * (y - point.y) +
+      (z - point.z) * (z - point.z)
+  );
+
+    return distance < sphereRadius;
+}
+bool intersectsAbb2(vec3 point, float sphereRadius, uint tile)
+{
+    VolumeTileAABB currentCell = cluster[tile];
+    cluster[tile].maxPoint[2] = tile;
+    vec4 box[2];
+    box[0] = currentCell.minPoint;
+    box[1] = currentCell.maxPoint;
+
+    int a = int(point.x < box[0].x) + int(point.x > box[1].x);
+    int b = int(point.y < box[0].y) + int(point.y > box[1].y);
+    int c = int(point.z < box[0].z) + int(point.z > box[1].z);
+
+    float dmin = pow((point[0] - box[int(!bool(a - 1))][0]) * float(bool(a != 0)), 2) 
+                + pow((point[1] - box[int(!bool(b - 1))][1]) * float(bool(b != 0)), 2)
+                + pow((point[2] - box[int(!bool(c - 1))][2]) * float(bool(c != 0)), 2);
+
+    return dmin <= pow(sphereRadius, 2);
+}
+
+bool testSphereAABB(uint light, uint tile)
+{
+    float radius = sharedLights[light].radius;
+    vec3 center  = (u_view * vec4(sharedLights[light].position.xyz, 1.0)).xyz;
+    float squaredDistance = sqDistPointAABB(center, tile);
+
+    return FrustrumIntersectsSphere(sharedLights[light].position.xyz, radius / 2.0) && intersectsAbb(center, radius * radius, tile);
+}
+
+
+void main(){
+    atomicExchange(globalIndexCount, 0);
+    uint threadCount = gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z;
+    uint lightCount  = u_pointLightCount;
+    uint numBatches = (lightCount + threadCount -1) / threadCount;
+
+    uint tileIndex = gl_LocalInvocationIndex + gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z * gl_WorkGroupID.z;
+
+    if(tileIndex > activeClustersCountData)
+    {
+       //return;
+    }
+
+    uint visibleLightCount = 0;
+    uint visibleLightIndices[100];
+
+    //uint cluster_index = uniqueActiveClustersData[tileIndex];
+
+    for( uint batch = 0; batch < numBatches; ++batch){
+        uint lightIndex = batch * threadCount + gl_LocalInvocationIndex;
+
+        //Prevent overflow by clamping to last light which is always null
+        lightIndex = min(lightIndex, lightCount);
+
+        //Populating shared light array
+        sharedLights[gl_LocalInvocationIndex] = pointLight[lightIndex];
+        barrier();
+
+        //Iterating within the current batch of lights
+        for( uint light = 0; light < threadCount; ++light){
+    
+                if( testSphereAABB(light, tileIndex) )
+                {
+                    visibleLightIndices[visibleLightCount] = batch * threadCount + light;
+                    visibleLightCount ++;
+                }
+            
+        }
+    }
+
+
+    //We want all thread groups to have completed the light tests before continuing
+    barrier();
+
+    uint offset = atomicAdd(globalIndexCount, visibleLightCount);
+
+    for(uint i = 0; i < visibleLightCount; ++i){
+        globalLightIndexList[offset + i] = visibleLightIndices[i];
+    }
+
+
+    lightGrid[tileIndex].offset = offset;
+    lightGrid[tileIndex].count = visibleLightCount;
+
+    //globalIndexCount = 0;
+}

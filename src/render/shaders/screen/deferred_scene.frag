@@ -21,22 +21,50 @@ uniform sampler2D gColorRough;
 
 uniform sampler2D depth_texture;
 uniform sampler2D SSAO_texture;
-uniform sampler2DArray shadowMaps;
+uniform sampler2DArray momentMaps;
+uniform sampler2DArray shadowMapsDepth;
 
 //IBL
 uniform sampler2D brdfLUT;
 uniform samplerCube irradianceMap;
 uniform samplerCube preFilterMap;
 
+vec2 shadowSampleCombined(vec3 coords)
+{   
+    float moment = texture(momentMaps, coords).r;
+    float depth = texture(shadowMapsDepth, coords).r;
 
-float when_lessThan(float x, float y) 
-{
-  return max(sign(y - x), 0.0);
+    return vec2(depth, moment);
 }
 
-float when_greaterThan(float x, float y) 
+vec2 sampleBlurShadowMap(vec3 coords)
 {
-  return 1.0 - when_lessThan(x, y);
+    vec2 texSize = 1.0 / textureSize(momentMaps, 0).xy;
+
+    vec2 avg = shadowSampleCombined(coords).rg;
+    avg += shadowSampleCombined(vec3(coords.xy + vec2(texSize.x, 0.0), coords.z)).rg;
+    avg += shadowSampleCombined(vec3(coords.xy + vec2(-texSize.x, 0.0), coords.z)).rg;
+    avg += shadowSampleCombined(vec3(coords.xy + vec2(0.0, texSize.y), coords.z)).rg;
+    avg += shadowSampleCombined(vec3(coords.xy + vec2(0.0, -texSize.y), coords.z)).rg;
+
+    return avg * (1.0 / 5.0);
+}
+
+float linstep(float low, float high, float v)
+{
+	return clamp((v-low)/(high-low), 0.0, 1.0);
+}
+float SampleVarianceShadowMap(vec3 coords, float compare, float varianceMin, float lightBleedReductionAmount)
+{
+	vec2 moments = sampleBlurShadowMap(coords).rg;
+	
+	float p = step(compare, moments.x);
+	float variance = max(moments.y - moments.x * moments.x, 0.00001);
+	
+	float d = compare - moments.x;
+	float pMax = linstep(lightBleedReductionAmount, 1.0, variance / (variance + d*d));;
+	
+	return min(max(p, pMax), 1.0);
 }
 
 float ShadowCalculation(vec3 fragPosViewSpace, vec3 fragPosWorldSpace, vec3 light_dir, vec3 p_normal)
@@ -53,16 +81,15 @@ float ShadowCalculation(vec3 fragPosViewSpace, vec3 fragPosWorldSpace, vec3 ligh
             break;
         }
     }
-    layer = 0;
     if (layer == -1)
     {
-        layer = SHADOW_CASCADE_COUNT;
+        layer = SHADOW_CASCADE_COUNT - 1;
     }
 
-    vec4 fragPosLightSpace = scene.shadow_matrixes[layer] * vec4(fragPosWorldSpace, 1.0);
+    highp vec4 fragPosLightSpace = scene.shadow_matrixes[layer] * vec4(fragPosWorldSpace, 1.0);
 
     // perform perspective divide
-    vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
+    highp vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
     // transform to [0,1] range
     projCoords.xyz = projCoords.xyz * 0.5 + 0.5;
 
@@ -78,7 +105,8 @@ float ShadowCalculation(vec3 fragPosViewSpace, vec3 fragPosWorldSpace, vec3 ligh
 
     // calculate bias (based on depth map resolution and slope)
     vec3 normal = normalize(p_normal);
-    float bias = max(0.05 * (1.0 - dot(normal, light_dir)), 0.005);
+    normal = round(normal);
+    float bias = 0;
     const float biasModifier = 0.5f;
     if (layer == SHADOW_CASCADE_COUNT)
     {
@@ -89,25 +117,11 @@ float ShadowCalculation(vec3 fragPosViewSpace, vec3 fragPosWorldSpace, vec3 ligh
         bias *= 1 / (scene.shadow_splits[layer] * biasModifier);
     }
 
-    float t = mod(1, 1);
-    int i1 = int(mod(gl_FragCoord.x, 4.0));
-    int i2 = int(mod(gl_FragCoord.y, 4.0));
-    //float dither_value = ditherPattern[i1][i2];
-    //bias * dither_value;
     // PCF
     float shadow = 0.0;
-    vec2 texelSize = 1.0 / vec2(textureSize(shadowMaps, 0));
-    //texelSize *= (0.05 * (layer + 2)); //fixes noise issues
-    for(int x = -1; x <= 1; ++x)
-    {
-        for(int y = -1; y <= 1; ++y)
-        {
-            float pcfDepth = texture(shadowMaps, vec3(projCoords.xy + vec2(x, y) * texelSize, layer)).r;
-            shadow += (currentDepth - bias) > pcfDepth ? 1.0 : 0.0;        
-        }    
-    }
-    shadow /= 9.0;
-        
+  
+    shadow = SampleVarianceShadowMap(vec3(projCoords.xy, layer), currentDepth, scene.shadow_variance_min, scene.shadow_light_bleed_reduction); 
+
     return shadow;
 }
 
@@ -201,28 +215,46 @@ vec3 calculate_light(vec3 light_color, vec3 light_dir, vec3 normal, vec3 view_di
 const float specular = 0.5;
 void main()
 {
+    float depth = textureLod(depth_texture, TexCoords, 0).r;
+
+    //Discard if depth is 1.0
+    //Fixes shading the sky
+    if(depth >= 1.0)
+    {
+        discard;
+    }
+
     //GBUFFER DATA
     vec4 NormalMetal = texture(gNormalMetal, TexCoords);
     vec4 ColorRough = texture(gColorRough, TexCoords);
 
-    //COMMONS
-    vec3 ViewPos = depthToViewPos(depth_texture, cam.invProj, TexCoords);
+    //COMMONS 
+    vec3 ViewPos = depthToViewPosDirect(depth, cam.invProj, TexCoords);
     vec3 WorldPos = (cam.invView * vec4(ViewPos, 1.0)).xyz;
     vec3 Normal = NormalMetal.rgb * 2.0 - 1.0; //convert to [-1, 1] range
     vec3 Albedo = ColorRough.rgb;
     float Metallic = NormalMetal.a;
     float Roughness = ColorRough.a;
-    float AO = texture(SSAO_texture, TexCoords).r;
+
+    float AO = 1.0;
+
+#ifdef USE_SSAO
+    AO = texture(SSAO_texture, TexCoords).r;
+#endif
 
     vec3 F0 = F0calc(Metallic, specular, Albedo);
     vec3 ViewDir = normalize(cam.position.xyz - WorldPos);
 
-    
-    float shadow = ShadowCalculation(ViewPos, WorldPos, normalize(scene.dirLightDirection.xyz), Normal);
+
+    float shadow = 1.0;
+
+#ifdef USE_DIR_SHADOWS
+    shadow = ShadowCalculation(ViewPos, WorldPos, normalize(scene.dirLightDirection.xyz), Normal);
+#endif
 
     vec3 Lighting = vec3(0.0);
     //CALCULATE DIR LIGHT
-    Lighting = calculate_light(scene.dirLightColor.rgb * 1, normalize(scene.dirLightDirection.xyz), Normal, ViewDir, Albedo, 1.0, scene.dirLightSpecularIntensity, Roughness, Metallic, F0);
+    Lighting = shadow * calculate_light(scene.dirLightColor.rgb * scene.dirLightAmbientIntensity, normalize(scene.dirLightDirection.xyz), Normal, ViewDir, Albedo, 1.0, scene.dirLightSpecularIntensity, Roughness, Metallic, F0);
 
 
     //CALCULATE POINT LIGHTS
@@ -236,17 +268,19 @@ void main()
         if(dist < pLight.radius)
         {
             float attenuation = 1.0 / (pLight.constant + pLight.linear * dist + pLight.quadratic * (dist * dist));
-            Lighting += calculate_light(pLight.color.rgb * 12, normalize(LW), Normal, ViewDir, Albedo, attenuation, pLight.specular_intensity, Roughness,
+            Lighting += calculate_light(pLight.color.rgb * pLight.ambient_intensity, normalize(LW), Normal, ViewDir, Albedo, attenuation, pLight.specular_intensity, Roughness,
             Metallic, F0);
         }
     }
+
+ 
 
     //CALCULATE AMBIENT LIGHT
     vec3 Ambient = IBL_Calc(Metallic, Roughness, Normal, ViewDir, Albedo, F0);
 
     //CALCULATE FINAL COLOR
     Lighting = (Ambient + Lighting) * AO;
-    
+
     //FINAL COLOR
     FragColor = vec4(Lighting, 1.0);
 }

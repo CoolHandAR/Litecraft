@@ -1,0 +1,62 @@
+#version 460 core
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout (std430, binding = 2) buffer activeClusters
+{
+    bool activeClustersData[];
+};
+
+ivec4 tileSizes = ivec4(16, 9, 24, ceil(1024.0 / 16.0));
+ivec2 u_screenSize = ivec2(1024, 720);
+float u_zNear = 0.1;
+float u_zFar = 500;
+
+uniform mat4 u_InverseProj;
+uniform sampler2D depth_texture;
+
+vec3 calcViewPos(vec2 coords)
+{
+    float depth = textureLod(depth_texture, coords, 0).r;
+
+    vec4 ndc = vec4(coords.x * 2.0 - 1.0, coords.y * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+
+    vec4 view_space = u_InverseProj * ndc;
+
+    view_space.xyz = view_space.xyz / view_space.w;
+
+    return view_space.xyz;
+}
+
+uint getDepthSlice(float depth)
+{
+    uint num_slices = 16 * 9 * 24;
+
+    return int(floor(log(depth) * (num_slices / log(u_zFar / u_zNear)) - (num_slices * log(u_zNear) / log(u_zFar / u_zNear))));
+}
+
+uint getClusterIndex(uint tileSizeInPx, vec3 pixelCoord)
+{
+    uint clusterZVal  = getDepthSlice(pixelCoord.z);
+
+    uvec3 clusters    = uvec3( uvec2( pixelCoord.xy / tileSizeInPx), clusterZVal);
+    uint clusterIndex = clusters.x +
+                        tileSizes.x * clusters.y +
+                        (tileSizes.x * tileSizes.y) * clusters.z;
+    return clusterIndex;
+}
+
+
+void main()
+{
+    uint clusterIndex = gl_LocalInvocationIndex + gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z * gl_WorkGroupID.z;
+    ivec2 pixelID = ivec2(gl_GlobalInvocationID.xy);
+    activeClustersData[clusterIndex] = false;
+
+    //Getting the depth value
+    vec2 screenCord = pixelID.xy / u_screenSize.xy;
+    float z = textureLod(depth_texture, screenCord, 0).r; //reading the depth buffer
+
+    //Getting the linear cluster index value
+    uint clusterID = getClusterIndex(tileSizes[3], vec3(calcViewPos(screenCord).xy, z));
+    activeClustersData[clusterID] = true;
+}

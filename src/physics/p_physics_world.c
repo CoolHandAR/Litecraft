@@ -1,6 +1,6 @@
 #include "p_physics_world.h"
 
-#include "lc2/lc_world.h"
+#include "lc/lc_world.h"
 #include <stdio.h>
 
 #include "render/r_renderer.h"
@@ -64,10 +64,15 @@ static void clipVelocity(vec3 in, vec3 normal, float overbounce, vec3 dest)
 
 static void Apply_Friction(Kinematic_Body* const k_body)
 {
+	if (!k_body->on_ground)
+	{
+		return;
+	}
+
 	float current_speed = glm_vec3_norm(k_body->velocity);
 
 	//no speed?
-	if (current_speed < 1)
+	if (current_speed < CMP_EPSILON)
 	{
 		if (k_body->on_ground && k_body->water_level <= 0)
 		{
@@ -92,21 +97,22 @@ static void Apply_Friction(Kinematic_Body* const k_body)
 	else
 	{
 		if(k_body->water_level <= 0)
-			drop += current_speed * k_body->config.air_friction;
+			drop += k_body->config.air_friction;
 	}
 
 	//water friction
 	if (k_body->water_level >= 1)
 	{
-		drop += current_speed * k_body->config.water_friction;
+		drop += k_body->config.water_friction;
 	}
-
-	drop *= g_delta;
 	
+	drop *= g_delta;
+
 	float new_speed = current_speed - drop;
+
 	if (new_speed < 0) new_speed = 0;
 
-	new_speed /= current_speed;
+	new_speed /= max(current_speed, 0.0001);
 
 	glm_vec3_scale(k_body->velocity, new_speed, k_body->velocity);
 }
@@ -126,7 +132,6 @@ static bool Process_Jump(Kinematic_Body* const k_body)
 
 static void Water_Move(Kinematic_Body* const k_body)
 {
-
 	Apply_Friction(k_body);
 
 	if (k_body->direction[1] > 0)
@@ -166,7 +171,6 @@ static void Air_Move(Kinematic_Body* const k_body)
 
 	//apply gravity
 	k_body->velocity[1] -= phys_world->gravity_scale * g_delta;
-
 }
 
 static void Ground_Move(Kinematic_Body* const k_body)
@@ -205,7 +209,7 @@ static void FreeFly_Move(Kinematic_Body* const k_body)
 
 	for (int i = 0; i < 3; i++)
 	{
-		k_body->velocity[i] = k_body->direction[i] * 10000 * g_delta;
+		k_body->velocity[i] = k_body->direction[i] * k_body->config.flying_speed * g_delta;
 	}
 	
 }
@@ -268,14 +272,6 @@ static void Solve_KinematicBodies()
 		memset(&k_body->ground_contact, 0, sizeof(Block_Contact));
 		memset(k_body->block_contacts, 0, sizeof(k_body->block_contacts));
 	
-		//skip if the desired velocity is zero
-		if (k_body->velocity[0] == 0 && k_body->velocity[1] == 0 && k_body->velocity[2] == 0 && !k_body->force_update_on_frame && !(k_body->flags & PF__Ducking))
-		{
-			//reset direction vector
-			memset(k_body->direction, 0, sizeof(vec3));
-			continue;
-		}
-		k_body->force_update_on_frame = false;
 
 		//reset on ground state
 		k_body->on_ground = false;
@@ -335,7 +331,7 @@ static void Solve_KinematicBodies()
 
 						if (!LC_isBlockCollidable(block->type))
 						{
-							//continue;
+							continue;
 						}
 
 						block_box.position[0] = x - 0.5;
@@ -465,7 +461,6 @@ static void Solve_KinematicBodies()
 						{
 							if (dist < max_dist)
 							{
-								//clipVelocity(clip_velocity, normal, OVERCLIP, clip_velocity);
 								max_dist = dist;
 								glm_vec3_copy(normal, max_normal);
 							}
@@ -501,7 +496,6 @@ static void Solve_KinematicBodies()
 			//clip the desired velocity to the nearest collision
 			clipVelocity(k_body->velocity, max_normal, over_bounce, k_body->velocity);
 			
-
 			//clip the velocity with other possible bumps
 			for (int i = 0; i < bump_count; i++)
 			{

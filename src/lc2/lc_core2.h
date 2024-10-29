@@ -22,12 +22,6 @@ typedef struct
 	CORE
 * ~~~~~~~~~~~~~~~~~~~
 */
-
-
-
-
-
-void LC_Init();
 void LC_Draw();
 void LC_Loop(float delta);
 void LC_PhysLoop(float delta);

@@ -4,18 +4,18 @@
 #include <string.h>
 #include <stdlib.h>
 
-void* File_Parse(const char* p_filePath, int* r_length)
+unsigned char* File_Parse(const char* p_filePath, int* r_length)
 {
 	FILE* file = NULL;
 
-	fopen_s(&file, p_filePath, "r");
+	fopen_s(&file, p_filePath, "rb"); //use rb because otherwise it can cause reading issues
 	if (!file)
 	{
 		printf("Failed to open file for parsing at path: %s!\n", p_filePath);
 		return 0;
 	}
 	int file_length = File_GetLength(file);
-	void* buffer = malloc(file_length + 1);
+	unsigned char* buffer = malloc(file_length + 1);
 	if (!buffer)
 	{
 		return NULL;

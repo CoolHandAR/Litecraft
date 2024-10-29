@@ -6,51 +6,65 @@ layout (location = 2) in vec2 a_TexCoords;
 layout (location = 3) in vec3 a_Tangent;
 layout (location = 4) in vec3 a_BiTangent;
 
-struct VecOutput
+out VS_Out
 {
-   vec3 v_FragPos;
-   vec3 v_Normal;
-   vec2 v_texCoords;
-   vec3 v_tangentLightPos;
-   vec3 v_tangentViewPos;
-   vec3 v_tangentFragPos;
-};
+    vec2 tex_coords;
+    vec3 world_pos;
+    vec3 normal;
+    vec3 frag_pos;
+    vec3 tangent_view_pos;
+    vec3 tangent_frag_pos;
+    vec3 tangent_light_pos;
+} VS_out;
 
-layout (location = 0) out VecOutput v_Output;
+layout (location = 0) out int v_materialIndex;
 
 layout (std140, binding = 0) uniform Camera
 {
 	mat4 g_viewProjectionMatrix;
 };
 
-uniform vec3 u_viewPos;
-uniform vec3 u_lightPos;
-uniform mat4 u_model;
+layout (std430, binding = 25) readonly restrict buffer Transforms
+{
+    vec4 data[];
+} transforms;
+
 
 void main()
 {
-    vec4 world_pos = u_model * vec4(a_Pos, 1.0);
+    uint read_index = gl_InstanceID * (3 + 1); //xform + custom
+
+    //read matrix data from the buffer
+    mat4 xform;
+    xform[0] = transforms.data[read_index + 0];
+    xform[1] = transforms.data[read_index + 1];
+    xform[2] = transforms.data[read_index + 2];
+    xform[3] = vec4(0.0, 0.0, 0.0, 1.0);
+    xform = transpose(xform);    
+
+    vec4 custom = transforms.data[read_index + 3];
+
+    v_materialIndex = int(custom.x);
+    
+    vec4 world_pos = xform * vec4(a_Pos, 1.0);
     gl_Position = g_viewProjectionMatrix * world_pos;
 
-    //mat3 model_m3 = mat3(u_model);
-    mat3 normal_matrix = transpose(inverse(mat3(u_model)));
-    //CALCULATE TBN MATRIX
-    vec3 T = normalize(normal_matrix  * a_Tangent);
-    vec3 N = normalize(normal_matrix  * a_Normal);
+
+    //OUT
+    VS_out.tex_coords = a_TexCoords;
+    VS_out.world_pos = world_pos.xyz;
+    VS_out.normal = a_Normal;
+    VS_out.frag_pos = a_Pos;
+
+    //calc tangents
+    mat3 normal_matrix = transpose(inverse(mat3(xform)));
+    vec3 T = normalize(normal_matrix * a_Tangent);
+    vec3 N = normalize(normal_matrix * a_Normal);
     T = normalize(T - dot(T, N) * N);
     vec3 B = cross(N, T);
 
-    //vec3 T = normalize(model_m3 * a_Tangent);
-    //vec3 N = normalize(model_m3 * a_Normal);
-   // vec3 B = normalize(model_m3 * a_BiTangent);
-
     mat3 TBN = transpose(mat3(T, B, N));
 
-    v_Output.v_FragPos = world_pos.xyz;
-    v_Output.v_Normal = a_Normal;
-    v_Output.v_texCoords = a_TexCoords;
+    //VS_out.tangent_light_pos = TBN *
 
-    v_Output.v_tangentLightPos = TBN * u_lightPos;
-    v_Output.v_tangentViewPos = TBN * u_viewPos;
-    v_Output.v_tangentFragPos = TBN * v_Output.v_FragPos;
 }

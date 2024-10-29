@@ -7,6 +7,8 @@ Start and ends the frame
 
 #include "r_core.h"
 #include "core/c_common.h"
+#include "input.h"
+#include "r_public.h"
 
 R_CMD_Buffer* cmdBuffer;
 R_DrawData* drawData;
@@ -23,6 +25,7 @@ extern void Pass_Main();
 extern void Compute_DispatchAll();
 extern void Compute_Sync();
 extern void	RPanel_Main();
+extern void RPanel_Metrics();
 extern GLFWwindow* glfw_window;
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -35,6 +38,9 @@ static void RCore_updateMetrics()
 
 	metrics.frame_ticks_per_second++;
 	float new_time = glfwGetTime();
+	
+	metrics.frame_time = new_time - metrics.previous_render_time;
+	metrics.previous_render_time = new_time;
 
 	//update fps
 	if (new_time - metrics.previous_fps_timed_time > 1.0)
@@ -67,15 +73,16 @@ Called on any window resize event. Updates textures sizes, etc...
 */
 void RCore_onWindowResize(int width, int height)
 {
+	
 	//DEFERRED PASS
 	glBindFramebuffer(GL_FRAMEBUFFER, pass->deferred.FBO);
 	//Update textures
 	glBindTexture(GL_TEXTURE_2D, pass->deferred.depth_texture);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, width, height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width, height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, pass->deferred.depth_texture, 0);
 	//NORMAL
 	glBindTexture(GL_TEXTURE_2D, pass->deferred.gNormalMetal_texture);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, NULL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->deferred.gNormalMetal_texture, 0);
 	//COLOR
 	glBindTexture(GL_TEXTURE_2D, pass->deferred.gColorRough_texture);
@@ -93,54 +100,27 @@ void RCore_onWindowResize(int width, int height)
 	glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
 	//main scene
 	glBindTexture(GL_TEXTURE_2D, pass->scene.MainSceneColorBuffer);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, NULL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->scene.MainSceneColorBuffer, 0);
 
 	//AO
-	glBindFramebuffer(GL_FRAMEBUFFER, pass->ao.FBO);
 	glBindTexture(GL_TEXTURE_2D, pass->ao.ao_texture);
-	if (r_cvars.r_useSsao->int_value)
-	{
-		if (r_cvars.r_ssaoHalfSize->int_value)
-		{
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, width / 2, height / 2, 0, GL_RED, GL_FLOAT, NULL);
-		}
-		else
-		{
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, width, height, 0, GL_RED, GL_FLOAT, NULL);
-		}
-		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->ao.ao_texture, 0);
-	}
-	else
-	{
-		//glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, 1, 1, 0, GL_RED, GL_FLOAT, NULL);
-		//glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->ao.ao_texture, 0);
-	}
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+	glClearTexImage(pass->ao.ao_texture, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, NULL);
 
-	glClearColor(1, 0, 0, 0);
-	glClear(GL_COLOR_BUFFER_BIT);
-	glBindFramebuffer(GL_FRAMEBUFFER, pass->ao.BLURRED_FBO);
 	glBindTexture(GL_TEXTURE_2D, pass->ao.blurred_ao_texture);
-	if (r_cvars.r_useSsao->int_value)
-	{
-		if (r_cvars.r_ssaoHalfSize->int_value)
-		{
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, width / 2, height / 2, 0, GL_RED, GL_FLOAT, NULL);
-		}
-		else
-		{
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, width, height, 0, GL_RED, GL_FLOAT, NULL);
-		}
-		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->ao.blurred_ao_texture, 0);
-	}
-	else
-	{
-		//glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, 1, 1, 0, GL_RED, GL_FLOAT, NULL);
-		//glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->ao.ao_texture, 0);
-	}
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+	glClearTexImage(pass->ao.blurred_ao_texture, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, NULL);
 
-	glClearColor(1, 0, 0, 0);
-	glClear(GL_COLOR_BUFFER_BIT);
+	unsigned char* red_buffer = malloc(width * height);
+	if (red_buffer)
+	{
+		memset(red_buffer, 1, width * height);
+		glClearTexImage(pass->ao.ao_texture, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, red_buffer);
+		glClearTexImage(pass->ao.blurred_ao_texture, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, red_buffer);
+
+		free(red_buffer);
+	}
 
 
 	//Bloom
@@ -154,10 +134,22 @@ void RCore_onWindowResize(int width, int height)
 
 		glBindTexture(GL_TEXTURE_2D, pass->bloom.mip_textures[i]);
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_R11F_G11F_B10F, mipWidth, mipHeight, 0, GL_RGB, GL_FLOAT, NULL);
-
+		glClearColor(0, 0, 0, 0);
+		glClear(GL_COLOR_BUFFER_BIT);
 		pass->bloom.mip_sizes[i][0] = mipWidth;
 		pass->bloom.mip_sizes[i][1] = mipHeight;
 	}
+
+	//General
+	glBindTexture(GL_TEXTURE_2D, pass->general.depth_halfsize_texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width/ 2, height / 2, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+	
+	glBindTexture(GL_TEXTURE_2D, pass->general.normal_halfsize_texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width / 2, height / 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+
+	glBindFramebuffer(GL_FRAMEBUFFER, pass->general.halfsize_fbo);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->general.normal_halfsize_texture, 0);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, pass->general.depth_halfsize_texture, 0);
 
 	scene.camera.screen_size[0] = width;
 	scene.camera.screen_size[1] = height;
@@ -196,12 +188,20 @@ static void RCore_checkForModifiedCvars()
 	{
 
 	}
-	if (r_cvars.r_useSsao->modified || r_cvars.r_ssaoHalfSize->modified)
+	if (r_cvars.r_useDepthOfField->modified)
 	{
-		//Must clear the ao texture if we want to enable or disable ssao
+		RInternal_UpdatePostProcessShader(true);
+
+		r_cvars.r_useDepthOfField->modified = false;
+	}
+	if (r_cvars.r_useSsao->modified || r_cvars.r_ssaoHalfSize->modified || r_cvars.r_useBloom->modified)
+	{
 		RCore_onWindowResize(backend_data->screenSize[0], backend_data->screenSize[1]);
+		RInternal_UpdateDeferredShadingShader(true);
 
 		r_cvars.r_useSsao->modified = false;
+		r_cvars.r_ssaoHalfSize->modified = false;
+		r_cvars.r_useBloom->modified = false;
 	}
 	if (r_cvars.r_ssaoBias->modified || r_cvars.r_ssaoRadius->modified || r_cvars.r_ssaoStrength->modified)
 	{
@@ -217,13 +217,7 @@ static void RCore_checkForModifiedCvars()
 	if (r_cvars.r_Exposure->modified || r_cvars.r_Gamma->modified || r_cvars.r_Brightness->modified || r_cvars.r_Contrast->modified ||
 		r_cvars.r_Saturation->modified ||r_cvars.r_bloomStrength->modified)
 	{
-		glUseProgram(pass->post.post_process_shader);
-		Shader_SetFloat(pass->post.post_process_shader, "u_Exposure", r_cvars.r_Exposure->float_value);
-		Shader_SetFloat(pass->post.post_process_shader, "u_Gamma", r_cvars.r_Gamma->float_value);
-		Shader_SetFloat(pass->post.post_process_shader, "u_Brightness", r_cvars.r_Brightness->float_value);
-		Shader_SetFloat(pass->post.post_process_shader, "u_Contrast", r_cvars.r_Contrast->float_value);
-		Shader_SetFloat(pass->post.post_process_shader, "u_Saturation", r_cvars.r_Saturation->float_value);
-		Shader_SetFloat(pass->post.post_process_shader, "u_bloomStrength", r_cvars.r_bloomStrength->float_value);
+		RInternal_UpdatePostProcessShader(false);
 
 		r_cvars.r_Exposure->modified = false;
 		r_cvars.r_Gamma->modified = false;
@@ -231,6 +225,32 @@ static void RCore_checkForModifiedCvars()
 		r_cvars.r_Contrast->modified = false;
 		r_cvars.r_Saturation->modified = false;
 		r_cvars.r_bloomStrength->modified = false;
+	}
+	if (r_cvars.r_useFxaa->modified)
+	{
+		RInternal_UpdatePostProcessShader(true);
+
+		r_cvars.r_useFxaa->modified = false;
+	}
+	if (r_cvars.r_useDirShadowMapping->modified || r_cvars.r_useSsao->modified)
+	{
+		RInternal_UpdateDeferredShadingShader(true);
+
+		r_cvars.r_useDirShadowMapping->modified = false;
+	}
+	if (r_cvars.r_shadowBias->modified || r_cvars.r_shadowNormalBias->modified || r_cvars.r_shadowVarianceMin->modified || r_cvars.r_shadowLightBleedReduction->modified)
+	{
+		glUseProgram(pass->lc.shadow_map_shader);
+		Shader_SetFloat(pass->lc.shadow_map_shader, "u_bias", r_cvars.r_shadowBias->float_value);
+		Shader_SetFloat(pass->lc.shadow_map_shader, "u_slopeScale", r_cvars.r_shadowNormalBias->float_value);
+
+		scene.scene_data.shadow_variance_min = r_cvars.r_shadowVarianceMin->float_value;
+		scene.scene_data.shadow_light_bleed_reduction = r_cvars.r_shadowLightBleedReduction->float_value;
+
+		r_cvars.r_shadowBias->modified = false;
+		r_cvars.r_shadowNormalBias->modified = false;
+		r_cvars.r_shadowVarianceMin->modified = false;
+		r_cvars.r_shadowLightBleedReduction->modified = false;
 	}
 	if (r_cvars.cam_fov->modified || r_cvars.cam_zFar->modified || r_cvars.cam_zNear->modified)
 	{
@@ -272,13 +292,27 @@ static void RCore_UploadGpuData()
 	if (drawData->triangle.vertices_count > 0)
 	{
 		glBindBuffer(GL_ARRAY_BUFFER, drawData->triangle.vbo);
-		glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(BasicVertex) * drawData->triangle.vertices_count, drawData->triangle.vertices);
+		glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(TriangleVertex) * drawData->triangle.vertices_count, drawData->triangle.vertices);
 	}
 	if (drawData->text.vertices_count > 0)
 	{
 		glBindBuffer(GL_ARRAY_BUFFER, drawData->text.vbo);
 		glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(TextVertex) * drawData->text.vertices_count, drawData->text.vertices);
 	}
+
+	//Scene data
+	if (scene.cull_data.lc_world_in_frustrum_count > 0)
+	{
+		glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_ssbo, 0, sizeof(int) * scene.cull_data.lc_world_in_frustrum_count, scene.cull_data.lc_world_frustrum_sorted_query_buffer);
+	}
+	glNamedBufferSubData(drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo, 0, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_indexes->elements_size, 
+		drawData->lc_world.shadow_sorted_chunk_indexes->data);
+
+	glNamedBufferSubData(drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_indexes->elements_size, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_transparent_indexes->elements_size,
+		drawData->lc_world.shadow_sorted_chunk_transparent_indexes->data);
+
+
+	glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_ssbo, 0, sizeof(int) * 500, scene.cull_data.lc_world_frustrum_query_buffer);
 
 	//Camera update
 	glBindBuffer(GL_UNIFORM_BUFFER, scene.camera_ubo);
@@ -300,16 +334,18 @@ static void RCore_EndFrameCleanup()
 	drawData->text.vertices_count = 0;
 	drawData->text.indices_count = 0;
 
-	//Reset occlussion draw cmds buffer
-	DrawArraysIndirectCommand cmd;
-	memset(&cmd, 0, sizeof(cmd));
-	cmd.instanceCount = 1;
-	glNamedBufferSubData(drawData->lc_world.world_render_data->ocl_boxes_draw_cmd_buffer, 0, sizeof(DrawArraysIndirectCommand), &cmd);
+	drawData->triangle.texture_index = 0;
+
+	//glClearNamedBufferSubData(drawData->lc_world.world_render_data->draw_cmds_atomic_counter, GL_R32UI, 0, sizeof(unsigned), GL_RED_INTEGER, GL_UNSIGNED_INT, NULL);
 }
 
 static void RCore_DrawUI()
 {
-	RPanel_Main();
+	if (r_cvars.r_drawPanel->int_value)
+	{
+		RPanel_Main();
+	}
+	//RPanel_Metrics();
 }
 
 static void r_waitForRenderThread()
@@ -368,8 +404,9 @@ void RCore_Start()
 	//Render panel, metrics ui
 	RCore_DrawUI();
 
-	//Dispatch computes
-	Compute_Sync();
+	////Dispatch computes
+	//Compute_Sync();
+	Compute_DispatchAll();
 
 	//Process various renderer tasks
 	RCmds_processCommands();
@@ -385,10 +422,14 @@ Called in c_main.c. Called by the main thread at the end of the main loop
 */
 void RCore_End()
 {
+	if (Input_IsActionJustPressed("Open-panel") && !Con_isOpened())
+	{
+		Cvar_setValueDirectInt(r_cvars.r_drawPanel, !r_cvars.r_drawPanel->int_value);
+	}
 	//Sync the render process thread and dispatched gl computes
 	//and upload data to gpu
-	//Compute_Sync();
-	Compute_DispatchAll();
+	Compute_Sync();
+	//Compute_DispatchAll();
 	//CPU SYNC
 
 	//Upload data to gpu

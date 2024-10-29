@@ -5,7 +5,7 @@
 layout(triangles, invocations = 5) in;
 layout(triangle_strip, max_vertices = 3) out;
 
-layout (std140, binding = 1) uniform LightSpaceMatrices
+layout (std140, binding = 4) uniform LightSpaceMatrices
 {
     mat4 lightSpaceMatrices[LIGHT_SPACE_MATRIXES_COUNT];
 };

@@ -23,7 +23,7 @@ vec3 PowVec3(vec3 v, float p)
     return vec3(pow(v.x, p), pow(v.y, p), pow(v.z, p));
 }
 
-const float invGamma = 1.0 / 1.5;
+const float invGamma = 1.0 / 2.2;
 vec3 ToSRGB(vec3 v)   { return PowVec3(v, invGamma); }
 
 float sRGBToLuma(vec3 col)

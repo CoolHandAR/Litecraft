@@ -1,0 +1,336 @@
+#version 460 core
+
+layout (local_size_x = 16, local_size_y = 1, local_size_z = 1) in;
+
+#define CHUNK_WIDTH 16
+#define CHUNK_HEIGHT 16
+#define CHUNK_LENGTH 16
+
+#define CHUNK_FLAG_VISIBLE uint(1)
+#define CHUNK_FLAG_IN_FRUSTRUM uint(2)
+#define CHUNK_FLAG_PREV_VISIBLE uint(4)
+
+#define MIN_VERTEX_COUNT_FOR_HIZ_CULL 5000
+
+uniform sampler2D hiz_map_texture;
+uniform int u_chunkAmount;
+uniform mat4 u_view;
+uniform mat4 u_proj;
+uniform mat4 u_InverseProj;
+uniform vec2 u_minMax;
+uniform vec3 u_viewPos;
+
+uniform uint u_opaqueUpdateOffset;
+uniform int u_opaqueUpdateMoveBy;
+
+uniform uint u_transparentUpdateOffset;
+uniform int u_transparentUpdateMoveBy;
+
+struct ChunkData
+{
+    vec4 min_point;
+    uint vis_flags;
+
+};
+
+struct CombinedChunkDrawCmdData
+{
+	//OPAQUES
+	uint o_count;
+	uint o_instanceCount;
+	uint o_first;
+	uint o_baseInstance;
+
+	//TRANSPARENTS
+	uint t_count;
+	uint t_instanceCount;
+	uint t_first;
+	uint t_baseInstance;
+};
+
+struct DrawArraysIndirectCommand
+{
+    uint count;
+    uint instanceCount;
+    uint first;
+    uint baseInstance;
+};
+
+layout (std140, binding = 0) uniform Camera
+{
+	mat4 g_viewProjectionMatrix;
+};
+
+
+struct Camera_data
+{
+    vec4 frustrum_planes[6];
+};
+
+struct OclData
+{
+    vec3 pos;
+    uint chunk_index;
+};
+
+layout(std140, binding = 1) uniform CAMERA_INFO
+{
+    Camera_data camera_data;
+};
+
+layout (std430, binding = 9) readonly restrict buffer ChunkMinPointsBuffer
+{
+    ChunkData data[];
+} chunk_data;
+
+layout (std430, binding = 10) buffer DrawBuffer
+{
+    CombinedChunkDrawCmdData data[];
+} draw;
+
+layout (std430, binding = 11) restrict buffer ChunkVisibles
+{
+    uint data[];
+} VisibleChunk;
+
+layout (std430, binding = 12) restrict buffer ChunkVertexDataForOcclusion
+{
+    vec4 data[];
+} OclussionVertex;
+
+layout (std430, binding = 13) restrict buffer AtomicTest
+{
+    uint data;
+} atomic;
+
+//layout(binding = 0) uniform atomic_uint atomic_counter;
+
+bool AABB_in_frustrum(vec4 aabb[2], vec4 frustrum_planes[6])
+{
+    vec4 p;
+    float dp;
+
+    for(int i = 0; i < 6; i++)
+    {
+        p = frustrum_planes[i];
+
+        int i1 = int(p.x > 0.0);
+        int i2 = int(p.y > 0.0);
+        int i3 = int(p.z > 0.0);
+
+        dp = p.x * aabb[i1].x + 
+             p.y * aabb[i2].y +
+             p.z * aabb[i3].z;
+
+        if(dp < -p.w)
+            return false;
+    }
+
+    return true;
+}
+
+
+
+void main()
+{
+    uint chunk_index = gl_GlobalInvocationID.x;
+
+    //make sure we aren't processing more than we need to
+    if(chunk_index >= u_chunkAmount)
+    {
+        return;
+    }
+    
+#define CHUNK chunk_data.data[chunk_index]
+
+    //always reset the instance count
+    draw.data[chunk_index].o_instanceCount = 0;
+    draw.data[chunk_index].t_instanceCount = 0;
+
+    uint total_vert_count = draw.data[chunk_index].o_count + draw.data[chunk_index].t_count;
+
+   //Is the chunk completely empty?
+    if(total_vert_count == 0)
+    {
+       // return;
+    }
+
+    //update offsets and vertex counts in the draw cmds
+    if(u_opaqueUpdateMoveBy != 0)
+    {
+        if(draw.data[chunk_index].o_count > 0)
+        {
+            if(draw.data[chunk_index].o_first > u_opaqueUpdateOffset)
+            {
+                draw.data[chunk_index].o_first += u_opaqueUpdateMoveBy;
+            }
+            else if(draw.data[chunk_index].o_first == u_opaqueUpdateOffset)
+            {
+                draw.data[chunk_index].o_count += u_opaqueUpdateMoveBy;
+            }
+        }
+    }
+    if(u_transparentUpdateMoveBy != 0)
+    {
+        if(draw.data[chunk_index].t_count > 0)
+        {
+            if(draw.data[chunk_index].t_first > u_transparentUpdateOffset)
+            {
+                draw.data[chunk_index].t_first += u_transparentUpdateMoveBy;
+            }
+            else if(draw.data[chunk_index].t_first == u_transparentUpdateOffset)
+            {
+                draw.data[chunk_index].t_count += u_transparentUpdateMoveBy;
+            }
+        }
+    }
+
+    //Prepare an aabb
+    vec4 aabb[2];
+    aabb[0] = vec4(CHUNK.min_point.x - 0.5, CHUNK.min_point.y - 0.5, CHUNK.min_point.z - 0.5, 1.0);
+    aabb[1] = vec4(CHUNK.min_point.x + (CHUNK_WIDTH), CHUNK.min_point.y + (CHUNK_HEIGHT), CHUNK.min_point.z + (CHUNK_LENGTH), 1.0);
+
+    if(aabb[0].x < u_minMax.x || aabb[1].x > u_minMax.y)
+    {
+        //return;
+    }
+
+    //Perform frustrum check
+    if(!AABB_in_frustrum(aabb, camera_data.frustrum_planes))
+    {
+        //not in frustrum
+        VisibleChunk.data[chunk_index] = 0;
+       // return;
+    }
+
+    bool skip_occlusion_test = false;
+    if(bool(VisibleChunk.data[chunk_index] & CHUNK_FLAG_IN_FRUSTRUM) == false)
+    {
+        skip_occlusion_test = true;
+    }
+
+    VisibleChunk.data[chunk_index] |= CHUNK_FLAG_IN_FRUSTRUM;
+    
+     //Prepare vertex data for the next occlusion cull
+    vec3 aabb_ctr = vec3(CHUNK.min_point.x - 0.5, CHUNK.min_point.y - 0.5, CHUNK.min_point.z - 0.5) + vec3(8.0);
+    vec3 local_view_pos = u_viewPos - aabb_ctr;
+
+    local_view_pos.x = (local_view_pos.x > 0) ? 1 : -1;
+    local_view_pos.y = (local_view_pos.y > 0) ? 1 : -1;
+    local_view_pos.z = (local_view_pos.z > 0) ? 1 : -1;
+
+    vec4 prepared_vertices[3][4];
+
+    //barrier();
+    //memoryBarrier();
+    uint stride = atomicAdd(atomic.data, 1);
+    stride = stride * (14);
+    for(int face = 0; face < 3; face++)
+    {
+        vec3 faceNormal = vec3(0);
+        vec3 edgeBasis0 = vec3(0);
+        vec3 edgeBasis1 = vec3(0);
+
+        switch(face)
+        {
+            case 0:
+            {
+                faceNormal.x = 8;
+                edgeBasis0.y = 8;
+                edgeBasis1.z = 8;
+                break;
+            }
+            case 1:
+            {
+                faceNormal.y = 8;
+                edgeBasis1.x = 8;
+                edgeBasis1.z = 8;
+                break;
+            }
+            case 2:
+            {
+                faceNormal.z = 8;
+                edgeBasis0.x = 8;
+                edgeBasis1.y = 8;
+                break;
+            }
+        }
+
+        float proj = local_view_pos[face];
+
+        faceNormal = faceNormal * proj;
+        edgeBasis1 = edgeBasis1 * proj;
+
+       // OclussionVertex.data[atomicCounterIncrement(atomic_counter)] = vec4(aabb_ctr + (faceNormal - edgeBasis0 - edgeBasis1), chunk_index);
+       // OclussionVertex.data[atomicCounterIncrement(atomic_counter)] = vec4(aabb_ctr + (faceNormal + edgeBasis0 - edgeBasis1), chunk_index);
+       // OclussionVertex.data[atomicCounterIncrement(atomic_counter)] = vec4(aabb_ctr + (faceNormal - edgeBasis0 + edgeBasis1), chunk_index);
+       // OclussionVertex.data[atomicCounterIncrement(atomic_counter)] = vec4(aabb_ctr + (faceNormal + edgeBasis0 + edgeBasis1), chunk_index);
+
+        prepared_vertices[face][0] = vec4(aabb_ctr + (faceNormal - edgeBasis0 - edgeBasis1), chunk_index);
+        prepared_vertices[face][1] = vec4(aabb_ctr + (faceNormal + edgeBasis0 - edgeBasis1), chunk_index);
+        prepared_vertices[face][2] = vec4(aabb_ctr + (faceNormal - edgeBasis0 + edgeBasis1), chunk_index);
+        prepared_vertices[face][3] = vec4(aabb_ctr + (faceNormal + edgeBasis0 + edgeBasis1), chunk_index);
+
+      //  OclussionVertex.data[stride++] = prepared_vertices[face][0];
+        //stride++;
+      //  OclussionVertex.data[stride++] = prepared_vertices[face][1];
+        //tride++;
+        //OclussionVertex.data[stride++] = prepared_vertices[face][2];
+       // stride++;
+        //OclussionVertex.data[stride++] = prepared_vertices[face][3];
+        //stride++;
+    }
+
+    OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(-8, 8, 8), chunk_index);
+    OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(8, 8, 8), chunk_index);
+    OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(-8, -8, 8), chunk_index);
+    OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(8, -8, 8), chunk_index);
+
+    OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(8, -8, -8), chunk_index);
+    OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(8, 8, 8), chunk_index);
+    OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(8, 8, -8), chunk_index);
+    OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(-8, 8, 8), chunk_index);
+
+    OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(-8, 8, -8), chunk_index);
+    OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(-8, -8, 8), chunk_index);
+    OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(-8, -8, -8), chunk_index);
+    OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(8, -8, -8), chunk_index);
+
+     OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(-8, 8, -8), chunk_index);
+    OclussionVertex.data[stride++] = vec4(aabb_ctr + vec3(8, 8, -8), chunk_index);
+
+    if(bool(VisibleChunk.data[chunk_index] & CHUNK_FLAG_VISIBLE) == false && bool(VisibleChunk.data[chunk_index] & CHUNK_FLAG_PREV_VISIBLE) == false && skip_occlusion_test == false)
+    {
+       // return;
+    }
+
+    if(bool(VisibleChunk.data[chunk_index] & CHUNK_FLAG_PREV_VISIBLE) == false)
+    {
+        VisibleChunk.data[chunk_index] |= CHUNK_FLAG_PREV_VISIBLE;
+    }
+    else
+    {
+        VisibleChunk.data[chunk_index] &= ~CHUNK_FLAG_PREV_VISIBLE;
+    }
+
+
+    //VisibleChunk.data[chunk_index] ^= CHUNK_FLAG_PREV_VISIBLE;
+
+    VisibleChunk.data[chunk_index] &= ~CHUNK_FLAG_VISIBLE;
+
+   
+    //If we got here it means the chunk is visible  
+    if(draw.data[chunk_index].t_count > 0)
+    {
+        draw.data[chunk_index].t_instanceCount = 1;
+    }
+    if(draw.data[chunk_index].o_count > 0)
+    {
+        draw.data[chunk_index].o_instanceCount = 1;
+    }
+
+
+
+   
+
+}

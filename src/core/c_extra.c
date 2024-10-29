@@ -4,7 +4,7 @@
 #include <string.h>
 #include <assert.h>
 
-void C_Printf(const char* fmt, ...)
+void Core_Printf(const char* fmt, ...)
 {
 	assert(!strchr(fmt, '\n') && "New line character not allowed in C_Printf(..)");
 

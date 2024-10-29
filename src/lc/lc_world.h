@@ -1,50 +1,15 @@
 #pragma once
 
-#include "lc_chunk.h"
-#include "physics/p_physics_world.h"
-#include "lc_defs.h"
+//#include "lc/lc_block_defs.h"
+#include "lc/lc_chunk.h"
+#include "utility/Custom_Hashmap.h"
+#include "utility/u_utility.h"
+#include "render/r_shader.h"
 #include "utility/forward_list.h"
-#include "physics/p_physics_defs.h"
-#include "utility/u_object_pool.h"
-#include "lc_block_defs.h"
+#include "physics/p_physics_world.h"
+#include "physics/p_aabb_tree.h"
 
-#define LC_WORLD_INIT_WIDTH 1
-#define LC_WORLD_INIT_HEIGHT 1
-#define LC_WORLD_INIT_LENGTH 1
-#define LC_WORLD_INIT_TOTAL_SIZE LC_WORLD_INIT_WIDTH * LC_WORLD_INIT_HEIGHT * LC_WORLD_INIT_LENGTH
-
-#define LC_WORLD_MAX_WIDTH 64
-#define LC_WORLD_MAX_HEIGHT 64
-#define LC_WORLD_MAX_LENGTH 64
-
-#define LC_WORLD_GRAVITY 3.1f
-
-#define LC_WORLD_MIDNIGHT_THRESHOLD 1000
-#define LC_WORLD_NOON_THRESHOLD 100
-#define LC_WORLD_MORNING_THRESHOLD 200
-#define LC_WORLD_AFTERNOON_THRESHOLD 300
-#define LC_WORLD_EVENING_THRESHOLD 400
-#define LC_WORLD_DAWN_THRESHOLD 500
-#define LC_WORLD_DUSK_THRESHOLD 800
-
-#define LC_WORLD_MAX_CLOUDS 124
-#define LC_WORLD_CLOUD_WIDTH 24
-#define LC_WORLD_CLOUD_HEIGHT 1
-#define LC_WORLD_CLOUD_LENGTH 24
-
-typedef struct LC_Sun
-{
-	vec3 position;
-	vec3 sun_size;
-	vec3 direction_to_center;
-
-	vec4 sun_color;
-
-	float ambient_intensity;
-	float diffuse_intensity;
-
-
-} LC_Sun;
+#define LC_WORLD_WATER_HEIGHT 12
 
 typedef enum LC_TimeOfDay
 {
@@ -58,70 +23,115 @@ typedef enum LC_TimeOfDay
 
 } LC_TimeOfDay;
 
-typedef enum LC_GameType
+typedef struct
 {
-	LC_GT__SURVIVAL,
-	LC_GT__CREATIVE
-} LC_GameType;
+	vec3 position;
+	vec3 direction_to_world_center;
+	vec3 color;
+	float speed;
+} LC_Sun;
 
-typedef struct LC_World
+typedef struct
 {
-	size_t vertex_count_index;
+	//OPAQUES
+	unsigned o_count;
+	unsigned o_first;
 
-	unsigned vao, vbo, copy_vbo;
+	//TRANSPARENTS
+	unsigned t_count;
+	unsigned t_first;
+} CombinedChunkDrawCmdData;
 
-	unsigned chunks_info_ssbo;
 
-	unsigned blocks_info_ubo;
 
-	vec3 clouds[LC_WORLD_MAX_CLOUDS];
+typedef struct
+{
+	vec4 min_point;
+	unsigned vis_flags;
+}  ChunkData;
 
-	LC_TimeOfDay time_of_day;
+typedef struct
+{
+	int chunk_data_index;
+	int opaque_index;
+	int transparent_index;
+} LCTreeData;
 
-	uint64_t game_time;
+typedef struct
+{
+	unsigned opaque_update_offset;
+	int opaque_update_move_by;
 
+	unsigned transparent_update_offset;
+	int transparent_update_move_by;
+
+	int skip_opaque_owner;
+	int skip_transparent_owner;
+
+	unsigned chunk_amount;
+
+} LC_WorldUniformBuffer;
+
+typedef struct
+{
+	DynamicRenderBuffer vertex_buffer;
+	DynamicRenderBuffer transparents_vertex_buffer;
+	RenderStorageBuffer draw_cmds_buffer;
+	RenderStorageBuffer chunk_data;
+	RenderStorageBuffer sorted_draw_cmds_buffer;
+	unsigned draw_cmds_counters_buffers[2];
+	unsigned block_data_buffer;
+	unsigned visibles_ssbo;
+	unsigned visibles_sorted_ssbo;
+	unsigned shadow_chunk_indexes_ssbo;
+	unsigned vao;
+	R_Shader process_shader;
+	R_Shader rendering_shader;
+	R_Shader transparents_forward_pass_shader;
+	R_Shader water_forward_pass_shader;
+	
+	int chunks_in_frustrum_count;
+
+	LC_WorldUniformBuffer ubo_data;
+	unsigned ubo_id;
+
+	R_Texture* texture_atlas;
+	R_Texture* texture_atlas_normals;
+	R_Texture* texture_atlas_mer;
+
+	AABB_Tree aabb_tree;
+} WorldRenderData;
+
+typedef struct
+{
+	P_PhysWorld* phys_world;
+	FL_Head* entities;
+	WorldRenderData render_data;
+	CHMap chunk_map;
+	CHMap light_hash_map;
 	LC_Sun sun;
 
-	FL_Head* entities;
+	size_t chunk_count;
+	size_t chunks_vertex_loaded;
+	ivec3 chunks_bounds_normalized[2];
 
-	P_PhysWorld* phys_world;
-
-	Object_Pool* chunks;
-
-	int chunk_indexes[LC_WORLD_MAX_WIDTH][LC_WORLD_MAX_HEIGHT][LC_WORLD_MAX_LENGTH];
-
-	ivec3 chunks_size;
-
-	time_t gen_seed; //Seed for world generation
-
-	bool dirty_bit;
-
-	LC_GameType game_type; //The current gametype ex: Survival, Creative
+	size_t total_num_blocks;
 } LC_World;
 
-LC_World* LC_World_Generate();
-void LC_World_Destruct(LC_World* p_world);
-LC_Entity* LC_World_AssignEntity();
-void LC_World_DeleteEntityByID(int p_id);
-void LC_World_DeleteEntity(LC_Entity* p_ent);
 
-void LC_World_deleteBlock(int p_gX, int p_gY, int p_gZ);
-void LC_World_addBlock(int p_gX, int p_gY, int p_gZ, ivec3 p_addFace, LC_BlockType p_bType);
-void LC_World_mineBlock(int p_gX, int p_gY, int p_gZ);
-
-LC_Chunk* LC_World_getChunk(float x, float y, float z);
-LC_Chunk* LC_World_getNearestChunk(float g_x, float g_y, float g_z);
-LC_Chunk* LC_World_getNearestChunk2(float g_x, float g_y, float g_z);
-LC_Block* LC_World_getBlock(float g_x, float g_y, float g_z, ivec3 r_relativePos, LC_Chunk** r_bChunk);
-LC_Block* LC_World_getBlockByRay(vec3 from, vec3 dir, ivec3 r_pos, ivec3 r_face);
-
-LC_Chunk* LC_World_CreateChunk(int p_gX, int p_gY, int p_gZ);
-void LC_World_DeleteChunk(int x, int y, int z);
-
-int LC_World_getChunkIndex(LC_Chunk* const p_chunk);
-
-void LC_World_UpdateChunk(LC_Chunk* const p_chunk);
-
-void LC_World_unloadFarAwayChunks(vec3 player_pos, float max_distance);
-void LC_World_unloadFarAwayChunk(LC_Chunk* chunk, ivec3 player_pos, float max_distance);
-void LC_World_Update(float delta);
+void LC_World_Create(int p_initWidth, int p_initHeight, int p_initLength);
+void LC_World_Destruct();
+LC_Chunk* LC_World_GetChunk(float p_x, float p_y, float p_z);
+LC_Chunk* LC_World_GetChunkByIndex(size_t p_index);
+LC_Chunk* LC_World_GetChunkByNormalizedPosition(ivec3 pos);
+LC_Block* LC_World_GetBlock(float p_x, float p_y, float p_z, ivec3 r_relativePos, LC_Chunk** r_chunk);
+LC_Block* LC_World_getBlockByRay(vec3 from, vec3 dir, int p_maxSteps, ivec3 r_pos, ivec3 r_face, LC_Chunk** r_chunk);
+bool LC_World_addBlock(int p_gX, int p_gY, int p_gZ, ivec3 p_addFace, int p_bType);
+bool LC_World_mineBlock(int p_gX, int p_gY, int p_gZ);
+bool LC_World_setBlock(int p_gX, int p_gY, int p_gZ, LC_BlockType p_bType);
+WorldRenderData* LC_World_getRenderData();
+size_t LC_World_GetChunkAmount();
+size_t LC_World_GetDrawCmdAmount();
+P_PhysWorld* LC_World_GetPhysWorld();
+void LC_World_getSunDirection(vec3 v);
+int LC_World_getPrevMinedBlockHP();

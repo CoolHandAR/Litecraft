@@ -26,17 +26,17 @@ void main()
     texCoords = vec2((texCoords.x + vs_in.TexOffset.x) / 25, -(texCoords.y + vs_in.TexOffset.y) / 25);
 
     vec4 AlbedoColor = texture(texture_atlas, texCoords);
+
+#ifdef SEMI_TRANSPARENT
+    if(AlbedoColor.a < 0.5)
+    {
+        discard;
+    }
+
+#endif
+
     vec3 MerColor = texture(texture_atlas_mer, texCoords).rgb;
     vec3 NormalColor = texture(texture_atlas_normal, texCoords).rgb * 2.0 - 1.0;
-
-   //apply the shatter texture based on the hp of the block
-   if(vs_in.Block_hp < 7)
-   {
-      vec2 shatter_tex_coords = vec2((texCoords.x + 24) / 25, -(texCoords.y + (7 - vs_in.Block_hp)) / 25);
-      vec4 shatter_color = texture(texture_atlas,  shatter_tex_coords);
-
-      AlbedoColor = AlbedoColor + (shatter_color * (max(sign(shatter_color.a - 0.5), 0.0))); //add shatter color if alpha is less than 0.5
-   }
 
    g_normalMetal.rgb = normalize(vs_in.TBN * NormalColor) * 0.5 + 0.5; //Normal. We convert the normal value to [0, 1] range so that we can store in a unsigned texture format
    g_normalMetal.a = MerColor.r; //Metal

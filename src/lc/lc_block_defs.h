@@ -30,8 +30,18 @@ typedef enum LC_BlockType
 	LC_BT__FLOWER,
 	LC_BT__GLOWSTONE,
 	LC_BT__MAGMA,
-	LC_BT__OBSIDIAN
-
+	LC_BT__OBSIDIAN,
+	LC_BT__DIAMOND,
+	LC_BT__IRON,
+	LC_BT__SPECULAR,
+	LC_BT__CACTUS,
+	LC_BT__SNOW,
+	LC_BT__GRASS_SNOW,
+	LC_BT__SPRUCE_PLANKS,
+	LC_BT__GRASS_PROP,
+	LC_BT__TORCH,
+	LC_BT__DEAD_BUSH,
+	LC_BT__MAX
 } LC_BlockType;
 
 typedef struct LC_Block_Texture_Offset_Data
@@ -59,57 +69,57 @@ static const LC_Block_Texture_Offset_Data LC_BLOCK_TEX_OFFSET_DATA[] =
 
 	//GRASS
 	LC_BT__GRASS,
-	25, 8,
-	25, 8,
-	25, 8,
-	25, 8,
-	11, 14,
-	10, 16,
+	1, 0,
+	1, 0,
+	1, 0,
+	1, 0,
+	3, 0,
+	2, 0,
 
 	//SAND
 	LC_BT__SAND,
-	5, 30,
-	5, 30,
-	5, 30,
-	5, 30,
-	5, 30,
-	5, 30,
+	4, 0,
+	4, 0,
+	4, 0,
+	4, 0,
+	4, 0,
+	4, 0,
 
 	//STONE
 	LC_BT__STONE,
-	10, 6,
-	10, 6,
-	10, 6,
-	10, 6,
-	10, 6,
-	10, 6,
+	5, 0,
+	5, 0,
+	5, 0,
+	5, 0,
+	5, 0,
+	5, 0,
 
 	//DIRT
 	LC_BT__DIRT,
-	13, 9,
-	13, 9,
-	13, 9,
-	13, 9,
-	13, 9,
-	13, 9,
+	6, 0,
+	6, 0,
+	6, 0,
+	6, 0,
+	6, 0,
+	6, 0,
 
 	//TRUNK
 	LC_BT__TRUNK,
-	1, 26,
-	1, 26,
-	1, 26,
-	1, 26,
-	2, 26,
-	2, 26,
+	7, 0,
+	7, 0,
+	7, 0,
+	7, 0,
+	8, 0,
+	8, 0,
 
 	//TREE LEAVES
 	LC_BT__TREELEAVES,
-	4, 7,
-	4, 7,
-	4, 7,
-	4, 7,
-	4, 7,
-	4, 7,
+	9, 0,
+	9, 0,
+	9, 0,
+	9, 0,
+	9, 0,
+	9, 0,
 
 	//WATER
 	LC_BT__WATER,
@@ -122,55 +132,154 @@ static const LC_Block_Texture_Offset_Data LC_BLOCK_TEX_OFFSET_DATA[] =
 
 	//GLASS
 	LC_BT__GLASS,
-	24, 15,
-	24, 15,
-	24, 15,
-	24, 15,
-	24, 15,
-	24, 15,
+	10, 0,
+	10, 0,
+	10, 0,
+	10, 0,
+	10, 0,
+	10, 0,
 
 	//FLOWER
 	LC_BT__FLOWER,
-	4, 28,
-	0, 0,
-	0, 0,
-	0, 0,
-	0, 0,
-	0, 0,
+	23, 0,
+	23, 0,
+	23, 0,
+	23, 0,
+	23, 0,
+	23, 0,
 
 	//GLOWSTONE
 	LC_BT__GLOWSTONE,
-	25, 3,
-	25, 3,
-	25, 3,
-	25, 3,
-	25, 3,
-	25, 3,
+	11, 0,
+	11, 0,
+	11, 0,
+	11, 0,
+	11, 0,
+	11, 0,
 
 	//MAGMA
 	LC_BT__MAGMA,
-	27, 16,
-	27, 16,
-	27, 16,
-	27, 16,
-	27, 16,
-	27, 16,
+	12, 0,
+	12, 0,
+	12, 0,
+	12, 0,
+	12, 0,
+	12, 0,
 
 	//OBSIDIAN
 	LC_BT__OBSIDIAN,
-	17, 4,
-	17, 4,
-	17, 4,
-	17, 4,
-	17, 4,
-	17, 4,
+	13, 0,
+	13, 0,
+	13, 0,
+	13, 0,
+	13, 0,
+	13, 0,
+
+	//DIAMOND
+	LC_BT__DIAMOND,
+	14, 0,
+	14, 0,
+	14, 0,
+	14, 0,
+	14, 0,
+	14, 0,
+
+	//IRON
+	LC_BT__IRON,
+	15, 0,
+	15, 0,
+	15, 0,
+	15, 0,
+	15, 0,
+	15, 0,
+
+	//SPECULAR
+	LC_BT__SPECULAR,
+	0, 24,
+	0, 24,
+	0, 24,
+	0, 24,
+	0, 24,
+	0, 24,
+
+	//CACTUS
+	LC_BT__CACTUS,
+	17, 0,
+	17, 0,
+	17, 0,
+	17, 0,
+	18, 0,
+	16, 0,
+
+	//SNOW
+	LC_BT__SNOW,
+	19, 0,
+	19, 0,
+	19, 0,
+	19, 0,
+	19, 0,
+	19, 0,
+
+	//SNOW
+	LC_BT__GRASS_SNOW,
+	20, 0,
+	20, 0,
+	20, 0,
+	20, 0,
+	3, 0,
+	21, 0,
+
+	//SPRUCE PLANKS
+	LC_BT__SPRUCE_PLANKS,
+	22, 0,
+	22, 0,
+	22, 0,
+	22, 0,
+	22, 0,
+	22, 0,
+
+	//GRASS PROP
+	LC_BT__GRASS_PROP,
+	1, 1,
+	1, 1,
+	1, 1,
+	1, 1,
+	1, 1,
+	1, 1,
+
+	//TORCH
+	LC_BT__TORCH,
+	2, 1,
+	2, 1,
+	2, 1,
+	2, 1,
+	2, 1,
+	2, 1,
+
+	//DEAD BUSH
+	LC_BT__DEAD_BUSH,
+	3, 1,
+	3, 1,
+	3, 1,
+	3, 1,
+	3, 1,
+	3, 1,
+
+	//MAX
+	LC_BT__MAX,
+	0, 0,
+	0, 0,
+	0, 0,
+	0, 0,
+	0, 0,
+	0, 0,
 
 };
 
 typedef struct
 {
 	LC_BlockType block_type;
-	int material_type; //0 == opaque, 1 == transparent, 2 == water
+	int material_type; //0 == opaque, 1 == transparent, 2 == water, 3 == prop
 	int emits_light;
 	int collidable;
 } LC_Block_MiscData;
@@ -232,7 +341,7 @@ static const LC_Block_MiscData LC_BLOCK_MISC_DATA[] =
 
 	//FLOWER
 	LC_BT__FLOWER,
-	1,
+	3,
 	0,
 	0,
 
@@ -253,6 +362,72 @@ static const LC_Block_MiscData LC_BLOCK_MISC_DATA[] =
 	0,
 	1,
 	1,
+
+	//DIAMOND
+	LC_BT__DIAMOND,
+	0,
+	0,
+	1,
+
+	//IRON
+	LC_BT__IRON,
+	0,
+	0,
+	1,
+
+	//SPECULAR
+	LC_BT__SPECULAR,
+	0,
+	0,
+	1,
+
+	//CACTUS
+	LC_BT__CACTUS,
+	0,
+	0,
+	1,
+
+	//SNOW
+	LC_BT__SNOW,
+	0,
+	0,
+	1,
+
+	//GRASS SNOW
+	LC_BT__GRASS_SNOW,
+	0,
+	0,
+	1,
+
+	//SPRUCE PLANKS
+	LC_BT__SPRUCE_PLANKS,
+	0,
+	0,
+	1,
+
+	//GRASS PROP
+	LC_BT__GRASS_PROP,
+	3,
+	0,
+	0,
+
+	//TORCH
+	LC_BT__TORCH,
+	3,
+	1,
+	0,
+
+	//DEAD BUSH
+	LC_BT__DEAD_BUSH,
+	3,
+	0,
+	0,
+
+	//MAX
+	LC_BT__MAX,
+	0,
+	0,
+	0,
 };
 
 typedef struct
@@ -273,7 +448,7 @@ static const LC_Block_LightingData LC_BLOCK_LIGHTING_DATA[] =
 	//GLOWSTONE
 	LC_BT__GLOWSTONE,
 	0.98, 0.85, 0.45,
-	0.8,
+	24.8,
 	0.2,
 	0.42,
 	0.20,
@@ -281,21 +456,103 @@ static const LC_Block_LightingData LC_BLOCK_LIGHTING_DATA[] =
 
 	//MAGMA
 	LC_BT__MAGMA,
-	0.85, 0.35, 0.04,
-	1.0,
-	0.4,
-	0.22,
+	0.95, 0.06, 0.12,
+	32.0,
+	12.4,
+	0.72,
 	0.20,
 	1.0,
-
 
 	//OBSIDIAN 
 	LC_BT__OBSIDIAN,
 	0.51, 0.03, 0.89,
-	1.0,
+	12.0,
 	0.4,
 	0.22,
 	0.20,
 	1.0,
 
+	//TORCH
+	LC_BT__TORCH,
+	0.95, 0.56, 0.01,
+	4.0,
+	0.4,
+	0.22,
+	0.20,
+	1.0,
+};
+
+static const char* LC_BLOCK_CHAR_NAME[] =
+{
+	//NONE
+	"None",
+
+	//GRASS
+	"Grass",
+
+	//SAND
+	"Sand",
+	
+	//STONE
+	"Stone",
+
+	//DIRT
+	"Dirt",
+
+	//TRUNK
+	"Trunk",
+	
+	//TREE LEAVES
+	"Tree leaves",
+	
+	//WATER
+	"Water",
+	
+	//GLASS
+	"Glass",
+
+	//FLOWER
+	"Flower",
+
+	//GLOWSTONE
+	"Glowstone",
+
+	//MAGMA
+	"Magma",
+	
+	//OBSIDIAN
+	"Obsidian",
+
+	//DIAMOND
+	"Diamond",
+
+	//IRON
+	"Iron",
+
+	//SPECULAR
+	"Specular",
+
+	//CACTUS
+	"Cactus",
+
+	//SNOW
+	"Snow",
+
+	//GRASS SNOW
+	"Grass snow",
+	
+	//SPRUCE PLANKS
+	"Spruce planks",
+
+	//GRASS PROP
+	"Grass prop",
+
+	//TORCH
+	"Torch",
+
+	//Dead bush
+	"Dead bush",
+
+	//MAX
+	"Max"
 };
