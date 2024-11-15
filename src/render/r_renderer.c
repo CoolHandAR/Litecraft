@@ -2,7 +2,7 @@
 #include "r_renderer.h"
 #include "r_shader.h"
 
-#include "core/c_common.h"
+#include "core/core_common.h"
 #include <cglm/clipspace/persp_rh_zo.h>
 
 
@@ -1912,7 +1912,7 @@ static void Particle_Emitter_Update()
 {
 
 
-    float delta = C_getDeltaTime();
+    float delta = Core_getDeltaTime();
 
     R_ParticleEmitter* gl_map = RSB_MapRange(&s_particleDrawData.emitters, 0, s_particleDrawData.emitters.used_size, GL_MAP_WRITE_BIT);
 
@@ -2425,7 +2425,7 @@ void _drawSkybox()
     view_no_translation[2][3] = s_RenderData.camera->data.view_matrix[2][3];
     
     static float rotation = 0;
-    rotation += 0.00010 * C_getDeltaTime();
+    rotation += 0.00010 * Core_getDeltaTime();
 
     vec3 axis;
     axis[0] = 0;
@@ -2900,9 +2900,9 @@ void r_startFrame()
     glBindBufferBase(GL_UNIFORM_BUFFER, 1, s_deferredShadingData.camera_info_ubo);
     glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, 0, s_deferredShadingData.atomic_counter);
     r_Update(s_RenderData.camera);
-    glUseProgram(world_render_data->process_shader);
+   // glUseProgram(world_render_data->process_shader);
     int num_x_groups = ceilf((float)LC_World_GetChunkAmount() / 16.0f);
-    Shader_SetInteger(world_render_data->process_shader, "u_chunkAmount", chunk_amount);
+   // Shader_SetInteger(world_render_data->process_shader, "u_chunkAmount", chunk_amount);
    // Shader_SetUnsigned(world_render_data->process_shader, "u_opaqueUpdateOffset", world_render_data->opaque_update_offset);
    // Shader_SetInteger(world_render_data->process_shader, "u_opaqueUpdateMoveBy", world_render_data->opaque_update_move_by);
    // Shader_SetUnsigned(world_render_data->process_shader, "u_transparentUpdateOffset", world_render_data->transparent_update_offset);
@@ -3044,7 +3044,7 @@ void r_startFrame()
     glUseProgram(s_RenderData.deffered_lighting_shader);
     
     static float time = 0;
-    time += 0.04 * C_getDeltaTime();
+    time += 0.04 * Core_getDeltaTime();
     time = time - (int)time;
    // if (time >= 10.0)
      //   time = 0;
@@ -3107,12 +3107,12 @@ void r_startFrame()
     glBindVertexArray(world_render_data->vao);
     glBindVertexBuffer(0, world_render_data->transparents_vertex_buffer.buffer, 0, sizeof(ChunkVertex));
     glBindBuffer(GL_ARRAY_BUFFER, world_render_data->transparents_vertex_buffer.buffer);
-    glUseProgram(world_render_data->transparents_forward_pass_shader);
-    Shader_SetVector3f_2(world_render_data->transparents_forward_pass_shader, "u_viewPos", s_RenderData.camera->data.position);
-    Shader_SetVector3f(world_render_data->transparents_forward_pass_shader, "u_dirLight.direction", 0, 1, 1);
-    Shader_SetVector3f(world_render_data->transparents_forward_pass_shader, "u_dirLight.color", 1, 1, 1);
-    Shader_SetFloat(world_render_data->transparents_forward_pass_shader, "u_dirLight.ambient_intensity", 0.5);
-    Shader_SetFloat(world_render_data->transparents_forward_pass_shader, "u_dirLight.specular_intensity", 0.5);
+   // glUseProgram(world_render_data->transparents_forward_pass_shader);
+  //  Shader_SetVector3f_2(world_render_data->transparents_forward_pass_shader, "u_viewPos", s_RenderData.camera->data.position);
+  //  Shader_SetVector3f(world_render_data->transparents_forward_pass_shader, "u_dirLight.direction", 0, 1, 1);
+   //// Shader_SetVector3f(world_render_data->transparents_forward_pass_shader, "u_dirLight.color", 1, 1, 1);
+   // Shader_SetFloat(world_render_data->transparents_forward_pass_shader, "u_dirLight.ambient_intensity", 0.5);
+   // Shader_SetFloat(world_render_data->transparents_forward_pass_shader, "u_dirLight.specular_intensity", 0.5);
     glMultiDrawArraysIndirect(GL_TRIANGLES, (void*)16, chunk_amount, 32);
 
     //glDisable(GL_BLEND);
@@ -3136,17 +3136,17 @@ void r_startFrame()
 
     
     //WATER PASS
-    glUseProgram(world_render_data->water_forward_pass_shader);
+   // glUseProgram(world_render_data->water_forward_pass_shader);
     glBindTextureUnit(0, tex_atlas.id);
     glBindTextureUnit(1, cubemap_texture.id);
     glBindTextureUnit(2, water_data.dudv_map.id);
     glBindTextureUnit(3, water_data.normal_map.id);
-    Shader_SetVector3f_2(world_render_data->water_forward_pass_shader, "u_viewPos", s_RenderData.camera->data.position);
-    Shader_SetFloat(world_render_data->water_forward_pass_shader, "u_moveFactor", time);
-    Shader_SetVector3f(world_render_data->water_forward_pass_shader, "u_dirLight.direction", 0, 1, 1);
-    Shader_SetVector3f(world_render_data->water_forward_pass_shader, "u_dirLight.color", 1, 1, 1);
-    Shader_SetFloat(world_render_data->water_forward_pass_shader, "u_dirLight.ambient_intensity", 0.5);
-    Shader_SetFloat(world_render_data->water_forward_pass_shader, "u_dirLight.specular_intensity", 0.5);
+  //  Shader_SetVector3f_2(world_render_data->water_forward_pass_shader, "u_viewPos", s_RenderData.camera->data.position);
+ //   Shader_SetFloat(world_render_data->water_forward_pass_shader, "u_moveFactor", time);
+   // Shader_SetVector3f(world_render_data->water_forward_pass_shader, "u_dirLight.direction", 0, 1, 1);
+   // Shader_SetVector3f(world_render_data->water_forward_pass_shader, "u_dirLight.color", 1, 1, 1);
+   // Shader_SetFloat(world_render_data->water_forward_pass_shader, "u_dirLight.ambient_intensity", 0.5);
+  //  Shader_SetFloat(world_render_data->water_forward_pass_shader, "u_dirLight.specular_intensity", 0.5);
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
    //glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_SRC_ALPHA, GL_ONE_MINUS_DST_ALPHA);

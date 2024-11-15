@@ -6,7 +6,7 @@
 #include <cglm/clipspace/persp_rh_zo.h>
 #include <cglm/clipspace/view_rh_zo.h>
 #include "utility/u_math.h"
-#include "core/c_common.h"
+#include "core/core_common.h"
 
 R_Camera* current_camera;
 
@@ -76,7 +76,7 @@ void Camera_updateFront(R_Camera* const p_cam)
 
 void Camera_ProcessMouse(R_Camera* const p_cam, double x, double y)
 {
-	if (C_CheckForBlockedInputState())
+	if (Core_CheckForBlockedInputState())
 	{
 		return;
 	}

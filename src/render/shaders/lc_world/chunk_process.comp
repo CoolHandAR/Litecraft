@@ -14,6 +14,10 @@ struct CombinedChunkDrawCmdData
 	//TRANSPARENTS
 	uint t_count;
 	uint t_first;
+
+    //WATER
+	uint w_count;
+	uint w_first;
 };
 
 struct DrawArraysIndirectCommand
@@ -32,8 +36,12 @@ struct LC_WorldUniformBuffer
 	uint transparent_update_offset;
 	int transparent_update_move_by;
 
+    uint water_update_offset;
+	int water_update_move_by;
+
 	int skip_opaque_owner;
 	int skip_transparent_owner;
+    int skip_water_owner;
 
 	uint chunk_amount;
 };
@@ -68,6 +76,10 @@ layout (std430, binding = 22) restrict buffer TransparentCounterBuffer
 {
   uint atomic_counter_transparent;
 };
+layout (std430, binding = 23) restrict buffer WaterCounterBuffer
+{
+  uint atomic_counter_water;
+};
 
 
 
@@ -82,6 +94,8 @@ uniform int u_TransparentUpdateMoveBy;
 uniform int u_skipOwnerUpdate;
 uniform int u_skipTransparentOwnerUpdate;
 
+
+
 void main()
 {
     uint index = gl_GlobalInvocationID.x;
@@ -90,6 +104,7 @@ void main()
     {
       atomicExchange(atomic_counter, 0);
       atomicExchange(atomic_counter_transparent, 0);
+      atomicExchange(atomic_counter_water, 0);
     }
 
      //make sure we aren't processing more chunks than we need to
@@ -142,6 +157,20 @@ void main()
             else if(DRAWCMD.t_first == lc_world_data.transparent_update_offset && lc_world_data.skip_transparent_owner != index)
             {
                 DRAWCMD.t_count += lc_world_data.transparent_update_move_by;
+            }
+        }
+     }
+    if(lc_world_data.water_update_move_by != 0)
+     {
+        if(DRAWCMD.w_count > 0)
+        {
+            if(DRAWCMD.w_first > lc_world_data.water_update_offset)
+            {
+                DRAWCMD.w_first += lc_world_data.water_update_move_by;
+            }
+            else if(DRAWCMD.w_first == lc_world_data.water_update_offset && lc_world_data.skip_water_owner != index)
+            {
+                DRAWCMD.w_count += lc_world_data.water_update_move_by;
             }
         }
      }
@@ -204,6 +233,16 @@ void main()
           
             uint counter = atomicAdd(atomic_counter, 1);
             chunk_draw_cmds_sorted[counter] =  draw_cmd;
+        }
+        if(DRAWCMD.w_count > 0)
+        {
+            draw_cmd.instanceCount = 1;
+            draw_cmd.first = DRAWCMD.w_first;
+            draw_cmd.count = DRAWCMD.w_count;
+            draw_cmd.baseInstance = index;
+          
+            uint counter = atomicAdd(atomic_counter_water, 1);
+            chunk_draw_cmds_sorted[counter + 4000] =  draw_cmd;
         }
     }
     

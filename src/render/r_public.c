@@ -8,7 +8,7 @@
 */
 
 extern R_CMD_Buffer* cmdBuffer;
-extern R_RenderPassData* pass;
+extern RPass_PassData* pass;
 extern R_BackendData* backend_data;
 extern R_StorageBuffers storage;
 extern R_Scene scene;
@@ -122,11 +122,12 @@ void Draw_ScreenTexture2(R_Texture* p_texture, M_Rect2Df* p_textureRegion, vec2 
 }
 
 
-void Draw_AABBWires1(AABB p_aabb, vec4 p_color)
+void Draw_CubeWires(vec3 box[2], vec4 p_color)
 {
-	R_CMD_DrawAABB cmd;
+	R_CMD_DrawCube cmd;
 
-	cmd.aabb = p_aabb;
+	glm_vec3_copy(box[0], cmd.box[0]);
+	glm_vec3_copy(box[1], cmd.box[1]);
 	cmd.polygon_mode = R_CMD_PM__WIRES;
 
 	if (!p_color)
@@ -134,22 +135,9 @@ void Draw_AABBWires1(AABB p_aabb, vec4 p_color)
 	else
 		glm_vec4_copy(p_color, cmd.color);
 
-	_copyToCmdBuffer(R_CMD__AABB, &cmd, sizeof(R_CMD_DrawAABB));
+	_copyToCmdBuffer(R_CMD__CUBE, &cmd, sizeof(R_CMD_DrawCube));
 }
 
-void Draw_AABB(AABB p_aabb, vec4 p_fillColor)
-{
-	R_CMD_DrawAABB cmd;
-
-	cmd.aabb = p_aabb;
-	cmd.polygon_mode = R_CMD_PM__FULL;
-	if (!p_fillColor)
-		glm_vec4_copy(DEFAULT_COLOR, cmd.color);
-	else
-		glm_vec4_copy(p_fillColor, cmd.color);
-
-	_copyToCmdBuffer(R_CMD__AABB, &cmd, sizeof(R_CMD_DrawAABB));
-}
 
 void Draw_TexturedCube(vec3 p_box[2], R_Texture* p_tex, M_Rect2Df* p_texRegion)
 {
@@ -169,8 +157,8 @@ void Draw_TexturedCube(vec3 p_box[2], R_Texture* p_tex, M_Rect2Df* p_texRegion)
 	{
 		if (p_tex)
 		{
-			cmd.texture_region.width = p_tex->width;
-			cmd.texture_region.height = p_tex->height;
+			cmd.texture_region.width = 1;
+			cmd.texture_region.height = 1;
 		}
 		
 	}
@@ -198,8 +186,9 @@ void Draw_TexturedCubeColored(vec3 p_box[2], R_Texture* p_tex, M_Rect2Df* p_texR
 	{
 		if (p_tex)
 		{
-			cmd.texture_region.width = p_tex->width;
-			cmd.texture_region.height = p_tex->height;
+			cmd.texture_region.width = 1;
+			cmd.texture_region.height = 1;
+
 		}
 
 	}
@@ -211,6 +200,10 @@ void Draw_TexturedCubeColored(vec3 p_box[2], R_Texture* p_tex, M_Rect2Df* p_texR
 
 
 	_copyToCmdBuffer(R_CMD__TEXTURED_CUBE, &cmd, sizeof(R_CMD_DrawTextureCube));
+}
+
+void Draw_TexturedQuad(vec3 p_minMax[2], R_Texture* p_tex, M_Rect2Df* p_texRegion)
+{
 }
 
 
@@ -295,6 +288,14 @@ void RScene_SetDirLight(DirLight p_dirLight)
 	scene.scene_data.dirLightSpecularIntensity = p_dirLight.specular_intensity;
 }
 
+void RScene_SetDirLightDirection(vec3 dir)
+{
+	scene.scene_data.dirLightDirection[0] = dir[0];
+	scene.scene_data.dirLightDirection[1] = dir[1];
+	scene.scene_data.dirLightDirection[2] = dir[2];
+	scene.scene_data.dirLightDirection[3] = 0;
+}
+
 void RScene_SetFog(FogSettings p_fog_settings)
 {
 	glm_vec3_copy(p_fog_settings.fog_color, scene.scene_data.fogColor);
@@ -310,6 +311,11 @@ void RScene_SetFog(FogSettings p_fog_settings)
 LightID RScene_RegisterPointLight(PointLight2 p_pointLight)
 {
 	LightID lid = RSB_Request(&storage.point_lights);
+	LightID object_pool_id = Object_Pool_Request(storage.point_lights_pool);
+
+	PointLight* ptr = dA_at(storage.point_lights_pool->pool, object_pool_id);
+
+	assert(lid == object_pool_id);
 
 	const float maxBrightness = fmaxf(fmaxf(p_pointLight.color[0], p_pointLight.color[1]), p_pointLight.color[2]);
 	p_pointLight.radius = (-p_pointLight.linear + sqrt(p_pointLight.linear * p_pointLight.linear - 4 * p_pointLight.quadratic * (p_pointLight.constant - (256.0f / 5.0f) * maxBrightness))) / (2.0f * p_pointLight.quadratic);
@@ -318,6 +324,19 @@ LightID RScene_RegisterPointLight(PointLight2 p_pointLight)
 
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, storage.point_lights.buffer);
 	scene.scene_data.numPointLights++;
+
+	memcpy(ptr, &p_pointLight, sizeof(PointLight2));
+
+	AABB aabb;
+	aabb.position[0] = p_pointLight.position[0] - (p_pointLight.radius * 0.5);
+	aabb.position[1] = p_pointLight.position[1] - (p_pointLight.radius * 0.5);
+	aabb.position[2] = p_pointLight.position[2] - (p_pointLight.radius * 0.5);
+
+	aabb.width = p_pointLight.radius;
+	aabb.height = p_pointLight.radius;
+	aabb.length = p_pointLight.radius;
+
+	AABB_Tree_Insert(&scene.clusters_data.light_tree, &aabb, lid);
 
 	return lid;
 }
@@ -334,31 +353,11 @@ void RSCene_DeletePointLight(LightID p_lightID)
 	glNamedBufferSubData(storage.point_lights.buffer, p_lightID * sizeof(PointLight2), sizeof(PointLight2), &blank);
 
 	RSB_FreeItem(&storage.point_lights, p_lightID, false);
+	Object_Pool_Free(storage.point_lights_pool, p_lightID, true);
 }
 
-void RScene_SetSkyboxTexturePanorama(const char* p_path)
+static void RScene_CubemapCompute()
 {
-	R_Texture panorama_tex = HDRTexture_Load(p_path, NULL);
-
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, panorama_tex.id);
-	glUseProgram(pass->ibl.equirectangular_to_cubemap_shader);
-	Shader_SetInteger(pass->ibl.equirectangular_to_cubemap_shader, "equirectangularMap", 0);
-	Shader_SetMatrix4(pass->ibl.equirectangular_to_cubemap_shader, "u_proj", pass->ibl.cube_proj);
-
-	glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
-	glViewport(0, 0, 512, 512);
-	//CONVERT PANORAMA TO A CUBEMAP
-	for (int i = 0; i < 6; i++)
-	{
-		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.envCubemapTexture, 0);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-
-		Shader_SetMatrix4(pass->ibl.equirectangular_to_cubemap_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
-		Render_Cube();
-	}
-
 	//CONVULUTE CUBEMAP
 	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 32, 32);
 	glUseProgram(pass->ibl.irradiance_convulution_shader);
@@ -423,9 +422,64 @@ void RScene_SetSkyboxTexturePanorama(const char* p_path)
 	glViewport(0, 0, backend_data->screenSize[0], backend_data->screenSize[1]);
 }
 
+void RScene_SetSkyboxTexturePanorama(R_Texture* p_tex)
+{
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, p_tex->id);
+	glUseProgram(pass->ibl.equirectangular_to_cubemap_shader);
+	Shader_SetInteger(pass->ibl.equirectangular_to_cubemap_shader, "equirectangularMap", 0);
+	Shader_SetMatrix4(pass->ibl.equirectangular_to_cubemap_shader, "u_proj", pass->ibl.cube_proj);
+
+	glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
+	glViewport(0, 0, 512, 512);
+	//CONVERT PANORAMA TO A CUBEMAP
+	for (int i = 0; i < 6; i++)
+	{
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.envCubemapTexture, 0);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+
+		Shader_SetMatrix4(pass->ibl.equirectangular_to_cubemap_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
+		Render_Cube();
+	}
+
+	RScene_CubemapCompute();
+}
+
+void RScene_SetSkyboxTextureSingleImage(const char* p_path)
+{
+	R_Texture skybox_tex = HDRTexture_Load(p_path, NULL);
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, skybox_tex.id);
+	glUseProgram(pass->ibl.single_image_cubemap_convert_shader);
+	Shader_SetInteger(pass->ibl.single_image_cubemap_convert_shader, "skyboxTextureMap", 0);
+	Shader_SetMatrix4(pass->ibl.single_image_cubemap_convert_shader, "u_proj", pass->ibl.cube_proj);
+
+	glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
+	glViewport(0, 0, 512, 512);
+	//CONVERT PANORAMA TO A CUBEMAP
+	for (int i = 0; i < 6; i++)
+	{
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.envCubemapTexture, 0);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+
+		Shader_SetMatrix4(pass->ibl.single_image_cubemap_convert_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
+		Render_Cube();
+	}
+
+	RScene_CubemapCompute();
+}
+
 ModelID RScene_RegisterModel(R_Model* p_model)
 {
 	return 0;
+}
+
+void RScene_SetAmbientLightInfluence(float p_ratio)
+{
+	scene.scene_data.ambientLightInfluence = glm_clamp(p_ratio, 0.0, 1.0);
 }
 
 ParticleEmitterSettings* Particle_RegisterEmitter()
@@ -434,62 +488,44 @@ ParticleEmitterSettings* Particle_RegisterEmitter()
 
 	ParticleEmitterSettings* emitter = node->value;
 
-	emitter->_gl_emitter_index = RSB_Request(&storage.particle_emitters);
-	emitter->_particle_drb_index = DRB_EmplaceItem(&storage.particles, 0, NULL);
-	emitter->settings.collider_index = -1;
-	emitter->_collision_drb_index = -1;
+	emitter->particles = dA_INIT(ParticleCpu, 0);
 
 	return emitter;
 }
 
 void Particle_MarkUpdate(ParticleEmitterSettings* p_emitter)
 {
-	storage.particle_update_queue[storage.particle_update_index] = p_emitter;
+	//storage.particle_update_queue[storage.particle_update_index] = p_emitter;
 
-	storage.particle_update_index++;
+	//storage.particle_update_index++;
+
+	p_emitter->_queue_update = true;
+	p_emitter->emitting = true;
 }
 
 void Particle_Emit(ParticleEmitterSettings* p_emitter)
 {
-	p_emitter->settings.state_flags |= EMITTER_STATE_FLAG__EMITTING;
+	//p_emitter->settings.state_flags |= EMITTER_STATE_FLAG__EMITTING;
+//
+	//Particle_MarkUpdate(p_emitter);
 
-	Particle_MarkUpdate(p_emitter);
+	p_emitter->emitting = true;
+	p_emitter->force_restart = true;
 }
 
 void Particle_EmitTransformed(ParticleEmitterSettings* p_emitter, vec3 direction, vec3 origin)
 {
-	p_emitter->settings.direction[0] = direction[0];
-	p_emitter->settings.direction[1] = direction[1];
-	p_emitter->settings.direction[2] = direction[2];
+	p_emitter->direction[0] = direction[0];
+	p_emitter->direction[1] = direction[1];
+	p_emitter->direction[2] = direction[2];
 
-	p_emitter->settings.xform[3][0] = origin[0];
-	p_emitter->settings.xform[3][1] = origin[1];
-	p_emitter->settings.xform[3][2] = origin[2];
+	p_emitter->xform[3][0] = origin[0];
+	p_emitter->xform[3][1] = origin[1];
+	p_emitter->xform[3][2] = origin[2];
 
-	glm_mat4_mulv3(p_emitter->settings.xform, p_emitter->aabb[0], 1.0, p_emitter->settings.aabb[0]);
-	glm_mat4_mulv3(p_emitter->settings.xform, p_emitter->aabb[1], 1.0, p_emitter->settings.aabb[1]);
+	//glm_mat4_mulv3(p_emitter->settings.xform, p_emitter->aabb[0], 1.0, p_emitter->settings.aabb[0]);
+	//glm_mat4_mulv3(p_emitter->settings.xform, p_emitter->aabb[1], 1.0, p_emitter->settings.aabb[1]);
 
 	Particle_Emit(p_emitter);
 }
 
-void Particle_AssignCollisionBoxes(ParticleEmitterSettings* p_emiiter, vec4* extents, int num_boxes)
-{
-	if (num_boxes <= 0)
-	{
-		return;
-	}
-
-	if (p_emiiter->_collision_drb_index < 0)
-	{
-		p_emiiter->_collision_drb_index = DRB_EmplaceItem(&storage.collider_boxes, 0, NULL);
-	}
-
-	DRB_ChangeData(&storage.collider_boxes, (sizeof(vec4) * 2) * num_boxes, extents, p_emiiter->_collision_drb_index);
-
-	DRB_Item item = DRB_GetItem(&storage.collider_boxes, p_emiiter->_collision_drb_index);
-
-	p_emiiter->settings.collider_index = item.offset / sizeof(vec4);
-	p_emiiter->settings.collider_amount = num_boxes;
-
-	Particle_MarkUpdate(p_emiiter);
-}

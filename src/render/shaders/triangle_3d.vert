@@ -23,5 +23,5 @@ void main()
     vs_out.Color = vec4(fColor.r / 255.0, fColor.g / 255.0, fColor.b / 255.0, fColor.a / 255.0);
 
     vs_out.TexCoords = vec2(a_TexOffset.x, -a_TexOffset.y);
-    vs_out.TexIndex = 0;
+    vs_out.TexIndex = a_TexIndex;
 }

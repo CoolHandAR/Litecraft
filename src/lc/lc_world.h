@@ -40,6 +40,10 @@ typedef struct
 	//TRANSPARENTS
 	unsigned t_count;
 	unsigned t_first;
+
+	//WATER
+	unsigned w_count;
+	unsigned w_first;
 } CombinedChunkDrawCmdData;
 
 
@@ -65,8 +69,12 @@ typedef struct
 	unsigned transparent_update_offset;
 	int transparent_update_move_by;
 
+	unsigned water_update_offset;
+	int water_update_move_by;
+
 	int skip_opaque_owner;
 	int skip_transparent_owner;
+	int skip_water_owner;
 
 	unsigned chunk_amount;
 
@@ -76,20 +84,18 @@ typedef struct
 {
 	DynamicRenderBuffer vertex_buffer;
 	DynamicRenderBuffer transparents_vertex_buffer;
+	DynamicRenderBuffer water_vertex_buffer;
 	RenderStorageBuffer draw_cmds_buffer;
 	RenderStorageBuffer chunk_data;
 	RenderStorageBuffer sorted_draw_cmds_buffer;
-	unsigned draw_cmds_counters_buffers[2];
+	unsigned draw_cmds_counters_buffers[3];
 	unsigned block_data_buffer;
 	unsigned visibles_ssbo;
 	unsigned visibles_sorted_ssbo;
 	unsigned shadow_chunk_indexes_ssbo;
 	unsigned vao;
-	R_Shader process_shader;
-	R_Shader rendering_shader;
-	R_Shader transparents_forward_pass_shader;
-	R_Shader water_forward_pass_shader;
-	
+	unsigned water_vao;
+		
 	int chunks_in_frustrum_count;
 
 	LC_WorldUniformBuffer ubo_data;
@@ -99,6 +105,9 @@ typedef struct
 	R_Texture* texture_atlas_normals;
 	R_Texture* texture_atlas_mer;
 
+	R_Texture* texture_dudv;
+	R_Texture* water_normal_map;
+	
 	AABB_Tree aabb_tree;
 } WorldRenderData;
 
@@ -108,6 +117,7 @@ typedef struct
 	FL_Head* entities;
 	WorldRenderData render_data;
 	CHMap chunk_map;
+	CHMap chunk_cache_map;
 	CHMap light_hash_map;
 	LC_Sun sun;
 
@@ -116,6 +126,8 @@ typedef struct
 	ivec3 chunks_bounds_normalized[2];
 
 	size_t total_num_blocks;
+
+	dynamic_array* draw_cmds_backbuffer;
 } LC_World;
 
 
@@ -129,9 +141,11 @@ LC_Block* LC_World_getBlockByRay(vec3 from, vec3 dir, int p_maxSteps, ivec3 r_po
 bool LC_World_addBlock(int p_gX, int p_gY, int p_gZ, ivec3 p_addFace, int p_bType);
 bool LC_World_mineBlock(int p_gX, int p_gY, int p_gZ);
 bool LC_World_setBlock(int p_gX, int p_gY, int p_gZ, LC_BlockType p_bType);
+int LC_World_calcWaterLevelFromPoint(float p_x, float p_y, float p_z);
 WorldRenderData* LC_World_getRenderData();
 size_t LC_World_GetChunkAmount();
 size_t LC_World_GetDrawCmdAmount();
 P_PhysWorld* LC_World_GetPhysWorld();
 void LC_World_getSunDirection(vec3 v);
 int LC_World_getPrevMinedBlockHP();
+void LC_World_Draw();

@@ -6,7 +6,7 @@
 #include "render/r_renderer.h"
 
 #include "lc/lc_block_defs.h"
-#include "core/c_common.h"
+#include "core/core_common.h"
 
 
 P_PhysWorld* phys_world = NULL;
@@ -134,29 +134,32 @@ static void Water_Move(Kinematic_Body* const k_body)
 {
 	Apply_Friction(k_body);
 
-	if (k_body->direction[1] > 0)
-	{
-		k_body->velocity[1] = 0.01;
-	}
-
 	float wish_speed = glm_vec3_norm(k_body->direction);
 
-	Calc_KinematicVel(k_body->direction, k_body->velocity, wish_speed, k_body->config.water_accel, g_delta, k_body->velocity);
+	if (k_body->on_ground && k_body->direction[1] <= 0)
+	{
+		//are we ducking
+		if (k_body->flags & PF__Ducking)
+		{
+			wish_speed *= k_body->config.ducking_scale;
+		}
+
+		Calc_KinematicVel(k_body->direction, k_body->velocity, wish_speed, k_body->config.ground_accel, g_delta, k_body->velocity);
+		clipVelocity(k_body->velocity, k_body->ground_contact.normal, OVERCLIP, k_body->velocity);
+	}
+	//Swimming
+	else
+	{	
+		Calc_KinematicVel(k_body->direction, k_body->velocity, wish_speed, k_body->config.water_accel, g_delta, k_body->velocity);
+	}
+	
 
 	float water_pull = 1;
 
 	//apply gravity and pull
-	k_body->velocity[1] -= water_pull * g_delta;
+	//k_body->velocity[1] -= water_pull * g_delta;
 
-	if (k_body->on_ground && glm_dot(k_body->velocity, k_body->ground_contact.normal) < 0)
-	{
-		float vel = glm_vec3_norm(k_body->velocity);
-
-		clipVelocity(k_body->velocity, k_body->ground_contact.normal, OVERCLIP, k_body->velocity);
-
-		glm_normalize(k_body->velocity);
-		glm_vec3_scale(k_body->velocity, vel, k_body->velocity);
-	}
+	
 }
 
 static void Air_Move(Kinematic_Body* const k_body)
@@ -225,9 +228,8 @@ static void Calc_Move(Kinematic_Body* const k_body)
 		FreeFly_Move(k_body);
 		return;
 	}
-
 	//in swimming height
-	if (k_body->water_level >= 2)
+	if (k_body->water_level >= 2 && k_body->in_water)
 	{
 		Water_Move(k_body);
 		return;
@@ -256,14 +258,20 @@ static void Solve_KinematicBodies()
 	{
 		Kinematic_Body* k_body = node->value;
 		
+		if (k_body->in_water)
+		{
+			k_body->water_level = LC_World_calcWaterLevelFromPoint(k_body->box.position[0], k_body->box.position[1], k_body->box.position[2]);
+		}
+		else
+		{
+			k_body->water_level = 0;
+		}
+
 		//reset all of our state falgs
 		k_body->_state_flags = 0;
 
 		//calculate the velocity and water level
 		Calc_Move(k_body);
-
-		//reset water level
-		k_body->water_level = 0;
 
 		//reset ground contact count
 		k_body->contact_count = 0;
@@ -272,9 +280,11 @@ static void Solve_KinematicBodies()
 		memset(&k_body->ground_contact, 0, sizeof(Block_Contact));
 		memset(k_body->block_contacts, 0, sizeof(k_body->block_contacts));
 	
-
 		//reset on ground state
 		k_body->on_ground = false;
+
+		//reset in water state
+		k_body->in_water = false;
 
 		//Expand box by the desired velocity
 		AABB expanded_box;
@@ -339,31 +349,14 @@ static void Solve_KinematicBodies()
 						block_box.position[2] = z - 0.5;
 
 						//special case for water
-						//don't collide just caculate water level
 						if (block->type == LC_BT__WATER)
 						{
 							if (AABB_intersectsOther(&k_body->box, &block_box))
 							{
-								int water_level = 0;
-
-								//calc water level
-								water_level = LC_WORLD_WATER_HEIGHT - k_body->box.position[1];
-
-								//we always set the water level to it's biggest value
-								if (water_level > k_body->water_level)
-								{
-									if (k_body->water_level == 0)
-									{
-										//k_body->velocity[1] = 0;
-									}
-									k_body->water_level = water_level;
-								}
-								
+								k_body->in_water = true;
 							}
 							continue;
 						}
-
-
 
 						//Mink diff
 						AABB mink = AABB_getMinkDiff(&block_box, &k_body->box);
@@ -510,7 +503,6 @@ static void Solve_KinematicBodies()
 
 				float dist = AABB_getFirstRayIntersection(mink, k_body->velocity, NULL, normal);
 
-
 				// we will not collide so skip this
 				if (dist == 1)
 				{
@@ -527,8 +519,7 @@ static void Solve_KinematicBodies()
 						glm_vec3_add(normal, k_body->velocity, k_body->velocity);
 					}
 
-
-					clipVelocity(k_body->velocity, normal, over_bounce, k_body->velocity);
+					clipVelocity(k_body->velocity, normal, OVERCLIP, k_body->velocity);
 
 					//add to contacts
 					if (k_body->contact_count < MAX_BLOCK_CONTACTS)

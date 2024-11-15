@@ -56,11 +56,9 @@ layout (std430, binding = 35) readonly restrict buffer VisiblesBuffer
 } visibles;
 
 uniform mat4 u_matrix;
-uniform float u_bias;
-uniform float u_slopeScale;
 uniform int u_dataOffset;
 
-#ifdef TRANSPARENT_SHADOWS
+#ifdef SEMI_TRANSPARENT
 out vec2 TexCoords;
 out vec2 TexOffset;
 #endif
@@ -74,7 +72,7 @@ void main()
 
 	vec3 worldPos = chunk_data.data[chunk_index].min_point.xyz + a_Pos.xyz;
 
-#ifdef TRANSPARENT_SHADOWS
+#ifdef SEMI_TRANSPARENT
 	ivec2 posIndex = POS_INDEX_TABLE[unpacked_norm];
     ivec2 absPosIndex = abs(posIndex);
     int xPosSign = sign(posIndex.x);
@@ -85,6 +83,6 @@ void main()
 	float posOffset = block_info.data[a_BlockType].position_offset;
 	worldPos.xz -= (posOffset * normal.xz);
 #endif
-
+	
 	gl_Position = u_matrix * vec4(worldPos.xyz - 0.5, 1.0);
 }

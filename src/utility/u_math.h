@@ -8,11 +8,38 @@
 #define Math_PI 3.1415926535897932384626433833
 #define CMP_EPSILON 0.00001
 
+static unsigned long long Math_rng_seed = 1;
+
 void Math_Proj_ReverseZInfinite(float fovy, float aspect, float nearZ, float farZ, mat4 dest);
 
 void Math_GLM_FrustrumPlanes_ReverseZ(mat4 m, vec4 dest[6]);
 
+static void Math_srand(unsigned long long p_seed)
+{
+	Math_rng_seed = p_seed;
+}
+
+static inline uint32_t Math_rand()
+{
+	Math_rng_seed = (214013 * Math_rng_seed + 2531011);
+	return (Math_rng_seed >> 32) & RAND_MAX;
+}
+
+static inline float Math_randf()
+{
+	return (float)Math_rand() / (float)RAND_MAX;
+}
+
+static inline double Math_randd()
+{
+	return (double)Math_rand() / (double)RAND_MAX;
+}
+
 inline float Math_Clamp(float v, float min_v, float max_v)
+{
+	return v < min_v ? min_v : (v > max_v ? max_v : v);
+}
+inline double Math_Clampd(double v, double min_v, double max_v)
 {
 	return v < min_v ? min_v : (v > max_v ? max_v : v);
 }

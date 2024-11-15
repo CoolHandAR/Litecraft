@@ -62,10 +62,10 @@ DRAW COMMANDS
 void Draw_ScreenTexture(R_Texture* p_texture, M_Rect2Df* p_textureRegion, float p_x, float p_y, float p_xScale, float p_yScale, float p_rotation);
 void Draw_ScreenTextureColored(R_Texture* p_texture, M_Rect2Df* p_textureRegion, float p_x, float p_y, float p_xScale, float p_yScale, float p_rotation, float p_r, float p_g, float p_b, float p_a);
 void Draw_ScreenTexture2(R_Texture* p_texture, M_Rect2Df* p_textureRegion, vec2 p_position);
-void Draw_AABBWires1(AABB p_aabb, vec4 p_color);
-void Draw_AABB(AABB p_aabb, vec4 p_fillColor);
+void Draw_CubeWires(vec3 box[2], vec4 p_color);
 void Draw_TexturedCube(vec3 p_box[2], R_Texture* p_tex, M_Rect2Df* p_texRegion);
 void Draw_TexturedCubeColored(vec3 p_box[2], R_Texture* p_tex, M_Rect2Df* p_texRegion, float p_r, float p_g, float p_b, float p_a);
+void Draw_TexturedQuad(vec3 p_minMax[2], R_Texture* p_tex, M_Rect2Df* p_texRegion);
 void Draw_Line(vec3 p_from, vec3 p_to, vec4 p_color);
 void Draw_Line2(float x1, float y1, float z1, float x2, float y2, float z2);
 void Draw_Triangle(vec3 p1, vec3 p2, vec3 p3, vec4 p_color);
@@ -98,21 +98,23 @@ typedef struct
 } FogSettings;
 
 void RScene_SetDirLight(DirLight p_dirLight);
+void RScene_SetDirLightDirection(vec3 dir);
 void RScene_SetFog(FogSettings p_fog_settings);
 LightID RScene_RegisterPointLight(PointLight2 p_pointLight);
 LightID RScene_RegisterSpotLight(SpotLight p_spotLight);
 void RSCene_DeletePointLight(LightID p_lightID);
 void RSCene_DeleteSpotLight(LightID p_lightID);
-void RScene_SetSkyboxTexturePanorama(const char* p_path);
+void RScene_SetSkyboxTexturePanorama(R_Texture* p_tex);
+void RScene_SetSkyboxTextureSingleImage(const char* p_path);
 void RScene_SetSkyboxTextureCubemap(Cubemap_Faces_Paths p_cubemapPaths);
 ModelID RScene_RegisterModel(R_Model* p_model);
+void RScene_SetAmbientLightInfluence(float p_ratio);
 
 /*
 ~~~~~~~~~~~~~~~~~~~
 PARTICLES
 ~~~~~~~~~~~~~~~~~~~
 */
-
 typedef enum
 {
     EMITTER_STATE_FLAG__NONE = 0,
@@ -149,7 +151,16 @@ typedef struct
     unsigned emitter_index;
     vec4 color;
 } Particle;
+typedef struct
+{
+    mat4 xform;
+    vec3 velocity;
+    vec4 color;
 
+    float time;
+
+    bool active;
+} ParticleCpu;
 typedef struct
 {
     mat4 xform;
@@ -196,10 +207,7 @@ typedef struct
 
     int texture_index;
 
-    int collider_index;
-    int collider_amount;
-
-    unsigned emission_shape;
+    EmitterEmissionShape emission_shape;
 
     unsigned particle_amount;
     unsigned cycle;
@@ -212,19 +220,76 @@ typedef struct
     unsigned v_frames;
 } ParticleEmitterGL;
 
+typedef void (*ParticleCollision_fun)(ParticleCpu* const particle, struct ParticleEmitterSettings* const emitter, float local_delta);
 typedef struct
 {
-    ParticleEmitterGL settings;
+    mat4 xform;
 
     vec3 aabb[2];
+    vec3 direction;
 
-    unsigned _gl_emitter_index;
-    unsigned _particle_drb_index;
-    int _collision_drb_index;
+    vec4 color;
+    vec4 end_color;
+
+    vec4 emission_size;
+
+    float _delta;
+    float _time;
+    float _prev_time;
+    float _system_time;
+
+    float explosiveness;
+    float randomness;
+    float life_time;
+    float speed_scale;
+
+    float initial_velocity;
+    float anim_speed_scale;
+
+    float anim_frame_progress;
+
+    float spread;
+    float flatness;
+
+    float gravity;
+
+    float friction;
+
+    float linear_accel;
+
+    float scale;
+
+    float ambient_intensity;
+    float diffuse_intensity;
+    float specular_intensity;
+
+    int texture_index;
+
+    unsigned emission_shape;
+
+    int particle_amount;
+    int _cycle;
+
+    int frame;
+    int frame_offset;
+    int frame_count;
+
+    int h_frames;
+    int v_frames;
+
+    bool one_shot;
+    bool emitting;
+
+    bool force_restart;
+    bool animation_enabled;
+
+
     bool _queue_update;
 
-    R_Texture* texture;
+    ParticleCollision_fun collision_function;
 
+    R_Texture* texture;
+    dynamic_array* particles;
 } ParticleEmitterSettings;
 
 
@@ -233,7 +298,6 @@ void Particle_RemoveEmitter(ParticleEmitterSettings* p_emitter);
 void Particle_MarkUpdate(ParticleEmitterSettings* p_emitter);
 void Particle_Emit(ParticleEmitterSettings* p_emitter);
 void Particle_EmitTransformed(ParticleEmitterSettings* p_emitter, vec3 direction, vec3 origin);
-void Particle_AssignCollisionBoxes(ParticleEmitterSettings* p_emiiter, vec4* extents, int num_boxes);
 void Particle_Pause();
 void Particle_Stop();
 

@@ -1,0 +1,38 @@
+#version 460 core
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(r32f, binding = 0) writeonly restrict uniform image2D outputImage;
+
+uniform sampler2DArray source_texture;
+
+uniform vec2 u_viewportSize;
+uniform int u_layer;
+
+void main()
+{
+	ivec2 iCoords = ivec2(gl_GlobalInvocationID.xy);
+
+    //Make sure we are not processing more than we need to
+    if (any(greaterThanEqual(iCoords, u_viewportSize))) 
+    { 
+		return;
+	}
+
+	vec2 coords = (vec2(iCoords + 0.5) / u_viewportSize);
+	vec2 texSize = (1.0 / textureSize(source_texture, 0).xy) * 2.0;
+
+	//coords *= 2.0;
+
+	vec4 Color = vec4(0.0);
+
+	Color += texture(source_texture, vec3(coords + (vec2(-3.0) * texSize.xy), u_layer)) * (1.0/64.0);
+	Color += texture(source_texture, vec3(coords + (vec2(-2.0) * texSize.xy), u_layer)) * (6.0/64.0);
+	Color += texture(source_texture, vec3(coords + (vec2(-1.0) * texSize.xy), u_layer)) * (15.0/64.0);
+	Color += texture(source_texture, vec3(coords + (vec2(0.0) * texSize.xy), u_layer)) * (20.0/64.0);
+	Color += texture(source_texture, vec3(coords + (vec2(1.0) * texSize.xy), u_layer)) * (15.0/64.0);
+	Color += texture(source_texture, vec3(coords + (vec2(2.0) * texSize.xy), u_layer)) * (6.0/64.0);
+	Color += texture(source_texture, vec3(coords + (vec2(3.0) * texSize.xy), u_layer)) * (1.0/64.0);
+
+	imageStore(outputImage, ivec2(gl_GlobalInvocationID.xy), vec4(Color));
+}

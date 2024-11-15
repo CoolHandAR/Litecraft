@@ -322,10 +322,10 @@ uint getClusterIndex(uint tileSizeInPx, vec3 pixelCoord)
     uint clusterZVal  = getDepthSlice(pixelCoord.z);
 
     uvec3 clusters    = uvec3( uvec2( pixelCoord.xy / tileSizeInPx), clusterZVal);
-    uint clusterIndex = clusters.x +
-                        tileSizes.x * clusters.y +
-                        (tileSizes.x * tileSizes.y) * clusters.z;
-    return clusterIndex;
+        uint clusterIndex = clusters.x +
+                            tileSizes.x * clusters.y +
+                            (tileSizes.x * tileSizes.y) * clusters.z;
+        return clusterIndex;
 }
 
 const vec3 coeff = vec3(0.799,0.587,0.414);

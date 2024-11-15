@@ -38,6 +38,7 @@ uint32_t Hash_uint32(uint32_t p_in, uint32_t p_seed);
 uint32_t Hash_float(float p_in, uint32_t p_seed);
 uint32_t Hash_vec3(vec3 v);
 uint32_t Hash_ivec3(ivec3 v);
+uint32_t Hash_id(uint32_t x);
 /*
 ~~~~~~~~~~~~~
 GL UTILITES

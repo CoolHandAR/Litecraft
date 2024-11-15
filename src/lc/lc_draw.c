@@ -4,7 +4,7 @@ Process all draw calls, UI drawing associated with the game
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
 
-#include "core/c_common.h"
+#include "core/core_common.h"
 #include <cglm/cglm.h>
 #include "lc_core.h"
 #include "core/resource_manager.h"
@@ -38,13 +38,16 @@ static void LC_Draw_CornerIndexToScreenPosition(int corner, vec2 dest)
 	dest[1] = y_pos;
 }
 
-void LC_Draw_DrawShowPos(vec3 pos, vec3 vel, float yaw, float pitch, uint8_t held_block, int corner)
+void LC_Draw_DrawShowPos(vec3 pos, vec3 vel, float yaw, float pitch, uint8_t held_block, uint8_t selected_block, int corner)
 {
+	if (!nk.enabled)
+		return;
+
 	vec2 win_pos;
 	LC_Draw_CornerIndexToScreenPosition(corner, win_pos);
 
 	nk_style_push_color(nk.ctx, &nk.ctx->style.window.fixed_background.data.color, nk_rgba(0, 0, 0, 0));
-	if (!nk_begin(nk.ctx, "ShowPos", nk_rect(win_pos[0], win_pos[1], 240, 95), NK_WINDOW_NOT_INTERACTIVE | NK_WINDOW_NO_SCROLLBAR | NK_WINDOW_NO_INPUT))
+	if (!nk_begin(nk.ctx, "ShowPos", nk_rect(win_pos[0], win_pos[1] - 20, 240, 122), NK_WINDOW_NOT_INTERACTIVE | NK_WINDOW_NO_SCROLLBAR | NK_WINDOW_NO_INPUT))
 	{
 		nk_end(nk.ctx);
 		return;
@@ -57,6 +60,7 @@ void LC_Draw_DrawShowPos(vec3 pos, vec3 vel, float yaw, float pitch, uint8_t hel
 	nk_labelf(nk.ctx, NK_TEXT_ALIGN_LEFT, "Yaw: %.2f", yaw);
 	nk_labelf(nk.ctx, NK_TEXT_ALIGN_LEFT, "Pitch: %.2f", pitch);
 	nk_labelf(nk.ctx, NK_TEXT_ALIGN_LEFT, "Held block: %s", LC_getBlockName(held_block));
+	nk_labelf(nk.ctx, NK_TEXT_ALIGN_LEFT, "Selected block: %s", LC_getBlockName(selected_block));
 	nk_style_pop_color(nk.ctx);
 	nk_style_pop_color(nk.ctx);
 	nk_end(nk.ctx);
@@ -64,6 +68,9 @@ void LC_Draw_DrawShowPos(vec3 pos, vec3 vel, float yaw, float pitch, uint8_t hel
 
 void LC_Draw_ChunkInfo(LC_Chunk* const chunk, int corner)
 {
+	if (!nk.enabled)
+		return;
+
 	if (!chunk)
 	{
 		return;
@@ -93,6 +100,9 @@ void LC_Draw_ChunkInfo(LC_Chunk* const chunk, int corner)
 
 void LC_Draw_WorldInfo(LC_World* const world, int corner)
 {
+	if (!nk.enabled)
+		return;
+
 	if (!world)
 	{
 		return;
@@ -119,6 +129,20 @@ void LC_Draw_WorldInfo(LC_World* const world, int corner)
 	nk_style_pop_color(nk.ctx);
 
 	nk_end(nk.ctx);
+}
+
+void LC_Draw_WaterOverlayScreenTexture(int water_level)
+{
+	float alpha = 0.0;
+	if (water_level > 2)
+	{
+		alpha = 0.05 * water_level;
+	}
+
+	if (alpha > 0)
+	{
+		Draw_ScreenTextureColored(Resource_get("assets/ui/water_overlay.png", RESOURCE__TEXTURE), NULL, 640, 360, 80, 45, 0, 1, 1, 1, alpha);
+	}	
 }
 
 

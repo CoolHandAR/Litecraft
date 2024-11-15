@@ -55,7 +55,7 @@ void main()
    float far = 500.0; //must be same as camera
    float depth = texture(refraction_depth_map, refract_tex_corods).r;
    float floor_distance = 2.0 * near * far / (far + near - (2.0 * depth - 1.0) * (far - near));
-
+   
    depth = gl_FragCoord.z;
    float water_distance = 2.0 * near * far / (far + near - (2.0 * depth - 1.0) * (far - near));
    float water_depth = floor_distance - water_distance;

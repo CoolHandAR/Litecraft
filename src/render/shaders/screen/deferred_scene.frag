@@ -21,50 +21,162 @@ uniform sampler2D gColorRough;
 
 uniform sampler2D depth_texture;
 uniform sampler2D SSAO_texture;
-uniform sampler2DArray momentMaps;
-uniform sampler2DArray shadowMapsDepth;
+uniform sampler2DArrayShadow shadowMapsDepth;
 
 //IBL
 uniform sampler2D brdfLUT;
 uniform samplerCube irradianceMap;
 uniform samplerCube preFilterMap;
 
-vec2 shadowSampleCombined(vec3 coords)
+uniform vec2 u_shadowSampleKernels[32];
+uniform int u_shadowSampleAmount;
+uniform float u_shadowQualityRadius;
+
+struct ClusterItem
+{
+	int count;
+	int offset;
+    int light_indices[50];
+};
+
+struct AABB_LightNodeData
+{
+	uint light_index;
+	int next_index;
+
+    vec4 position;
+};
+
+layout (std430, binding = 2) readonly restrict buffer ClusterItemsBuffer
+{
+   ClusterItem data[];
+} clusters;
+
+layout (std430, binding = 3) readonly restrict buffer LightIndexesBuffer
+{
+   uint data[];
+} light_indexes;
+
+layout (std430, binding = 4) readonly restrict buffer LightNodesBuffer
+{
+   AABB_LightNodeData data[];
+} light_nodes;
+
+const vec2 SHADOW_SAMPLE_KERNELS[8] = 
+{
+    vec2(0.250, 0.0),
+    vec2(-0.319300860, 1.03923047),
+    vec2(0.0489135273, 2.68328166),
+    vec2(0.402386397, 4.76235247),
+
+    vec2(-0.738515854, 7.20000029),
+    vec2(0.699686766, 9.94987488),
+    vec2(-0.234196693, 12.9799852),
+    vec2(-0.446049154, 16.2665310)
+};
+
+uniform int u_maxLightCount;
+
+AABB_LightNodeData get_light_node(int index)
+{
+    AABB_LightNodeData node = light_nodes.data[index];
+   // node.hit_index = index + 1;
+
+    return node;
+}
+
+int get_next_light_index(vec3 world_pos, inout int index)
+{
+   // return -1;
+        while(index < u_maxLightCount && index != -3)
+        { 
+            if(index == -2)
+            {
+                index++;
+                continue;
+            }
+            
+            AABB_LightNodeData node = light_nodes.data[index];
+
+            if(node.next_index == -3)
+            {
+                return -1;
+            }
+            else if(node.next_index == -2)
+            {
+                index = index + 1;
+                continue;
+            }
+
+            vec3 v = node.position.xyz - world_pos.xyz;
+            float d = dot(v, v);
+
+            if(d < node.position.w * node.position.w)
+            {
+                if(node.next_index == -1)
+                {
+                    index = index + 1;;
+                    return int(node.light_index);
+                }
+                index = node.next_index;
+            }
+            else
+            {
+                if(node.next_index == -1)
+                {
+                    index = index + 1;
+                    continue;
+                }
+                index = node.next_index;    
+           
+            }
+        }
+       
+    return -1;
+}
+
+float quick_hash(vec2 pos) 
+{
+	const vec3 magic = vec3(0.06711056f, 0.00583715f, 52.9829189f);
+	return fract(magic.z * fract(dot(pos, magic.xy)));
+}
+
+float shadowSample(vec3 coords, float depth)
 {   
-    float moment = texture(momentMaps, coords).r;
-    float depth = texture(shadowMapsDepth, coords).r;
+    vec4 sampleCoords;
+    sampleCoords.xyw = vec3(coords.xy, depth);
+    sampleCoords.z = coords.z;
 
-    return vec2(depth, moment);
+    float shadow = texture(shadowMapsDepth, sampleCoords);
+
+    return shadow;
 }
 
-vec2 sampleBlurShadowMap(vec3 coords)
+float sampleBlurShadowMap(vec3 coords, float depth, float blurFactor)
 {
-    vec2 texSize = 1.0 / textureSize(momentMaps, 0).xy;
+    if(u_shadowSampleAmount == 0)
+    {
+        return shadowSample(vec3(coords.xy, coords.z), depth);
+    }
 
-    vec2 avg = shadowSampleCombined(coords).rg;
-    avg += shadowSampleCombined(vec3(coords.xy + vec2(texSize.x, 0.0), coords.z)).rg;
-    avg += shadowSampleCombined(vec3(coords.xy + vec2(-texSize.x, 0.0), coords.z)).rg;
-    avg += shadowSampleCombined(vec3(coords.xy + vec2(0.0, texSize.y), coords.z)).rg;
-    avg += shadowSampleCombined(vec3(coords.xy + vec2(0.0, -texSize.y), coords.z)).rg;
+    float blurring = u_shadowQualityRadius * (blurFactor + (1.0 - blurFactor));
+        
+    vec2 texSize = blurring * (1.0 / textureSize(shadowMapsDepth, 0).xy);
 
-    return avg * (1.0 / 5.0);
-}
+    mat2 disk_rotation;
+    {
+        float r = quick_hash(gl_FragCoord.xy + 5.588238) * 2.0 * PI;
+        float sr = sin(r);
+        float cr = cos(r);
+        disk_rotation = mat2(vec2(cr, -sr), vec2(sr, cr));
+    }
 
-float linstep(float low, float high, float v)
-{
-	return clamp((v-low)/(high-low), 0.0, 1.0);
-}
-float SampleVarianceShadowMap(vec3 coords, float compare, float varianceMin, float lightBleedReductionAmount)
-{
-	vec2 moments = sampleBlurShadowMap(coords).rg;
-	
-	float p = step(compare, moments.x);
-	float variance = max(moments.y - moments.x * moments.x, 0.00001);
-	
-	float d = compare - moments.x;
-	float pMax = linstep(lightBleedReductionAmount, 1.0, variance / (variance + d*d));;
-	
-	return min(max(p, pMax), 1.0);
+    float avg = 0.0;
+    for(int i = 0; i < u_shadowSampleAmount; i++)
+    {
+        avg += shadowSample(vec3(coords.xy + texSize * (disk_rotation * u_shadowSampleKernels[i]), coords.z), depth);  
+    }
+    return  avg * (1.0 / float(u_shadowSampleAmount));
 }
 
 float ShadowCalculation(vec3 fragPosViewSpace, vec3 fragPosWorldSpace, vec3 light_dir, vec3 p_normal)
@@ -73,7 +185,7 @@ float ShadowCalculation(vec3 fragPosViewSpace, vec3 fragPosWorldSpace, vec3 ligh
     float depthValue = abs(fragPosViewSpace.z);
 
     int layer = -1;
-    for (int i = 0; i < SHADOW_CASCADE_COUNT; ++i)
+    for (int i = 0; i < scene.shadow_split_count; ++i)
     {
         if (depthValue < scene.shadow_splits[i])
         {
@@ -83,10 +195,19 @@ float ShadowCalculation(vec3 fragPosViewSpace, vec3 fragPosWorldSpace, vec3 ligh
     }
     if (layer == -1)
     {
-        layer = SHADOW_CASCADE_COUNT - 1;
+        layer = scene.shadow_split_count - 1;
     }
 
-    highp vec4 fragPosLightSpace = scene.shadow_matrixes[layer] * vec4(fragPosWorldSpace, 1.0);
+    vec3 vertex = fragPosWorldSpace;
+
+    vec3 flat_normal = normalize(round(p_normal));
+    vec3 base_normal_bias = flat_normal * (1.0 - max(0.0, dot(light_dir, -flat_normal)));
+    vertex.xyz += light_dir * scene.shadow_bias[layer];
+    vec3 normal_bias = base_normal_bias * scene.shadow_normal_bias[layer];
+    normal_bias -= light_dir * dot(light_dir, normal_bias);
+    vertex.xyz += normal_bias;
+
+    highp vec4 fragPosLightSpace = scene.shadow_matrixes[layer] * vec4(vertex, 1.0);
 
     // perform perspective divide
     highp vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
@@ -99,29 +220,14 @@ float ShadowCalculation(vec3 fragPosViewSpace, vec3 fragPosWorldSpace, vec3 ligh
     // keep the shadow at 0.0 when outside the far_plane region of the light's frustum.
     if (currentDepth > 1.0)
     {
-        return 0.0;
+        return 1.0;
     }
     
-
-    // calculate bias (based on depth map resolution and slope)
-    vec3 normal = normalize(p_normal);
-    normal = round(normal);
-    float bias = 0;
-    const float biasModifier = 0.5f;
-    if (layer == SHADOW_CASCADE_COUNT)
-    {
-        bias *= 1 / (cam.z_far * biasModifier);
-    }
-    else
-    {
-        bias *= 1 / (scene.shadow_splits[layer] * biasModifier);
-    }
+    float blurFactor = scene.shadow_blur_factors[layer];
 
     // PCF
-    float shadow = 0.0;
-  
-    shadow = SampleVarianceShadowMap(vec3(projCoords.xy, layer), currentDepth, scene.shadow_variance_min, scene.shadow_light_bleed_reduction); 
-
+    float shadow = sampleBlurShadowMap(vec3(projCoords.xy, layer), currentDepth, blurFactor);
+    
     return shadow;
 }
 
@@ -179,7 +285,7 @@ vec3 IBL_Calc(float metallic, float roughness, vec3 normal, vec3 view_dir, vec3 
 
     vec3 R = reflect(-view_dir, normal); 
 
-    const float MAX_REFLECTION_LOD = 4.0;
+    const float MAX_REFLECTION_LOD = 8.0;
     vec3 prefilteredColor = textureLod(preFilterMap, R, roughness * MAX_REFLECTION_LOD).rgb;
     vec2 brdf = texture(brdfLUT, vec2(max(dot(normal, view_dir), 0.0), roughness)).rg;
     vec3 specular = prefilteredColor * (kS * brdf.x + brdf.y);
@@ -212,13 +318,47 @@ vec3 calculate_light(vec3 light_color, vec3 light_dir, vec3 normal, vec3 view_di
 
     return value;
 }
+float linearDepth(float depthSample, float zNear, float zFar)
+{
+    float depthRange = 2.0 * depthSample - 1.0;
+    // Near... Far... wherever you are...
+    float linear = 2.0 * zNear * zFar / (zFar + zNear - depthRange * (zFar - zNear));
+    return linear;
+}
+
+uint calculate_cluster_index(vec3 coords)
+{
+     uint num_slices = 16 * 9 * 16;
+     float scale = 16 / log2(500.0 / cam.z_near);
+     float bias = 16.0 * log2(cam.z_near) / log2(500.0 / cam.z_near);
+    // bias = -bias;
+
+     float linearDepthVar = coords.z;
+
+     uint depth_slice = uint((log(abs(coords.z) / 0.1) * 16) / log(500 / 0.1));
+
+
+
+     float tileSizeInPx = 80.0;
+
+     vec2 tileSize = vec2(1280, 720) / vec2(16, 9);
+
+     vec2 screenCoords = gl_FragCoord.xy / tileSize;
+
+     uvec3 tile    = uvec3( screenCoords, depth_slice);
+
+    uint clusterIndex =  (tile.z * 9 + tile.y) * 16 + tile.x;
+
+    return clusterIndex;
+}
+
 const float specular = 0.5;
 void main()
 {
     float depth = textureLod(depth_texture, TexCoords, 0).r;
 
     //Discard if depth is 1.0
-    //Fixes shading the sky
+    //Fixes shading the sky and skip unneeded shading
     if(depth >= 1.0)
     {
         discard;
@@ -245,7 +385,6 @@ void main()
     vec3 F0 = F0calc(Metallic, specular, Albedo);
     vec3 ViewDir = normalize(cam.position.xyz - WorldPos);
 
-
     float shadow = 1.0;
 
 #ifdef USE_DIR_SHADOWS
@@ -256,11 +395,25 @@ void main()
     //CALCULATE DIR LIGHT
     Lighting = shadow * calculate_light(scene.dirLightColor.rgb * scene.dirLightAmbientIntensity, normalize(scene.dirLightDirection.xyz), Normal, ViewDir, Albedo, 1.0, scene.dirLightSpecularIntensity, Roughness, Metallic, F0);
 
+   // uint cluster_index = calculate_cluster_index(vec3(ViewPos.xyz));
+   // uint light_count = clusters.data[cluster_index].count;
+   // uint light_offset = clusters.data[cluster_index].offset;
+    uint light_count = 0;
+    light_count = scene.numPointLights;
+
+    int node_index = 0;
 
     //CALCULATE POINT LIGHTS
-    for(int i = 0; i < scene.numPointLights; i++)
+    for(int i = 0; i < light_count; i++)
     {
-#define pLight pLights.data[i]
+       //uint light_index = clusters.data[cluster_index].light_indices[i];
+       //int light_index = get_next_light_index(WorldPos, node_index);
+       int light_index = i;
+       //if(light_index == -1)
+       //{
+         //  break;
+       //}
+#define pLight pLights.data[light_index]
 
         vec3 LW = pLight.position.xyz - WorldPos.xyz;
         float dist = length(LW);
@@ -273,10 +426,10 @@ void main()
         }
     }
 
- 
+    float ambient_intensity = 1;
 
     //CALCULATE AMBIENT LIGHT
-    vec3 Ambient = IBL_Calc(Metallic, Roughness, Normal, ViewDir, Albedo, F0);
+    vec3 Ambient = IBL_Calc(Metallic, Roughness, Normal, ViewDir, Albedo, F0) * ambient_intensity;
 
     //CALCULATE FINAL COLOR
     Lighting = (Ambient + Lighting) * AO;

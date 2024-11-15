@@ -2,7 +2,7 @@
 #include <string.h>
 #include <GLFW/glfw3.h>
 #include <math.h>
-#include "core/c_common.h"
+#include "core/core_common.h"
 #include <cJSON/cJSON.h>
 #include "utility/u_utility.h"
 #include <stdio.h>
@@ -207,7 +207,7 @@ bool Input_setActionBinding(const char* p_name, InputType p_inputType, int p_inp
 
 void Input_processActions()
 {
-	size_t current_tick = C_getTicks();
+	size_t current_tick = Core_getTicks();
 
 	bool process_gamepad = false;
 	GLFWgamepadstate gamepad_state;
@@ -332,7 +332,7 @@ bool Input_IsActionJustPressed(const char* p_name)
 	{
 		return false;
 	}
-	return action->pressed && action->action_tick == C_getTicks();
+	return action->pressed && action->action_tick == Core_getTicks();;
 }
 
 bool Input_IsActionJustReleased(const char* p_name)
@@ -343,7 +343,7 @@ bool Input_IsActionJustReleased(const char* p_name)
 		return false;
 	}
 
-	return !action->pressed && action->action_tick == C_getTicks();
+	return !action->pressed && action->action_tick == Core_getTicks();;
 }
 
 bool Input_saveAllToFile(const char* p_filePath)

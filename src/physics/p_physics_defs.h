@@ -86,6 +86,7 @@ typedef struct Kinematic_Body
 	int water_level;
 	int contact_count;
 
+	bool in_water;
 	bool on_ground;
 	bool force_update_on_frame;
 

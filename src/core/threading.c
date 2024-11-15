@@ -1,11 +1,11 @@
-#include "core/c_common.h"
+#include "core/core_common.h"
 #include <assert.h>
 #include <Windows.h>
 
 
 #define MAX_TASKS_IN_QUEUE 100
-#define MAX_WORK_THREADS 2
-#define MAX_TASKS_PER_THREAD 20
+#define MAX_WORK_THREADS 1
+#define MAX_TASKS_PER_THREAD 50
 #define MAX_HANDLES 100
 #define LOW_PRIORITY_TIME_THRESHOLD 5000
 #define THREAD_SHUTDOWN_TIME_THRESHOLD 10000
@@ -68,6 +68,7 @@ typedef struct
 typedef struct
 {
 	HANDLE handle;
+	HANDLE mutex;
 	WorkTask* tasks[MAX_TASKS_PER_THREAD];
 	int assigned_tasks;
 	ThreadStatus status;
@@ -129,6 +130,8 @@ static void Thread_ShutdownThread(WorkerThread* thread)
 	//close handle
 	CloseHandle(thread->handle);
 
+	CloseHandle(thread->mutex);
+
 	thread_core.active_thread_count--;
 	
 	memset(thread, 0, sizeof(WorkerThread));
@@ -136,12 +139,20 @@ static void Thread_ShutdownThread(WorkerThread* thread)
 
 static void Thread_SignalTaskCompleted(WorkerThread* _thread, WorkTask* _task, void* _return_data)
 {
-	_thread->assigned_tasks = (_thread->assigned_tasks - 1) % MAX_TASKS_PER_THREAD;
+	WaitForSingleObject(_thread->mutex, INFINITE);
+
+	_thread->assigned_tasks--;
+	if (_thread->assigned_tasks < 0)
+	{
+		_thread->assigned_tasks = 0;
+	}
 	_task->status = TWS__EMPTY;
 	handle_manager.handles[_task->handle_id].return_data.int_value = (long long)_return_data;
 	handle_manager.handles[_task->handle_id].return_data.mem_value = _return_data;
-	handle_manager.handles[_task->handle_id].task_status = (_task->flags & TASK_FLAG__FIRE_AND_FORGET == 1) ? TWS__EMPTY : TWS__COMPLETED;
-	handle_manager.active_handles_bitset[_task->handle_id] = (_task->flags & TASK_FLAG__FIRE_AND_FORGET == 1) ? false : true;
+	handle_manager.handles[_task->handle_id].task_status = (_task->flags & TASK_FLAG__FIRE_AND_FORGET) ? TWS__EMPTY : TWS__COMPLETED;
+	handle_manager.active_handles_bitset[_task->handle_id] = (_task->flags & TASK_FLAG__FIRE_AND_FORGET) ? false : true;
+
+	ReleaseMutex(_thread->mutex);
 }
 
 static WorkTask* Thread_GetNextTask(TaskDispatchResult* r_dispatchResult, WorkerThread* _thread)
@@ -155,10 +166,17 @@ static WorkTask* Thread_GetNextTask(TaskDispatchResult* r_dispatchResult, Worker
 	//check if we have any assigned work
 	if (_thread->assigned_tasks > 0)
 	{
-		WorkTask* task = _thread->tasks[_thread->assigned_tasks - 1];
-
+		WorkTask* task = NULL;
+		for (int i = 0; i < MAX_TASKS_PER_THREAD; i++)
+		{
+			if (_thread->tasks[i] && _thread->tasks[i]->status == TWS__READY_FOR_WORK)
+			{
+				task = _thread->tasks[i];
+				break;
+			}
+		}
 		//is the task ready for work?
-		if (task->status == TWS__READY_FOR_WORK)
+		if (task && task->status == TWS__READY_FOR_WORK)
 		{
 			//set the the tread priority if needed
 			int task_priority_win = Thread_ProjectPriorityToWindowsPriority(task->flags);
@@ -166,8 +184,9 @@ static WorkTask* Thread_GetNextTask(TaskDispatchResult* r_dispatchResult, Worker
 			{
 				SetThreadPriority(_thread->handle, task_priority_win);
 			}
-
+			WaitForSingleObject(_thread->mutex, INFINITE);
 			task->status = TWS__WORKING;
+			ReleaseMutex(_thread->mutex);
 
 			*r_dispatchResult = TDR__NEW_TASK;
 			return task;
@@ -193,13 +212,13 @@ static void Thread_Loop(WorkerThread* _thread)
 		case TDR__SLEEP:
 		{
 			//no task? sleep
-			sleep_time += C_getDeltaTime();
+			sleep_time += Core_getDeltaTime();
 			
 			//if sleep time is more than this threshold
 			//request exit from the main thread this will shutdown the win handle and free it's data
 			if (sleep_time >= THREAD_SHUTDOWN_TIME_THRESHOLD)
 			{
-				_thread->exit_request = true;
+				//_thread->exit_request = true;
 			}
 			else if (sleep_time >= LOW_PRIORITY_TIME_THRESHOLD)
 			{
@@ -207,7 +226,7 @@ static void Thread_Loop(WorkerThread* _thread)
 				//set thread priority to lowest
 				if (GetThreadPriority(_thread->handle) != THREAD_PRIORITY_LOWEST)
 				{
-					SetThreadPriority(_thread->handle, THREAD_PRIORITY_LOWEST);
+					//SetThreadPriority(_thread->handle, THREAD_PRIORITY_LOWEST);
 				}
 			}
 			continue;
@@ -244,7 +263,7 @@ static void Thread_Loop(WorkerThread* _thread)
 	}
 }
 
-static void Thread_Create(WorkerThread* _thread)
+static bool Thread_Create(WorkerThread* _thread)
 {
 	//check if we can create a thread
 	if (thread_core.active_thread_count + 1 > MAX_WORK_THREADS)
@@ -270,22 +289,40 @@ static void Thread_Create(WorkerThread* _thread)
 	//failed to create the thread
 	if (!_thread->handle)
 	{
-		return;
+		return false;
 	}
 
+	//create mutex
+	_thread->mutex = CreateMutex(NULL, FALSE, NULL);
+
+	//failed to create mutex
+	if (!_thread->mutex)
+	{
+		return false;
+	}
+	
 	_thread->status = TS__LAUNCHED;
 
 	thread_core.active_thread_count++;
+
+	return true;
 }
 
 static int Thread_GetEmptyHandleIndex()
 {
+	int empty_loops = 0;
 	for (;;)
 	{	
 		handle_manager.pos = (handle_manager.pos + 1) % MAX_HANDLES;
 		if (handle_manager.handles[handle_manager.pos].task_status == TWS__EMPTY)
 		{
 			return handle_manager.pos;
+		}
+		empty_loops++;
+
+		if (empty_loops > 10)
+		{
+			break;
 		}
 	}
 
@@ -299,6 +336,10 @@ static WorkTask* Thread_GetEmptyTask()
 	//assign task to a thread
 	WorkerThread* thread = NULL;
 
+	const int MAX_EMPTY_LOOPS = 5;
+
+	int loops = 0;
+
 	for (;;)
 	{
 		thread = &thread_core.threads[queue.thread_pos];
@@ -307,24 +348,49 @@ static WorkTask* Thread_GetEmptyTask()
 		if (thread->status == TS__NOT_LAUNCHED)
 		{
 			//we create the thread
-			Thread_Create(thread);
+			if (!Thread_Create(thread))
+			{
+				return NULL;
+			}
 		}
 
 		//Is the thread full of tasks already?
 		if (thread->assigned_tasks >= MAX_TASKS_PER_THREAD)
 		{
+			return NULL;
 			queue.thread_pos = (queue.thread_pos + 1) % MAX_WORK_THREADS;
 			continue;
 		}
-		
+
+		if (loops >= MAX_EMPTY_LOOPS)
+		{
+			return NULL;
+		}
+		loops++;
+			
 		//assign to the thread task array
-		thread->tasks[thread->assigned_tasks] = task;		
-		thread->assigned_tasks = (thread->assigned_tasks + 1) % (MAX_TASKS_PER_THREAD + 1);
+		WaitForSingleObject(thread->mutex, INFINITE);
+
+		for (int i = 0; i < MAX_TASKS_PER_THREAD; i++)
+		{
+			if (!thread->tasks[i] || thread->tasks[i]->status == TWS__EMPTY)
+			{
+				thread->tasks[i] = task;
+				thread->assigned_tasks = (thread->assigned_tasks + 1) % (MAX_TASKS_PER_THREAD + 1);
+				break;
+			}
+		}
+		ReleaseMutex(thread->mutex);
 
 		break;
 	}
 	
 	task->handle_id = Thread_GetEmptyHandleIndex();
+	if (task->handle_id == -1)
+	{
+		return NULL;
+	}
+
 	task->status = TWS__EMPTY;
 	
 	queue.task_pos = (queue.task_pos + 1) % MAX_TASKS_IN_QUEUE;
@@ -339,6 +405,11 @@ WorkHandleID __Internal_Thread_AssignTaskArgCopy(ThreadTask_fun p_taskFun, void*
 	assert(p_allocSize < THREAD_TASK_ARG_DATA_MAX_SIZE && "The arg data can not exceed the max size");
 
 	WorkTask* task = Thread_GetEmptyTask();
+
+	if (!task)
+	{
+		return -1;
+	}
 
 	if (p_taskFlags & __INTERNAL_TASK_FLAG__INT_TYPE)
 	{

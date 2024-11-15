@@ -5,7 +5,7 @@
 #include "lc/lc_world.h"
 #include "render/r_camera.h"
 #include <GLFW/glfw3.h>
-#include "core/c_common.h"
+#include "core/core_common.h"
 #include "lc/lc_core.h"
 #include "sound/sound.h"
 #include "render/r_public.h"
@@ -283,19 +283,19 @@ void PL_initPlayer(vec3 p_spawnPos)
 	player.k_body = PhysWorld_AddKinematicBody(LC_World_GetPhysWorld(), &aabb, NULL);
 	//setup default body config
 	player.k_body->config.ducking_scale = 0.2f;
-	player.k_body->config.ground_accel = 100;
-	player.k_body->config.air_accel = 1;
+	player.k_body->config.ground_accel = 5;
+	player.k_body->config.air_accel = 0.1;
 	//player.k_body->config.ground_accel = 244;
-	player.k_body->config.water_accel = 0.3;
-	player.k_body->config.jump_height = 0.07;
+	player.k_body->config.water_accel = 1.1;
+	player.k_body->config.jump_height = 0.25;
 	player.k_body->force_update_on_frame = true;
 	player.k_body->flags |= PF__Collidable;
-	player.k_body->config.air_friction = 0.2;
+	player.k_body->config.air_friction = 1.2;
 	player.k_body->config.ground_friction = 200.0;
-	player.k_body->config.flying_friction = 5;
-	player.k_body->config.water_friction = 1000;
+	player.k_body->config.flying_friction = 1;
+	player.k_body->config.water_friction = 400;
 	player.k_body->config.stop_speed = 100;
-	player.k_body->config.flying_speed = 400;
+	player.k_body->config.flying_speed = 50;
 	
 	player.held_block_type = LC_BT__GRASS;
 }	
@@ -311,7 +311,10 @@ static ma_sound* PL_getStepSound()
 		return NULL;
 	}
 	case LC_BT__CACTUS:
+	case LC_BT__SNOWYLEAVES:
 	case LC_BT__TREELEAVES:
+	case LC_BT__FLOWER:
+	case LC_BT__GRASS_PROP:
 	case LC_BT__GRASS:
 	{
 		if (player.step_sound_timer > 0)
@@ -345,6 +348,7 @@ static ma_sound* PL_getStepSound()
 
 		return lc_resources.gravel_step_sounds[player.step_sound_index];
 	}
+	case LC_BT__SNOW:
 	case LC_BT__OBSIDIAN:
 	case LC_BT__IRON:
 	case LC_BT__DIAMOND:
@@ -388,6 +392,7 @@ static ma_sound* PL_getDigSound(LC_BlockType block_type, bool place_destroy)
 	switch (block_type)
 	{
 	case LC_BT__CACTUS:
+	case LC_BT__SNOWYLEAVES:
 	case LC_BT__TREELEAVES:
 	case LC_BT__FLOWER:
 	case LC_BT__GRASS_PROP:
@@ -505,7 +510,7 @@ static void PL_fallCheck()
 	else
 	{
 		prev_on_ground = false;
-		fall_strength += C_getDeltaTime();
+		fall_strength += Core_getDeltaTime();
 	}
 }
 
@@ -656,28 +661,25 @@ static void PL_mineBlock()
 	}
 
 	//Emit particles
-	if (!LC_isBlockProp(selected_block.block.type))
-	{
-		vec3 dir;
-		dir[0] = selected_block.face[0];
-		dir[1] = selected_block.face[1];
-		dir[2] = selected_block.face[2];
+	vec3 dir;
+	dir[0] = selected_block.face[0];
+	dir[1] = selected_block.face[1];
+	dir[2] = selected_block.face[2];
 
-		vec3 origin;
-		origin[0] = selected_block.position[0];
-		origin[1] = selected_block.position[1] + 0.5;
-		origin[2] = selected_block.position[2];
-		LC_Block_Texture_Offset_Data texture_data = LC_BLOCK_TEX_OFFSET_DATA[selected_block.block.type];
-		int frame = (25 * texture_data.back_face[1]) + texture_data.back_face[0];
+	vec3 origin;
+	origin[0] = selected_block.position[0];
+	origin[1] = selected_block.position[1] + 0.5;
+	origin[2] = selected_block.position[2];
+	LC_Block_Texture_Offset_Data texture_data = LC_BLOCK_TEX_OFFSET_DATA[selected_block.block.type];
+	int frame = (25 * texture_data.back_face[1]) + texture_data.back_face[0];
 
-		static int emitter_index = 0;
+	static int emitter_index = 0;
 
-		emitter_index = (emitter_index + 1) % 5;
+	emitter_index = (emitter_index + 1) % 4;
 
-		lc_emitters.block_dig[emitter_index]->settings.frame = frame;
-		lc_emitters.block_dig[emitter_index]->settings.particle_amount = 5;
-		Particle_EmitTransformed(lc_emitters.block_dig[emitter_index], dir, origin);
-	}
+	lc_emitters.block_dig[emitter_index]->frame = frame;
+	//lc_emitters.block_dig[emitter_index]->settings.particle_amount = 5;
+	Particle_EmitTransformed(lc_emitters.block_dig[emitter_index], dir, origin);
 
 	//Reset the timer
 	player.action_timer = 3;
@@ -751,7 +753,7 @@ static void PL_move(int p_dirX, int p_dirY, int p_dirZ)
 	{
 		if (p_dirX != 0 || p_dirZ != 0)
 		{
-			player.step_sound_timer -= C_getDeltaTime();
+			player.step_sound_timer -= Core_getDeltaTime();
 
 			ma_sound* step_sound = PL_getStepSound();
 			
@@ -831,7 +833,7 @@ static void PL_processInput()
 		Window_toggleFullScreen();
 	}
 	
-	if (C_CheckForBlockedInputState())
+	if (Core_CheckForBlockedInputState())
 	{
 		return;
 	}
@@ -926,9 +928,13 @@ static void PL_UpdateCamera()
 		return;
 	}
 
-	cam->data.position[0] = player.k_body->box.position[0] + player.k_body->box.width * 0.5f;
-	cam->data.position[1] = player.k_body->box.position[1] + player.k_body->box.height * 0.5f;
-	cam->data.position[2] = player.k_body->box.position[2] + player.k_body->box.length * 0.5f;
+	double interp = Core_getLerpFraction();
+
+	interp = glm_clamp(interp, 0.2, 0.7);
+
+	cam->data.position[0] = glm_lerp(cam->data.position[0], player.k_body->box.position[0] + player.k_body->box.width * 0.5f, interp);
+	cam->data.position[1] = glm_lerp(cam->data.position[1], player.k_body->box.position[1] + player.k_body->box.height * 0.5f, interp);
+	cam->data.position[2] = glm_lerp(cam->data.position[2], player.k_body->box.position[2] + player.k_body->box.length * 0.5f, interp);
 }
 extern GLFWwindow* glfw_window;
 static void PL_HandleInventory()
@@ -940,7 +946,7 @@ static void PL_HandleInventory()
 	vec2 mouse_pos;
 	mouse_pos[0] = mouse_x_pos;
 	mouse_pos[1] = mouse_y_pos;
-	C_BlockInputThisFrame();
+	Core_BlockInputThisFrame();
 
 	ivec2 window_size;
 	Window_getSize(window_size);
@@ -1001,7 +1007,7 @@ void PL_IssueDrawCmds()
 
 	if (pl_cvars.pl_showpos->int_value)
 	{
-		LC_Draw_DrawShowPos(player.k_body->box.position, player.k_body->velocity, cam->data.yaw, cam->data.pitch, player.held_block_type, 2);
+		LC_Draw_DrawShowPos(player.k_body->box.position, player.k_body->velocity, cam->data.yaw, cam->data.pitch, player.held_block_type, selected_block.block.type, 2);
 	}
 	if (pl_cvars.pl_showchunk->int_value)
 	{
@@ -1018,20 +1024,28 @@ void PL_IssueDrawCmds()
 		LC_Draw_Hotbar(&hotbar);
 		LC_Draw_Crosshair();
 	}
-	
+	if (player.k_body->in_water && player.k_body->water_level > 0)
+	{
+		LC_Draw_WaterOverlayScreenTexture(player.k_body->water_level);
+	}
 	//Draw selected block outlines
 	if (selected_block.block.type != LC_BT__NONE)
 	{
-		AABB aabb = LC_getBlockTypeAABB(selected_block.block.type);
+		vec3 box[2];
+		LC_getBlockTypeAABB(selected_block.block.type, box);
 
-		aabb.position[0] += selected_block.position[0];
-		aabb.position[1] += selected_block.position[1];
-		aabb.position[2] += selected_block.position[2];
+		box[0][0] += selected_block.position[0];
+		box[0][1] += selected_block.position[1];
+		box[0][2] += selected_block.position[2];
+
+		box[1][0] += selected_block.position[0];
+		box[1][1] += selected_block.position[1];
+		box[1][2] += selected_block.position[2];
 
 		vec4 black;
 		memset(black, 0, sizeof(vec4));
 
-		Draw_AABBWires1(aabb, black);
+		Draw_CubeWires(box, black);
 
 
 		if (LC_World_getPrevMinedBlockHP() < 7 && !LC_isBlockProp(selected_block.block.type))
@@ -1040,20 +1054,20 @@ void PL_IssueDrawCmds()
 
 			memset(box, 0, sizeof(box));
 
-			box[0][0] = selected_block.position[0];
-			box[0][1] = selected_block.position[1];
-			box[0][2] = selected_block.position[2];
+			box[0][0] = (float)selected_block.position[0] - 0.51;
+			box[0][1] = (float)selected_block.position[1] - 0.51;
+			box[0][2] = (float)selected_block.position[2] - 0.51;
 
-			box[1][0] = selected_block.position[0] + 1.01;
-			box[1][1] = selected_block.position[1] + 1.01;
-			box[1][2] = selected_block.position[2] + 1.01;
+			box[1][0] = (float)selected_block.position[0] + 0.51;
+			box[1][1] = (float)selected_block.position[1] + 0.51;
+			box[1][2] = (float)selected_block.position[2] + 0.51;
 
 			M_Rect2Df tex_Region;
 
-			tex_Region.width = 16;
-			tex_Region.height = 16;
-			tex_Region.x = 16 * 24;
-			tex_Region.y = 16 * (7 - LC_World_getPrevMinedBlockHP());
+			tex_Region.width = 25;
+			tex_Region.height = -25;
+			tex_Region.x = 24;
+			tex_Region.y = (7 - LC_World_getPrevMinedBlockHP());
 
 			Draw_TexturedCubeColored(box, Resource_get("assets/cube_textures/simple_block_atlas.png", RESOURCE__TEXTURE), &tex_Region, 1.0, 1.0, 1.0, 0.5);
 		}
@@ -1064,6 +1078,12 @@ void PL_IssueDrawCmds()
 
 void PL_Update()
 {
+	//temp hack
+	//if (player.k_body->box[1] < 10)
+//	{
+
+	//}
+
 	//Fall check and play sound if landed
 	PL_fallCheck();
 
@@ -1076,10 +1096,10 @@ void PL_Update()
 	//update the timer
 	if (player.action_timer > 0)
 	{
-		player.action_timer -= C_getDeltaTime() * 15;
+		player.action_timer -= Core_getDeltaTime() * 15;
 	}
 
-	alive_timer += C_getDeltaTime();
+	alive_timer += Core_getDeltaTime();
 
 	//Update listener position
 	PL_updateListener();

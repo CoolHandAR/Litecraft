@@ -16,9 +16,9 @@ textures and etc...
 
 
 extern R_CMD_Buffer* cmdBuffer;
-extern R_DrawData* drawData;
+extern RDraw_DrawData* drawData;
 extern R_BackendData* backend_data;
-extern R_RenderPassData* pass;
+extern RPass_PassData* pass;
 extern R_Cvars r_cvars;
 extern R_StorageBuffers storage;
 extern R_Scene scene;
@@ -38,13 +38,28 @@ static void CheckBoundFrameBufferStatus(const char* p_fboName)
     }
 }
 
+static void Init_SetupTextureArraySamplers(const char* p_arrName, R_Shader p_shader)
+{
+    glUseProgram(p_shader);
+    //set up samplers
+    GLint texture_array_location = glGetUniformLocation(p_shader, p_arrName);
+    int32_t samplers[32];
+
+    for (int i = 0; i < 32; i++)
+    {
+        samplers[i] = i;
+    }
+
+    glUniform1iv(texture_array_location, 32, samplers);
+}
+
+
 static void Init_registerCvars()
 {
     r_cvars.r_multithread = Cvar_Register("r_multithread", "1", "Use multiple threads for rendering", CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_limitFPS = Cvar_Register("r_limitFPS", "1", "Limit FPS with r_maxFPS", CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_maxFPS = Cvar_Register("r_maxFPS", "144", NULL, CVAR__SAVE_TO_FILE, 30, 1000);
     r_cvars.r_useDirShadowMapping = Cvar_Register("r_useDirShadowMapping", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
-    r_cvars.r_DirShadowMapResolution = Cvar_Register("r_DirShadowMapResolution", "1024", NULL, CVAR__SAVE_TO_FILE, 256, 4048);
     r_cvars.r_drawSky = Cvar_Register("r_drawSky", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
 
     //EFFECTS
@@ -54,6 +69,8 @@ static void Init_registerCvars()
     r_cvars.r_useSsr = Cvar_Register("r_useSsr", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_useSsao = Cvar_Register("r_useSsao", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_bloomStrength = Cvar_Register("r_bloomStrength", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+    r_cvars.r_bloomThreshold = Cvar_Register("r_bloomThreshold", "0", NULL, CVAR__SAVE_TO_FILE, 0, 12);
+    r_cvars.r_bloomSoftThreshold = Cvar_Register("r_bloomSoftThreshold", "0", NULL, CVAR__SAVE_TO_FILE, 0, 12);
     r_cvars.r_ssaoBias = Cvar_Register("r_ssaoBias", "0.025", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_ssaoRadius = Cvar_Register("r_ssaoRadius", "0.6", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_ssaoStrength = Cvar_Register("r_ssaoStrength", "1", NULL, CVAR__SAVE_TO_FILE, 0, 8);
@@ -63,6 +80,7 @@ static void Init_registerCvars()
     r_cvars.r_Brightness = Cvar_Register("r_Brightness", "1", NULL, CVAR__SAVE_TO_FILE, 0.01, 8);
     r_cvars.r_Contrast = Cvar_Register("r_Contrast", "1", NULL, CVAR__SAVE_TO_FILE, 0.01, 8);
     r_cvars.r_Saturation = Cvar_Register("r_Saturation", "1", NULL, CVAR__SAVE_TO_FILE, 0.01, 8);
+    r_cvars.r_TonemapMode = Cvar_Register("r_TonemapMode", "1", NULL, CVAR__SAVE_TO_FILE, 0, 2);
   
     //WINDOW SPECIFIC
     r_cvars.w_width = Cvar_Register("w_width", "1024", "Window width", CVAR__SAVE_TO_FILE, 480, 4048);
@@ -78,10 +96,11 @@ static void Init_registerCvars()
     //SHADOW SPECIFIC
     r_cvars.r_allowParticleShadows = Cvar_Register("r_allowParticleShadws", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_allowTransparentShadows = Cvar_Register("r_allowTransparentShadows", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
-    r_cvars.r_shadowBias = Cvar_Register("r_shadowBias", "-0.07", NULL, CVAR__SAVE_TO_FILE, -10, 10);
-    r_cvars.r_shadowNormalBias = Cvar_Register("r_shadowNormalBias", "0.0", NULL, CVAR__SAVE_TO_FILE, 0, 10);
-    r_cvars.r_shadowVarianceMin = Cvar_Register("r_shadowVarianceMin", "0.0001", NULL, CVAR__SAVE_TO_FILE, 0, 1);
-    r_cvars.r_shadowLightBleedReduction = Cvar_Register("r_shadowLightBleedReduction", "1.0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+    r_cvars.r_shadowBias = Cvar_Register("r_shadowBias", "0.1", NULL, CVAR__SAVE_TO_FILE, -10, 10);
+    r_cvars.r_shadowNormalBias = Cvar_Register("r_shadowNormalBias", "2.0", NULL, CVAR__SAVE_TO_FILE, 0, 10);
+    r_cvars.r_shadowQualityLevel = Cvar_Register("r_shadowQualityLevel", "7", NULL, CVAR__SAVE_TO_FILE, 0, 24);
+    r_cvars.r_shadowBlurLevel = Cvar_Register("r_shadowBlurLevel", "1", NULL, CVAR__SAVE_TO_FILE, 0, 4);
+    r_cvars.r_shadowSplits = Cvar_Register("r_shadowSplits", "4", NULL, CVAR__SAVE_TO_FILE, 1, 4);
     
     //DEBUG
     r_cvars.r_drawDebugTexture = Cvar_Register("r_drawDebugTexture", "-1", NULL, CVAR__SAVE_TO_FILE, -1, 6);
@@ -178,7 +197,7 @@ static void Init_ScreenQuadDrawData()
 
 static void Init_TextDrawData()
 {
-    R_TextDrawData* data = &drawData->text;
+    RDraw_TextData* data = &drawData->text;
 
     data->shader = Shader_CompileFromFile("src/shaders/screen_shader.vs", "src/shaders/screen_shader.fs", NULL);
 
@@ -260,8 +279,15 @@ static void Init_LineDrawData()
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(BasicVertex), (void*)(offsetof(BasicVertex, position)));
     glEnableVertexAttribArray(0);
 
-    glVertexAttribIPointer(1, 4, GL_UNSIGNED_BYTE, sizeof(BasicVertex), (void*)(offsetof(BasicVertex, color)));
-    glEnableVertexAttribArray(1);
+    glVertexAttribIPointer(2, 4, GL_UNSIGNED_BYTE, sizeof(BasicVertex), (void*)(offsetof(BasicVertex, color)));
+    glEnableVertexAttribArray(2);
+
+    const char* DEFINES[2] =
+    {
+        "COLOR_ATTRIB",
+        "COLOR_8BIT"
+    };
+    drawData->lines.shader = Shader_CompileFromFileDefine("src/render/shaders/scene_3d.vert", "src/render/shaders/scene_3d_forward.frag", NULL, DEFINES, 2);
 }
 
 static void Init_TriangleDrawData()
@@ -286,17 +312,256 @@ static void Init_TriangleDrawData()
     glEnableVertexAttribArray(3);
 }
 
+static void Init_CubeDrawData()
+{
+   const float cube_vertices[] = {
+        // positions          // texture coords  // normals
+        -0.5f, -0.5f, -0.5f,  0.0f,  0.0f,   0.0f,  0.0f, -1.0f,
+         0.5f, -0.5f, -0.5f,  1.0f,  0.0f,   0.0f,  0.0f, -1.0f,
+         0.5f,  0.5f, -0.5f,  1.0f,  1.0f,   0.0f,  0.0f, -1.0f,
+         0.5f,  0.5f, -0.5f,  1.0f,  1.0f,   0.0f,  0.0f, -1.0f,
+        -0.5f,  0.5f, -0.5f,  0.0f,  1.0f,   0.0f,  0.0f, -1.0f,
+        -0.5f, -0.5f, -0.5f,  0.0f,  0.0f,   0.0f,  0.0f, -1.0f,
+
+        -0.5f, -0.5f,  0.5f,  0.0f,  0.0f,   0.0f,  0.0f,  1.0f,
+         0.5f, -0.5f,  0.5f,  1.0f,  0.0f,   0.0f,  0.0f,  1.0f,
+         0.5f,  0.5f,  0.5f,  1.0f,  1.0f,   0.0f,  0.0f,  1.0f,
+         0.5f,  0.5f,  0.5f,  1.0f,  1.0f,   0.0f,  0.0f,  1.0f,
+        -0.5f,  0.5f,  0.5f,  0.0f,  1.0f,   0.0f,  0.0f,  1.0f,
+        -0.5f, -0.5f,  0.5f,  0.0f,  0.0f,   0.0f,  0.0f,  1.0f,
+
+        -0.5f,  0.5f,  0.5f,  1.0f,  0.0f,  -1.0f,  0.0f,  0.0f,
+        -0.5f,  0.5f, -0.5f,  1.0f,  1.0f,  -1.0f,  0.0f,  0.0f,
+        -0.5f, -0.5f, -0.5f,  0.0f,  1.0f,  -1.0f,  0.0f,  0.0f,
+        -0.5f, -0.5f, -0.5f,  0.0f,  1.0f,  -1.0f,  0.0f,  0.0f,
+        -0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  -1.0f,  0.0f,  0.0f,
+        -0.5f,  0.5f,  0.5f,  1.0f,  0.0f,  -1.0f,  0.0f,  0.0f,
+
+         0.5f,  0.5f,  0.5f,  1.0f,  0.0f,   1.0f,  0.0f,  0.0f,
+         0.5f,  0.5f, -0.5f,  1.0f,  1.0f,   1.0f,  0.0f,  0.0f,
+         0.5f, -0.5f, -0.5f,  0.0f,  1.0f,   1.0f,  0.0f,  0.0f,
+         0.5f, -0.5f, -0.5f,  0.0f,  1.0f,   1.0f,  0.0f,  0.0f,
+         0.5f, -0.5f,  0.5f,  0.0f,  0.0f,   1.0f,  0.0f,  0.0f,
+         0.5f,  0.5f,  0.5f,  1.0f,  0.0f,   1.0f,  0.0f,  0.0f,
+
+        -0.5f, -0.5f, -0.5f,  0.0f,  1.0f,   0.0f, -1.0f,  0.0f,
+         0.5f, -0.5f, -0.5f,  1.0f,  1.0f,   0.0f, -1.0f,  0.0f,
+         0.5f, -0.5f,  0.5f,  1.0f,  0.0f,   0.0f, -1.0f,  0.0f,
+         0.5f, -0.5f,  0.5f,  1.0f,  0.0f,   0.0f, -1.0f,  0.0f,
+        -0.5f, -0.5f,  0.5f,  0.0f,  0.0f,   0.0f, -1.0f,  0.0f,
+        -0.5f, -0.5f, -0.5f,  0.0f,  1.0f,   0.0f, -1.0f,  0.0f,
+
+        -0.5f,  0.5f, -0.5f,  0.0f,  1.0f,   0.0f,  1.0f,  0.0f,
+         0.5f,  0.5f, -0.5f,  1.0f,  1.0f,   0.0f,  1.0f,  0.0f,
+         0.5f,  0.5f,  0.5f,  1.0f,  0.0f,   0.0f,  1.0f,  0.0f,
+         0.5f,  0.5f,  0.5f,  1.0f,  0.0f,   0.0f,  1.0f,  0.0f,
+        -0.5f,  0.5f,  0.5f,  0.0f,  0.0f,   0.0f,  1.0f,  0.0f,
+        -0.5f,  0.5f, -0.5f,  0.0f,  1.0f,   0.0f,  1.0f,  0.0f
+    };
+
+    glGenVertexArrays(1, &drawData->cube.vao);
+    glGenBuffers(1, &drawData->cube.vbo);
+    glGenBuffers(1, &drawData->cube.instance_vbo);
+
+    glBindVertexArray(drawData->cube.vao);
+
+    //BASE CUBE BUFFER
+    glBindBuffer(GL_ARRAY_BUFFER, drawData->cube.vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(cube_vertices), cube_vertices, GL_STATIC_DRAW);
+    
+    //POSITION
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 8, (void*)0);
+    glEnableVertexAttribArray(0);
+    //UV
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 8, (void*)(sizeof(float) * 3));
+    glEnableVertexAttribArray(1);
+    //NORMALS
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 8, (void*)(sizeof(float) * 5));
+    glEnableVertexAttribArray(3);
+
+    //INSTANCES
+    glBindBuffer(GL_ARRAY_BUFFER, drawData->cube.instance_vbo);
+    glBufferData(GL_ARRAY_BUFFER, 1, NULL, GL_STREAM_DRAW);
+    drawData->cube.allocated_size = 1;
+
+    const int STRIDE = sizeof(float) * (4 + 4 + 4 + 4 + 4 + 4);
+    glVertexAttribPointer(7, 4, GL_FLOAT, GL_FALSE, STRIDE, (void*)0);
+    glEnableVertexAttribArray(7);
+    glVertexAttribDivisor(7, 1);
+
+    glVertexAttribPointer(8, 4, GL_FLOAT, GL_FALSE, STRIDE, (void*)(sizeof(float) * 4));
+    glEnableVertexAttribArray(8);
+    glVertexAttribDivisor(8, 1);
+
+    glVertexAttribPointer(9, 4, GL_FLOAT, GL_FALSE, STRIDE, (void*)(sizeof(float) * 8));
+    glEnableVertexAttribArray(9);
+    glVertexAttribDivisor(9, 1);
+
+    glVertexAttribPointer(10, 4, GL_FLOAT, GL_FALSE, STRIDE, (void*)(sizeof(float) * 12));
+    glEnableVertexAttribArray(10);
+    glVertexAttribDivisor(10, 1);
+
+    glVertexAttribPointer(11, 4, GL_FLOAT, GL_FALSE, STRIDE, (void*)(sizeof(float) * 16));
+    glEnableVertexAttribArray(11);
+    glVertexAttribDivisor(11, 1);
+
+    glVertexAttribPointer(12, 4, GL_FLOAT, GL_FALSE, STRIDE, (void*)(sizeof(float) * 20));
+    glEnableVertexAttribArray(12);
+    glVertexAttribDivisor(12, 1);
+
+    drawData->cube.vertices_buffer = dA_INIT(float, 1);
+    
+    //Compile shader
+    const char* SHADER_DEFINES[6] =
+    {
+        "TEXCOORD_ATTRIB",
+        "INSTANCE_MAT3",
+        "INSTANCE_UV",
+        "INSTANCE_COLOR",
+        "INSTANCE_CUSTOM",
+        "USE_TEXTURE_ARR"
+    };
+   // drawData->cube.shader = Shader_CompileFromFile("src/render/shaders/instance_3d.vert", "src/render/shaders/instance_3d.frag", NULL);
+    drawData->cube.shader = Shader_CompileFromFileDefine("src/render/shaders/scene_3d.vert", "src/render/shaders/scene_3d_forward.frag", NULL, SHADER_DEFINES, 6);
+
+    Init_SetupTextureArraySamplers("texture_arr", drawData->cube.shader);
+}
+
+static void Init_ParticleDrawData()
+{
+    const char* DEFINES[7] =
+    {
+        "TEXCOORD_ATTRIB",
+        "NORMAL_ATTRIB",
+        "INSTANCE_MAT3",
+        "INSTANCE_UV",
+        "INSTANCE_COLOR",
+        "INSTANCE_CUSTOM",
+        "USE_TEXTURE_ARR",
+    };
+    drawData->particles.particle_render_shader = Shader_CompileFromFileDefine("src/render/shaders/scene_3d.vert", "src/render/shaders/scene_3d_forward.frag", NULL, DEFINES, 7);
+
+    const char* SHADOW_DEFINES[9] =
+    {
+        "TEXCOORD_ATTRIB",
+        "INSTANCE_MAT3",
+        "INSTANCE_UV",
+        "INSTANCE_CUSTOM",
+        "USE_UNIFORM_CAMERA_MATRIX",
+        "SEMI_TRANSPARENT_PASS",
+        "USE_TEXTURE_ARR",
+        "RENDER_DEPTH",
+        "BILLBOARD_SHADOWS"
+    };
+    drawData->particles.particle_shadow_map_shader = Shader_CompileFromFileDefine("src/render/shaders/scene_3d.vert", "src/render/shaders/scene_3d_depth.frag", NULL, SHADOW_DEFINES, 9);
+
+    const char* PREPASS_DEFINES[7] =
+    {
+        "TEXCOORD_ATTRIB",
+        "SEMI_TRANSPARENT_PASS",
+        "INSTANCE_MAT3",
+        "INSTANCE_UV",
+        "INSTANCE_CUSTOM",
+        "USE_TEXTURE_ARR",
+        "RENDER_DEPTH",
+    };
+
+    drawData->particles.particle_depthPrepass_shader = Shader_CompileFromFileDefine("src/render/shaders/scene_3d.vert", "src/render/shaders/scene_3d_depth.frag", NULL, PREPASS_DEFINES, 7);
+
+    const char* GBUFFER_DEFINES[7] =
+    {
+        "TEXCOORD_ATTRIB",
+        "NORMAL_ATTRIB",
+        "INSTANCE_MAT3",
+        "INSTANCE_UV",
+        "INSTANCE_COLOR",
+        "INSTANCE_CUSTOM",
+        "USE_TEXTURE_ARR",
+    };
+
+    drawData->particles.particle_gBuffer_shader = Shader_CompileFromFileDefine("src/render/shaders/scene_3d.vert", "src/render/shaders/scene_3d_deferred.frag", NULL, GBUFFER_DEFINES, 7);
+
+    drawData->particles.instance_buffer = dA_INIT(float, 0);
+    
+    const float quad_vertices[] =
+    {       -1, -1, 0,   0, 0,    0, 0, 1,  
+            -1,  1, 0,   0, 1,    0, 0, 1,
+             1,  1, 0,   1, 1,    0, 0, 1,
+             1, -1, 0,   1, 0,    0, 0, 1,
+    };
+
+    //setup vao and vbo
+    glGenVertexArrays(1, &drawData->particles.vao);
+    glGenBuffers(1, &drawData->particles.vbo);
+    glGenBuffers(1, &drawData->particles.instance_vbo);
+
+    //BASE QUAD SETUP
+    glBindVertexArray(drawData->particles.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, drawData->particles.vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad_vertices), quad_vertices, GL_STATIC_DRAW);
+
+    //POSITION
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 8, (void*)0);
+    glEnableVertexAttribArray(0);
+    //UV
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 8, (void*)(sizeof(float) * 3));
+    glEnableVertexAttribArray(1);
+    //NORMAL
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 8, (void*)(sizeof(float) * 5));
+    glEnableVertexAttribArray(3);
+
+   
+    //INSTANCE BUFFER
+    glBindBuffer(GL_ARRAY_BUFFER, drawData->particles.instance_vbo);
+    glBufferData(GL_ARRAY_BUFFER, 32, NULL, GL_STREAM_DRAW);
+
+    drawData->particles.allocated_size = 32;
+
+    const int STRIDE = sizeof(float) * (4 + 4 + 4 + 4 + 4 + 4);
+    glVertexAttribPointer(7, 4, GL_FLOAT, GL_FALSE, STRIDE, (void*)0);
+    glEnableVertexAttribArray(7);
+    glVertexAttribDivisor(7, 1);
+
+    glVertexAttribPointer(8, 4, GL_FLOAT, GL_FALSE, STRIDE, (void*)(sizeof(float) * 4));
+    glEnableVertexAttribArray(8);
+    glVertexAttribDivisor(8, 1);
+
+    glVertexAttribPointer(9, 4, GL_FLOAT, GL_FALSE, STRIDE, (void*)(sizeof(float) * 8));
+    glEnableVertexAttribArray(9);
+    glVertexAttribDivisor(9, 1);
+
+    glVertexAttribPointer(10, 4, GL_FLOAT, GL_FALSE, STRIDE, (void*)(sizeof(float) * 12));
+    glEnableVertexAttribArray(10);
+    glVertexAttribDivisor(10, 1);
+
+    glVertexAttribPointer(11, 4, GL_FLOAT, GL_FALSE, STRIDE, (void*)(sizeof(float) * 16));
+    glEnableVertexAttribArray(11);
+    glVertexAttribDivisor(11, 1);
+
+    glVertexAttribPointer(12, 4, GL_FLOAT, GL_FALSE, STRIDE, (void*)(sizeof(float) * 20));
+    glEnableVertexAttribArray(12);
+    glVertexAttribDivisor(12, 1);
+
+#ifndef USE_BINDLESS_TEXTURES
+    Init_SetupTextureArraySamplers("texture_arr", drawData->particles.particle_render_shader);
+    Init_SetupTextureArraySamplers("texture_arr", drawData->particles.particle_shadow_map_shader);
+    Init_SetupTextureArraySamplers("texture_arr", drawData->particles.particle_gBuffer_shader);
+    Init_SetupTextureArraySamplers("texture_arr", drawData->particles.particle_depthPrepass_shader);
+#endif
+}
+
 static void Init_DrawData()
 {
     Init_ScreenQuadDrawData();
     Init_LineDrawData();
     Init_TriangleDrawData();
+    Init_CubeDrawData();
+    Init_ParticleDrawData();
 }
 
 
 static void Init_GeneralPassData()
 {
-    pass->general.basic_3d_shader = Shader_CompileFromFile("src/render/shaders/basic_3d.vert", "src/render/shaders/basic_3d.frag", NULL);
     pass->general.triangle_3d_shader = Shader_CompileFromFile("src/render/shaders/triangle_3d.vert", "src/render/shaders/triangle_3d.frag", NULL);
     pass->general.box_blur_shader = ComputeShader_CompileFromFile("src/render/shaders/screen/box_blur.comp");
     pass->general.downsample_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/downsample.frag", NULL);
@@ -369,16 +634,19 @@ static void Init_LCSpecificData()
     drawData->lc_world.shadow_sorted_chunk_indexes = dA_INIT(int, 0);
     drawData->lc_world.shadow_sorted_chunk_transparent_indexes = dA_INIT(int, 0);
 
-    pass->lc.depthPrepass_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_depth.vert", "src/render/shaders/depth.frag", NULL);
+    const char* define[1] = { "SEMI_TRANSPARENT" };
+
+    pass->lc.depthPrepass_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_depth.vert", "src/render/shaders/lc_world/lc_depth.frag", NULL);
     pass->lc.gBuffer_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_g_buffer.vert", "src/render/shaders/lc_world/lc_g_buffer.frag", NULL);
-    pass->lc.shadow_map_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_shadow_map.vert", "src/render/shaders/shadow_map.frag", NULL);
+    pass->lc.shadow_map_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_shadow_map.vert", "src/render/shaders/lc_world/lc_depth.frag", NULL);
     pass->lc.transparents_forward_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_transparent_forward.vert", "src/render/shaders/lc_world/lc_transparent_forward.frag", NULL);
     pass->lc.chunk_process_shader = ComputeShader_CompileFromFile("src/render/shaders/lc_world/chunk_process.comp");
     pass->lc.occlussion_boxes_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_occlusion_boxes.vert", "src/render/shaders/lc_world/lc_occlusion_boxes.frag", NULL);
-    const char* define[1] = { "TRANSPARENT_SHADOWS" };
-    pass->lc.transparents_shadow_map_shader = Shader_CompileFromFileDefine("src/render/shaders/lc_world/lc_shadow_map.vert", "src/render/shaders/lc_world/lc_shadow_map.frag", NULL, define, 1);
-    const char* define2[1] = { "SEMI_TRANSPARENT" };
-    pass->lc.transparents_gBuffer_shader = Shader_CompileFromFileDefine("src/render/shaders/lc_world/lc_g_buffer.vert", "src/render/shaders/lc_world/lc_g_buffer.frag", NULL, define2, 1);
+    pass->lc.transparents_shadow_map_shader = Shader_CompileFromFileDefine("src/render/shaders/lc_world/lc_shadow_map.vert", "src/render/shaders/lc_world/lc_depth.frag", NULL, define, 1);
+    pass->lc.transparents_gBuffer_shader = Shader_CompileFromFileDefine("src/render/shaders/lc_world/lc_g_buffer.vert", "src/render/shaders/lc_world/lc_g_buffer.frag", NULL, define, 1);
+    pass->lc.depthPrepass_semi_transparents_shader = Shader_CompileFromFileDefine("src/render/shaders/lc_world/lc_depth.vert", "src/render/shaders/lc_world/lc_depth.frag", NULL, define, 1);
+    pass->lc.water_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_water.vert", "src/render/shaders/lc_world/lc_water.frag", NULL);
+
     //SETUP SHADER UNIFORMS
     glUseProgram(pass->lc.gBuffer_shader);
     Shader_SetInteger(pass->lc.gBuffer_shader, "texture_atlas", 0);
@@ -389,7 +657,6 @@ static void Init_LCSpecificData()
     Shader_SetInteger(pass->lc.transparents_gBuffer_shader, "texture_atlas", 0);
     Shader_SetInteger(pass->lc.transparents_gBuffer_shader, "texture_atlas_normal", 1);
     Shader_SetInteger(pass->lc.transparents_gBuffer_shader, "texture_atlas_mer", 2);
-
 
     glUseProgram(pass->lc.transparents_forward_shader);
     Shader_SetInteger(pass->lc.transparents_forward_shader, "texture_atlas", 0);
@@ -405,6 +672,14 @@ static void Init_LCSpecificData()
 
     glUseProgram(pass->lc.transparents_shadow_map_shader);
     Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "texture_atlas", 0);
+
+    glUseProgram(pass->lc.depthPrepass_semi_transparents_shader);
+    Shader_SetInteger(pass->lc.depthPrepass_semi_transparents_shader, "texture_atlas", 0);
+
+    glUseProgram(pass->lc.water_shader);
+    Shader_SetInteger(pass->lc.water_shader, "skybox_texture", 0);
+    Shader_SetInteger(pass->lc.water_shader, "dudv_map", 1);
+    Shader_SetInteger(pass->lc.water_shader, "normal_map", 2);
 }
 
 static void Init_DeferredData()
@@ -470,20 +745,18 @@ static void Init_DeferredData()
 
 static void Init_MainSceneData()
 {
+    assert(pass->deferred.depth_texture > 0 && "Init deferred first");
+
     //Shaders
     pass->scene.skybox_shader = Shader_CompileFromFile("src/render/shaders/skybox.vert", "src/render/shaders/skybox.frag", NULL);
-    pass->scene.oit_composite_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/oit_composite.frag", NULL);
 
     glUseProgram(pass->scene.skybox_shader);
     Shader_SetInteger(pass->scene.skybox_shader, "skybox_texture", 0);
 
     glGenFramebuffers(1, &pass->scene.FBO);
-    glGenFramebuffers(1, &pass->scene.transparent_FBO);
 
     //Setup scene textures
     glGenTextures(1, &pass->scene.MainSceneColorBuffer);
-    glGenTextures(1, &pass->scene.transparent_accum_texture);
-    glGenTextures(1, &pass->scene.transparent_reveal_texture);
 
     glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
 
@@ -503,35 +776,6 @@ static void Init_MainSceneData()
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, pass->deferred.depth_texture, 0);
 
     CheckBoundFrameBufferStatus("Main scene");
-
-    assert(pass->deferred.depth_texture > 0 && "Init deferred first");
-
-    //Transparent
-    glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.transparent_FBO);
-
-    //Accum texture
-    glBindTexture(GL_TEXTURE_2D, pass->scene.transparent_accum_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-
-    //Reveal texture
-    glBindTexture(GL_TEXTURE_2D, pass->scene.transparent_reveal_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, INIT_WIDTH, INIT_HEIGHT, 0, GL_RED, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->scene.transparent_accum_texture, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, pass->scene.transparent_reveal_texture, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, pass->deferred.depth_texture, 0);
-    unsigned int attachments2[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-    glDrawBuffers(2, attachments2);
-
-    CheckBoundFrameBufferStatus("Transparents FBO");
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
@@ -601,7 +845,7 @@ static void Init_BloomData()
 
         glGenTextures(1, &pass->bloom.mip_textures[i]);
         glBindTexture(GL_TEXTURE_2D, pass->bloom.mip_textures[i]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R11F_G11F_B10F, mipWidth, mipHeight, 0, GL_RGB, GL_FLOAT, NULL);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, (int)mipWidth, (int)mipHeight, 0, GL_RGB, GL_FLOAT, NULL);
 
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -632,28 +876,21 @@ static void Init_DofData()
     Shader_SetInteger(pass->dof.bohek_blur_shader, "source_texture", 0);
     Shader_SetInteger(pass->dof.bohek_blur_shader, "depth_texture", 1);
 
-    glGenFramebuffers(1, &pass->dof.FBO);
     glGenTextures(1, &pass->dof.dof_texture);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, pass->dof.FBO);
     glBindTexture(GL_TEXTURE_2D, pass->dof.dof_texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->dof.dof_texture, 0);
-
-    CheckBoundFrameBufferStatus("DOF");
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 static void Init_IBLData()
 {
     //SETUP SHADERS
     pass->ibl.equirectangular_to_cubemap_shader = Shader_CompileFromFile("src/render/shaders/cubemap/cubemap.vert", "src/render/shaders/cubemap/equirectangular_to_cubemap.frag", NULL);
+    pass->ibl.single_image_cubemap_convert_shader = Shader_CompileFromFile("src/render/shaders/cubemap/cubemap.vert", "src/render/shaders/cubemap/single_image_cubemap_convert.frag", NULL);
     pass->ibl.irradiance_convulution_shader = Shader_CompileFromFile("src/render/shaders/cubemap/cubemap.vert", "src/render/shaders/cubemap/irradiance_convolution.frag", NULL);
     pass->ibl.prefilter_cubemap_shader = Shader_CompileFromFile("src/render/shaders/cubemap/cubemap.vert", "src/render/shaders/cubemap/prefilter_cubemap.frag", NULL);
     pass->ibl.brdf_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/brdf.frag", NULL);
@@ -760,19 +997,16 @@ static void Init_ShadowMappingData()
     pass->shadow.depth_shader = Shader_CompileFromFile("src/shaders/shadow_depth_shader.vs", "src/shaders/shadow_depth_shader.fs", "src/shaders/shadow_depth_shader.gs");
     assert(pass->shadow.depth_shader > 0);
 
+    pass->shadow.blur_shader = ComputeShader_CompileFromFile("src/render/shaders/screen/gaussian_blur.comp");
+
+    glUseProgram(pass->shadow.blur_shader);
+    Shader_SetInteger(pass->shadow.blur_shader, "source_texture", 0);
+
     //SETUP FRAMEBUFFER
     glGenFramebuffers(1, &pass->shadow.FBO);
-    glGenTextures(1, &pass->shadow.moment_maps);
     glGenTextures(1, &pass->shadow.depth_maps);
 
-    glBindTexture(GL_TEXTURE_2D_ARRAY, pass->shadow.moment_maps);
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_R16, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, SHADOW_CASCADE_LEVELS, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
     float borderColor[] = { 1.0, 1.0, 1.0, 1.0 };
-    glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, borderColor);
 
     glBindTexture(GL_TEXTURE_2D_ARRAY, pass->shadow.depth_maps);
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT16, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, SHADOW_CASCADE_LEVELS, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT , NULL);
@@ -780,13 +1014,14 @@ static void Init_ShadowMappingData()
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
     glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, borderColor);
 
     glBindFramebuffer(GL_FRAMEBUFFER, pass->shadow.FBO);
-    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, pass->shadow.moment_maps, 0);
     glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, pass->shadow.depth_maps, 0);
-    //glDrawBuffer(GL_NONE);
-    //glReadBuffer(GL_NONE);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
 
     CheckBoundFrameBufferStatus("Shadow");
 
@@ -798,35 +1033,10 @@ static void Init_ShadowMappingData()
     pass->shadow.cascade_levels[1] = z_far / 180.0f;
     pass->shadow.cascade_levels[2] = z_far / 70.0f;
     pass->shadow.cascade_levels[3] = z_far / 10.0f;
+
+    pass->shadow.shadow_map_size = SHADOW_MAP_SIZE;
 }
 
-static void Init_ParticlePassData()
-{
-    pass->particles.particle_render_shader = Shader_CompileFromFile("src/render/shaders/particle_render.vert", "src/render/shaders/particle_render.frag", NULL);
-    pass->particles.particle_shadow_map_shader = Shader_CompileFromFile("src/render/shaders/particle_shadow_map.vert", "src/render/shaders/particle_shadow_map.frag", NULL);
-    pass->particles.particle_process_shader = ComputeShader_CompileFromFile("src/render/shaders/compute/particle_process.comp");
-    pass->particles.emitter_process_shader = ComputeShader_CompileFromFile("src/render/shaders/compute/emitter_process.comp");
-  
-    glUseProgram(pass->particles.particle_render_shader);
-    Shader_SetInteger(pass->particles.particle_render_shader, "texture_atlas", 0);
-    Shader_SetInteger(pass->particles.particle_render_shader, "shadowMaps", 1);
-
-#ifndef USE_BINDLESS_TEXTURES
-    GLint texture_array_location = glGetUniformLocation(pass->particles.particle_render_shader, "textures_arr");
-    int samplers[32];
-
-    for (int i = 0; i < 32; i++)
-    {
-        samplers[i] = i;
-    }
-
-    glUniform1iv(texture_array_location, 32, samplers);
-#endif
-
-    glUseProgram(pass->particles.particle_process_shader);
-    Shader_SetInteger(pass->particles.particle_process_shader, "depth_texture", 0);
-    Shader_SetInteger(pass->particles.particle_process_shader, "gNormal_texture", 1);
-}
 
 static void Init_PassData()
 {
@@ -840,19 +1050,33 @@ static void Init_PassData()
     Init_DofData();
     Init_IBLData();
     Init_ShadowMappingData();
-    Init_ParticlePassData();
 }
 
 static void Init_SceneData()
 {
     glGenBuffers(1, &scene.camera_ubo);
     glGenBuffers(1, &scene.scene_ubo);
+    glGenBuffers(1, &scene.cluster_items_ssbo);
+    glGenBuffers(1, &scene.light_indexes_ssbo);
+    glGenBuffers(1, &scene.light_nodes_ssbo);
 
     glBindBuffer(GL_UNIFORM_BUFFER, scene.camera_ubo);
     glBufferData(GL_UNIFORM_BUFFER, sizeof(R_SceneCameraData), NULL, GL_STREAM_DRAW);
 
     glBindBuffer(GL_UNIFORM_BUFFER, scene.scene_ubo);
     glBufferData(GL_UNIFORM_BUFFER, sizeof(R_SceneData), NULL, GL_DYNAMIC_DRAW);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.cluster_items_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(scene.clusters_data.light_grid), NULL, GL_DYNAMIC_DRAW);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.light_indexes_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(scene.clusters_data.light_indexes), NULL, GL_DYNAMIC_DRAW);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.light_nodes_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(scene.clusters_data.frustrum_culled_lights), NULL, GL_DYNAMIC_DRAW);
+
+    scene.clusters_data.light_tree = AABB_Tree_Create();
+
 
     //Init scene defaults
     scene.scene_data.heightFogMin = 30;
@@ -873,6 +1097,8 @@ static void Init_SceneData()
 
     scene.scene_data.dirLightAmbientIntensity = 8;
     scene.scene_data.dirLightSpecularIntensity = 24;
+
+    scene.scene_data.ambientLightInfluence = 1.0;
 }
 
 static bool _initRenderThread()
@@ -914,12 +1140,11 @@ static void Init_StorageBuffers()
 
     storage.particle_emitter_clients = FL_INIT(ParticleEmitterSettings);
 
+    storage.point_lights_pool = Object_Pool_INIT(PointLight2, 1);
+
     storage.instances = RSB_Create(100, sizeof(vec4), RSB_FLAG__RESIZABLE);
     storage.point_lights = RSB_Create(100, sizeof(PointLight2), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE | RSB_FLAG__POOLABLE);
-    storage.particles = DRB_Create(100000, 12, DRB_FLAG__POOLABLE | DRB_FLAG__RESIZABLE);
-    storage.particle_emitters = RSB_Create(200, sizeof(ParticleEmitterGL), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE | RSB_FLAG__POOLABLE);
     storage.texture_handles = RSB_Create(100, sizeof(GLuint64), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE | RSB_FLAG__POOLABLE);
-    storage.collider_boxes = DRB_Create(1000, 30, DRB_FLAG__POOLABLE | DRB_FLAG__RESIZABLE);
 }
 
 static void Init_RendererResources()
@@ -993,21 +1218,18 @@ void Init_SetupGLBindingPoints()
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, storage.point_lights.buffer);
     //1: SPOT LIGHTS
     //glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, storage.point_lights.buffer);
-    //2: POINT LIGHTS
-    //glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, storage.point_lights.buffer);
-    
+    //2: CLUSTER ITEMS
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, scene.cluster_items_ssbo);
+    //3: LIGHT INDEXES
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, scene.light_indexes_ssbo);
 
-    //5: PARTICLE EMITTERS
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, storage.particle_emitters.buffer);
+    //4: LIGHT NODES
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, scene.light_nodes_ssbo);
 
-    //6: PARTICLES
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, storage.particles.buffer);
 
     //7: INSTANCE DATA
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, storage.instances.buffer);
 
-    //8: COLLISION DATA (USED FOR PARTICLE COLLISIONS)
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, storage.collider_boxes.buffer);
 }
 
 static void Init_SetupGLState()
@@ -1042,16 +1264,16 @@ static int Init_Mem()
     memset(cmdBuffer->cmds_data, 0, RENDER_BUFFER_COMMAND_ALLOC_SIZE);
     cmdBuffer->cmds_ptr = cmdBuffer->cmds_data;
 
-    drawData = malloc(sizeof(R_DrawData));
+    drawData = malloc(sizeof(RDraw_DrawData));
     if (!drawData)
     {
         free(cmdBuffer->cmds_data);
         free(cmdBuffer);
         return false;
     }
-    memset(drawData, 0, sizeof(R_DrawData));
+    memset(drawData, 0, sizeof(RDraw_DrawData));
 
-    pass = malloc(sizeof(R_RenderPassData));
+    pass = malloc(sizeof(RPass_PassData));
 
     if (!pass)
     {
@@ -1060,7 +1282,7 @@ static int Init_Mem()
         free(drawData);
         return false;
     }
-    memset(pass, 0, sizeof(R_RenderPassData));
+    memset(pass, 0, sizeof(RPass_PassData));
 
     backend_data = malloc(sizeof(R_BackendData));
 
@@ -1127,12 +1349,10 @@ void Renderer_Exit()
 
     RSB_Destruct(&storage.instances);
     RSB_Destruct(&storage.point_lights);
-    RSB_Destruct(&storage.particle_emitters);
     RSB_Destruct(&storage.texture_handles);
     
-    DRB_Destruct(&storage.particles);
-    DRB_Destruct(&storage.collider_boxes);
-    
+    dA_Destruct(drawData->cube.vertices_buffer);
+    dA_Destruct(drawData->particles.instance_buffer);
 
     for (int i = 0; i < 4; i++)
     {

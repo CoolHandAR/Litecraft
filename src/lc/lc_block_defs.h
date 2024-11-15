@@ -41,6 +41,8 @@ typedef enum LC_BlockType
 	LC_BT__GRASS_PROP,
 	LC_BT__TORCH,
 	LC_BT__DEAD_BUSH,
+	LC_BT__SNOWYLEAVES,
+	LC_BT__AMETHYST,
 	LC_BT__MAX
 } LC_BlockType;
 
@@ -265,6 +267,24 @@ static const LC_Block_Texture_Offset_Data LC_BLOCK_TEX_OFFSET_DATA[] =
 	3, 1,
 	3, 1,
 
+	//SNOWY LEAVES
+	LC_BT__SNOWYLEAVES,
+	4, 1,
+	4, 1,
+	4, 1,
+	4, 1,
+	9, 0,
+	21, 0,
+
+	//SNOWY LEAVES
+	LC_BT__AMETHYST,
+	5, 1,
+	5, 1,
+	5, 1,
+	5, 1,
+	5, 1,
+	5, 1,
+
 	//MAX
 	LC_BT__MAX,
 	0, 0,
@@ -279,7 +299,7 @@ static const LC_Block_Texture_Offset_Data LC_BLOCK_TEX_OFFSET_DATA[] =
 typedef struct
 {
 	LC_BlockType block_type;
-	int material_type; //0 == opaque, 1 == transparent, 2 == water, 3 == prop
+	int material_type; //0 == opaque, 1 == semi transparent, 2 == water, 3 == prop
 	int emits_light;
 	int collidable;
 } LC_Block_MiscData;
@@ -423,6 +443,18 @@ static const LC_Block_MiscData LC_BLOCK_MISC_DATA[] =
 	0,
 	0,
 
+	//SNOWY LEAVES
+	LC_BT__SNOWYLEAVES,
+	1,
+	0,
+	1,
+
+	//AMETHYST
+	LC_BT__AMETHYST,
+	0,
+	0,
+	1,
+
 	//MAX
 	LC_BT__MAX,
 	0,
@@ -552,6 +584,12 @@ static const char* LC_BLOCK_CHAR_NAME[] =
 
 	//Dead bush
 	"Dead bush",
+
+	//Snowy leaves
+	"Snowy leaves",
+
+	//Amethyst,
+	"Amethyst",
 
 	//MAX
 	"Max"

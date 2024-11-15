@@ -1,9 +1,9 @@
 
-extern int C_entry();
+extern int Core_entry();
 
 int main()
 {
-	C_entry();
+	int error = Core_entry();
 
-	return 0;
+	return error;
 }

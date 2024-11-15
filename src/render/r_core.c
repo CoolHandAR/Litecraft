@@ -6,13 +6,13 @@ Start and ends the frame
 */
 
 #include "r_core.h"
-#include "core/c_common.h"
+#include "core/core_common.h"
 #include "input.h"
 #include "r_public.h"
 
 R_CMD_Buffer* cmdBuffer;
-R_DrawData* drawData;
-R_RenderPassData* pass;
+RDraw_DrawData* drawData;
+RPass_PassData* pass;
 R_BackendData* backend_data;
 R_Cvars r_cvars;
 R_Metrics metrics;
@@ -140,6 +140,10 @@ void RCore_onWindowResize(int width, int height)
 		pass->bloom.mip_sizes[i][1] = mipHeight;
 	}
 
+	//DOF
+	glBindTexture(GL_TEXTURE_2D, pass->dof.dof_texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+
 	//General
 	glBindTexture(GL_TEXTURE_2D, pass->general.depth_halfsize_texture);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width/ 2, height / 2, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
@@ -188,20 +192,13 @@ static void RCore_checkForModifiedCvars()
 	{
 
 	}
-	if (r_cvars.r_useDepthOfField->modified)
-	{
-		RInternal_UpdatePostProcessShader(true);
-
-		r_cvars.r_useDepthOfField->modified = false;
-	}
-	if (r_cvars.r_useSsao->modified || r_cvars.r_ssaoHalfSize->modified || r_cvars.r_useBloom->modified)
+	if (r_cvars.r_useSsao->modified || r_cvars.r_ssaoHalfSize->modified)
 	{
 		RCore_onWindowResize(backend_data->screenSize[0], backend_data->screenSize[1]);
 		RInternal_UpdateDeferredShadingShader(true);
 
 		r_cvars.r_useSsao->modified = false;
 		r_cvars.r_ssaoHalfSize->modified = false;
-		r_cvars.r_useBloom->modified = false;
 	}
 	if (r_cvars.r_ssaoBias->modified || r_cvars.r_ssaoRadius->modified || r_cvars.r_ssaoStrength->modified)
 	{
@@ -226,31 +223,25 @@ static void RCore_checkForModifiedCvars()
 		r_cvars.r_Saturation->modified = false;
 		r_cvars.r_bloomStrength->modified = false;
 	}
-	if (r_cvars.r_useFxaa->modified)
+	if (r_cvars.r_useFxaa->modified || r_cvars.r_TonemapMode->modified || r_cvars.r_useDepthOfField->modified || r_cvars.r_useBloom->modified)
 	{
 		RInternal_UpdatePostProcessShader(true);
 
+		if (r_cvars.r_useBloom->modified)
+		{
+			RCore_onWindowResize(backend_data->screenSize[0], backend_data->screenSize[1]);
+		}
+
 		r_cvars.r_useFxaa->modified = false;
+		r_cvars.r_TonemapMode->modified = false;
+		r_cvars.r_useDepthOfField->modified = false;
+		r_cvars.r_useBloom->modified = false;
 	}
-	if (r_cvars.r_useDirShadowMapping->modified || r_cvars.r_useSsao->modified)
+	if (r_cvars.r_useDirShadowMapping->modified)
 	{
 		RInternal_UpdateDeferredShadingShader(true);
 
 		r_cvars.r_useDirShadowMapping->modified = false;
-	}
-	if (r_cvars.r_shadowBias->modified || r_cvars.r_shadowNormalBias->modified || r_cvars.r_shadowVarianceMin->modified || r_cvars.r_shadowLightBleedReduction->modified)
-	{
-		glUseProgram(pass->lc.shadow_map_shader);
-		Shader_SetFloat(pass->lc.shadow_map_shader, "u_bias", r_cvars.r_shadowBias->float_value);
-		Shader_SetFloat(pass->lc.shadow_map_shader, "u_slopeScale", r_cvars.r_shadowNormalBias->float_value);
-
-		scene.scene_data.shadow_variance_min = r_cvars.r_shadowVarianceMin->float_value;
-		scene.scene_data.shadow_light_bleed_reduction = r_cvars.r_shadowLightBleedReduction->float_value;
-
-		r_cvars.r_shadowBias->modified = false;
-		r_cvars.r_shadowNormalBias->modified = false;
-		r_cvars.r_shadowVarianceMin->modified = false;
-		r_cvars.r_shadowLightBleedReduction->modified = false;
 	}
 	if (r_cvars.cam_fov->modified || r_cvars.cam_zFar->modified || r_cvars.cam_zNear->modified)
 	{
@@ -268,6 +259,38 @@ static void RCore_checkForModifiedCvars()
 			r_cvars.cam_zNear->modified = false;
 			r_cvars.cam_zFar->modified = false;
 		}
+	}
+	if (r_cvars.r_shadowQualityLevel->modified)
+	{	
+		float shadow_size = 256;
+		RInternal_GetShadowQualityData(r_cvars.r_shadowQualityLevel->int_value, r_cvars.r_shadowBlurLevel->int_value, &shadow_size, NULL, NULL, NULL);
+		
+		glBindTexture(GL_TEXTURE_2D_ARRAY, pass->shadow.depth_maps);
+		glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT16, shadow_size, shadow_size, SHADOW_CASCADE_LEVELS, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+
+		glBindFramebuffer(GL_FRAMEBUFFER, pass->shadow.FBO);
+		glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, pass->shadow.depth_maps, 0);
+
+		pass->shadow.shadow_map_size = shadow_size;
+		r_cvars.r_shadowQualityLevel->modified = false;
+	}
+	if (r_cvars.r_shadowBlurLevel->modified)
+	{
+		RInternal_GetShadowQualityData(r_cvars.r_shadowQualityLevel->int_value, r_cvars.r_shadowBlurLevel->int_value, NULL, pass->shadow.shadow_sample_kernels,
+			&pass->shadow.num_shadow_sample_kernels, &pass->shadow.quality_radius_scale);
+
+		RInternal_UpdateDeferredShadingShader(false);
+
+		r_cvars.r_shadowBlurLevel->modified = false;
+	}
+	if (r_cvars.r_bloomSoftThreshold->modified || r_cvars.r_bloomThreshold->modified)
+	{
+		glUseProgram(pass->general.downsample_shader);
+		Shader_SetFloat(pass->general.downsample_shader, "u_softThreshold", r_cvars.r_bloomSoftThreshold->float_value);
+		Shader_SetFloat(pass->general.downsample_shader, "u_threshold", r_cvars.r_bloomThreshold->float_value);
+
+		r_cvars.r_bloomSoftThreshold->modified = false;
+		r_cvars.r_bloomThreshold->modified = false;
 	}
 }
 /*
@@ -299,20 +322,51 @@ static void RCore_UploadGpuData()
 		glBindBuffer(GL_ARRAY_BUFFER, drawData->text.vbo);
 		glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(TextVertex) * drawData->text.vertices_count, drawData->text.vertices);
 	}
+	if (drawData->cube.instance_count > 0)
+	{
+		glBindBuffer(GL_ARRAY_BUFFER, drawData->cube.instance_vbo);
+		size_t size = sizeof(float) * (dA_size(drawData->cube.vertices_buffer));
+		if (size > drawData->cube.allocated_size)
+		{
+			glBufferData(GL_ARRAY_BUFFER, size, dA_getFront(drawData->cube.vertices_buffer), GL_STREAM_DRAW);
+			drawData->cube.allocated_size = size;
+		}
+		else
+		{
+			glBufferSubData(GL_ARRAY_BUFFER, 0, size, dA_getFront(drawData->cube.vertices_buffer));
+		}
+	}
+	if (drawData->particles.instance_count > 0)
+	{
+		glBindBuffer(GL_ARRAY_BUFFER, drawData->particles.instance_vbo);
+		size_t size = sizeof(float) * (dA_size(drawData->particles.instance_buffer));
+		if (size > drawData->particles.allocated_size)
+		{
+			glBufferData(GL_ARRAY_BUFFER, size, dA_getFront(drawData->particles.instance_buffer), GL_STREAM_DRAW);
+			drawData->particles.allocated_size = size;
+		}
+		else
+		{
+			glBufferSubData(GL_ARRAY_BUFFER, 0, size, dA_getFront(drawData->particles.instance_buffer));
+		}
+	}
 
 	//Scene data
-	if (scene.cull_data.lc_world_in_frustrum_count > 0)
+	if (drawData->lc_world.draw)
 	{
-		glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_ssbo, 0, sizeof(int) * scene.cull_data.lc_world_in_frustrum_count, scene.cull_data.lc_world_frustrum_sorted_query_buffer);
+		if (scene.cull_data.lc_world_in_frustrum_count > 0)
+		{
+			glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_ssbo, 0, sizeof(int) * scene.cull_data.lc_world_in_frustrum_count, scene.cull_data.lc_world_frustrum_sorted_query_buffer);
+		}
+		glNamedBufferSubData(drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo, 0, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_indexes->elements_size,
+			drawData->lc_world.shadow_sorted_chunk_indexes->data);
+
+		glNamedBufferSubData(drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_indexes->elements_size, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_transparent_indexes->elements_size,
+			drawData->lc_world.shadow_sorted_chunk_transparent_indexes->data);
+
+
+		glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_ssbo, 0, sizeof(int) * 500, scene.cull_data.lc_world_frustrum_query_buffer);
 	}
-	glNamedBufferSubData(drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo, 0, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_indexes->elements_size, 
-		drawData->lc_world.shadow_sorted_chunk_indexes->data);
-
-	glNamedBufferSubData(drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_indexes->elements_size, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_transparent_indexes->elements_size,
-		drawData->lc_world.shadow_sorted_chunk_transparent_indexes->data);
-
-
-	glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_ssbo, 0, sizeof(int) * 500, scene.cull_data.lc_world_frustrum_query_buffer);
 
 	//Camera update
 	glBindBuffer(GL_UNIFORM_BUFFER, scene.camera_ubo);
@@ -321,6 +375,26 @@ static void RCore_UploadGpuData()
 	//Scene update
 	glBindBuffer(GL_UNIFORM_BUFFER, scene.scene_ubo);
 	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(R_SceneData), &scene.scene_data);
+
+	//Clusters update
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.cluster_items_ssbo);
+	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(scene.clusters_data.light_grid), scene.clusters_data.light_grid);
+
+	if (scene.clusters_data.lights_in_clusters > 0)
+	{
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.light_indexes_ssbo);
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(uint32_t) * scene.clusters_data.lights_in_clusters, scene.clusters_data.light_indexes);
+	}
+
+	if (scene.clusters_data.culled_light_count > 0)
+	{
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.light_nodes_ssbo);
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(AABB_LightNodeData) * scene.clusters_data.culled_light_count, scene.clusters_data.frustrum_culled_lights);
+	}
+
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_UNIFORM_BUFFER, 0);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 
 
@@ -336,7 +410,9 @@ static void RCore_EndFrameCleanup()
 
 	drawData->triangle.texture_index = 0;
 
-	//glClearNamedBufferSubData(drawData->lc_world.world_render_data->draw_cmds_atomic_counter, GL_R32UI, 0, sizeof(unsigned), GL_RED_INTEGER, GL_UNSIGNED_INT, NULL);
+	dA_clear(drawData->cube.vertices_buffer);
+	drawData->cube.instance_count = 0;
+	drawData->particles.instance_count = 0;
 }
 
 static void RCore_DrawUI()

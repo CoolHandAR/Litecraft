@@ -97,7 +97,7 @@ float sqDistPointAABB(vec3 point, uint tile)
     float sqDist = 0.0;
     VolumeTileAABB currentCell = cluster[tile];
     cluster[tile].maxPoint[2] = tile;
-    for(int i = 0; i < 2; ++i){
+    for(int i = 0; i < 3; ++i){
         float v = point[i];
         if(v < currentCell.minPoint[i]){
             sqDist += (currentCell.minPoint[i] - v) * (currentCell.minPoint[i] - v);

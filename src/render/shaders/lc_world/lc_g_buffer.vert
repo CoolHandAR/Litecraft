@@ -96,14 +96,12 @@ out VS_OUT
     mat3 TBN;
     vec2 TexCoords;
 	vec2 TexOffset;
-    int Block_hp;
 } vs_out;
 
 void main()
 {
     vec3 worldPos = chunk_data.data[gl_BaseInstance].min_point.xyz + a_Pos.xyz;
 
-    int unpacked_hp = (a_PackedNormHp & ~(7 << 3));
     int unpacked_norm = a_PackedNormHp >> 3;
 	int texture_offset = block_info.data[a_BlockType].texture_offsets[unpacked_norm];
 
@@ -119,12 +117,11 @@ void main()
     vs_out.TBN = TBN;
     vs_out.TexCoords = vec2((worldPos.x * xPosSign) + (worldPos[absPosIndex.x]) * xPosSign, -worldPos[absPosIndex.y]);
 	vs_out.TexOffset = vec2(texture_offset % 25, texture_offset / 25);
-    vs_out.Block_hp = unpacked_hp;
 
 #ifdef SEMI_TRANSPARENT
 	float posOffset = block_info.data[a_BlockType].position_offset;
 	worldPos.xz -= (posOffset * normal.xz);
 #endif
-
+	
 	gl_Position = cam.viewProjection * vec4(worldPos - 0.5, 1.0);
 }

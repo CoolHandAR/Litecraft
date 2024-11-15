@@ -8,16 +8,16 @@
 #include "r_core.h"
 #include "r_public.h"
 
-extern R_DrawData* drawData;
+extern RDraw_DrawData* drawData;
 extern R_RendererResources resources;
-extern R_RenderPassData* pass;
+extern RPass_PassData* pass;
 extern R_Cvars r_cvars;
 extern R_StorageBuffers storage;
 extern R_Scene scene;
 
 static void Render_ScreenQuadBatch()
 {
-    R_ScreenQuadDrawData* data = &drawData->screen_quad;
+    RDraw_ScreenQuadData* data = &drawData->screen_quad;
 
     if (data->vertices_count == 0)
     {
@@ -57,12 +57,14 @@ static void Render_ScreenQuadBatch()
 
 static void Render_LineBatch()
 {
-    R_LineDrawData* data = &drawData->lines;
+    RDraw_LineData* data = &drawData->lines;
 
     if (data->vertices_count == 0)
     {
         return;
     }
+
+    glUseProgram(drawData->lines.shader);
 
     glBindVertexArray(data->vao);
     glDrawArrays(GL_LINES, 0, data->vertices_count);
@@ -70,25 +72,51 @@ static void Render_LineBatch()
 
 static void Render_TriangleBatch()
 {
-    R_TriangleDrawData* data = &drawData->triangle;
+    RDraw_TriangleData* data = &drawData->triangle;
 
     if (data->vertices_count == 0)
         return;
 
     glUseProgram(pass->general.triangle_3d_shader);
 
-    for (int i = 0; i < data->texture_index; i++)
-    {
-        if (data->texture_ids[i] == 0)
-        {
-            break;
-        }
-        glBindTextureUnit(i, data->texture_ids[i]);
-    }
+    glBindTextures(0, 32, data->texture_ids);
 
     glEnable(GL_BLEND);
     glBindVertexArray(data->vao);
     glDrawArrays(GL_TRIANGLES, 0, data->vertices_count);
+}
+
+static void Render_CubeInstances()
+{
+    RDraw_CubeData* data = &drawData->cube;
+
+    if (data->vertices_buffer->elements_size == 0)
+    {
+        return;
+    }
+
+    glBindVertexArray(drawData->cube.vao);
+    
+    glBindTextures(0, data->texture_index, data->texture_ids);
+
+    glUseProgram(drawData->cube.shader);
+    glEnable(GL_BLEND);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, 36, drawData->cube.instance_count);
+}
+
+void Render_Particles()
+{
+    RDraw_ParticleData* data = &drawData->particles;
+
+    //nothing to draw?
+    if (data->instance_count <= 0)
+    {
+        return;
+    }
+    glBindTextures(0, drawData->particles.texture_index, drawData->particles.texture_ids);
+
+    glBindVertexArray(data->vao);
+    glDrawArraysInstanced(GL_TRIANGLE_FAN, 0, 4, data->instance_count);
 }
 
 void Render_Quad()
@@ -103,28 +131,14 @@ void Render_Cube()
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 14);
 }
 
-void Render_Particles()
-{
-    for (int i = 0; i < 32; i++)
-    {
-        if (pass->particles.texture_ids[i] == 0)
-        {
-            break;
-        }
-        glBindTextureUnit(i, pass->particles.texture_ids[i]);
-    }
-   
-    glBindVertexArray(resources.quadVAO);
-    unsigned amount = pass->particles.total_particle_amount;
-    glDrawArraysInstanced(GL_TRIANGLE_FAN, 0, 4, amount);
-}
+
 static void Render_OpaqueWorldChunks(bool p_TextureDraw, int mode)
 {
     if (drawData->lc_world.draw == false || !drawData->lc_world.world_render_data)
     {
         return;
     }
-    size_t chunk_amount = LC_World_GetDrawCmdAmount();
+    size_t max_chunk_render_amount = scene.cull_data.lc_world_in_frustrum_count;
 
     if (p_TextureDraw)
     {
@@ -143,12 +157,15 @@ static void Render_OpaqueWorldChunks(bool p_TextureDraw, int mode)
     if (mode == 0)
     {
         int offset = 0;
+        if (max_chunk_render_amount > 0)
+        {
+            glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_ATOMIC_COUNTER_BUFFER);
+            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->sorted_draw_cmds_buffer.buffer);
+            glBindBuffer(GL_PARAMETER_BUFFER, drawData->lc_world.world_render_data->draw_cmds_counters_buffers[0]);
 
-        glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_ATOMIC_COUNTER_BUFFER);
-        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->sorted_draw_cmds_buffer.buffer);
-        glBindBuffer(GL_PARAMETER_BUFFER, drawData->lc_world.world_render_data->draw_cmds_counters_buffers[0]);
-
-        glMultiDrawArraysIndirectCount(render_mode, offset, 0, chunk_amount, 0);
+            glMultiDrawArraysIndirectCount(render_mode, offset, 0, max_chunk_render_amount, 0);
+        }
+       
     }
     //Shadow rendering
     else if (mode > 0)
@@ -183,19 +200,9 @@ static void Render_SemiTransparentWorldChunks(bool p_TextureDraw, int mode)
         glBindTextureUnit(0, drawData->lc_world.world_render_data->texture_atlas->id);
         glBindTextureUnit(1, drawData->lc_world.world_render_data->texture_atlas_normals->id);
         glBindTextureUnit(2, drawData->lc_world.world_render_data->texture_atlas_mer->id);
-
-        //IBL Textures
-        glBindTextureUnit(3, pass->ibl.brdfLutTexture);
-        glBindTextureUnit(4, pass->ibl.irradianceCubemapTexture);
-        glBindTextureUnit(5, pass->ibl.prefilteredCubemapTexture);
-
-        //Shadow textures
-        glBindTextureUnit(6, pass->shadow.moment_maps);
-        glBindTextureUnit(7, pass->shadow.depth_maps);
-
     }
 
-    size_t chunk_amount = LC_World_GetDrawCmdAmount();
+    size_t max_chunk_render_amount = scene.cull_data.lc_world_in_frustrum_count;
 
     glBindVertexArray(drawData->lc_world.world_render_data->vao);
     glBindBuffer(GL_ARRAY_BUFFER, drawData->lc_world.world_render_data->transparents_vertex_buffer.buffer);
@@ -208,7 +215,7 @@ static void Render_SemiTransparentWorldChunks(bool p_TextureDraw, int mode)
         glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_ATOMIC_COUNTER_BUFFER | GL_SHADER_STORAGE_BARRIER_BIT);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->sorted_draw_cmds_buffer.buffer);
         glBindBuffer(GL_PARAMETER_BUFFER, drawData->lc_world.world_render_data->draw_cmds_counters_buffers[1]);
-        glMultiDrawArraysIndirectCount(render_mode, sizeof(DrawArraysIndirectCommand) * 2000, 0, chunk_amount, 0);
+        glMultiDrawArraysIndirectCount(render_mode, sizeof(DrawArraysIndirectCommand) * 2000, 0, max_chunk_render_amount, 0);
     }
     //Shadow rendering
     else if (mode > 0)
@@ -232,6 +239,34 @@ static void Render_SemiTransparentWorldChunks(bool p_TextureDraw, int mode)
     }
 
 }
+void Render_WorldWaterChunks()
+{
+    if (drawData->lc_world.draw == false || !drawData->lc_world.world_render_data)
+    {
+        return;
+    }
+
+    size_t max_chunk_render_amount = scene.cull_data.lc_world_in_frustrum_count;
+
+    glUseProgram(pass->lc.water_shader);
+
+    static float time = 0;
+    time += 0.001 * Core_getDeltaTime();
+    time = time - (int)time;
+
+    Shader_SetFloat(pass->lc.water_shader, "u_moveFactor", time);
+
+    glBindTextureUnit(0, pass->ibl.envCubemapTexture);
+    glBindTextureUnit(1, drawData->lc_world.world_render_data->texture_dudv->id);
+    glBindTextureUnit(2, drawData->lc_world.world_render_data->water_normal_map->id);
+
+    glBindVertexArray(drawData->lc_world.world_render_data->water_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, drawData->lc_world.world_render_data->water_vertex_buffer.buffer);
+
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->sorted_draw_cmds_buffer.buffer);
+    glBindBuffer(GL_PARAMETER_BUFFER, drawData->lc_world.world_render_data->draw_cmds_counters_buffers[2]);
+    glMultiDrawArraysIndirectCount(GL_TRIANGLES, sizeof(DrawArraysIndirectCommand) * 4000, 0, max_chunk_render_amount, 0);
+}
 
 void Render_DrawChunkOcclusionBoxes()
 {
@@ -249,46 +284,16 @@ void Render_DrawChunkOcclusionBoxes()
     glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 14, scene.cull_data.lc_world_in_frustrum_count);
 }
 
-void Render_DebugScene()
+void Render_SimpleScene()
 {   
     Render_LineBatch();
     Render_TriangleBatch();
+    Render_CubeInstances();
 }
 
 void Render_UI()
 {
     Render_ScreenQuadBatch();
-}
-
-extern float C_getDeltaTime();;
-static void Compute_Particles()
-{
-    int num_emitters = pass->particles.total_emitter_amount;
-    if (num_emitters > 0)
-    {
-        int num_x_groups = max(1, (int)ceilf(num_emitters / 8));
-        //Dispatch emitter processing
-        glUseProgram(pass->particles.emitter_process_shader);
-        Shader_SetInteger(pass->particles.emitter_process_shader, "u_totalEmitterCount", num_emitters);
-        Shader_SetFloat(pass->particles.emitter_process_shader, "u_cpuDelta", C_getDeltaTime());
-        glDispatchCompute(1, 1, 1);
-    }
-
-    if (storage.particles.used_bytes > 0)
-    {
-        int num_particles = sizeof(Particle) / storage.particles.used_bytes;
-        //Dispatch particle update
-        glUseProgram(pass->particles.particle_process_shader);
-
-        Shader_SetInteger(pass->particles.particle_process_shader, "u_totalParticleAmount", pass->particles.total_particle_amount);
-
-        float num_x_groups_real = ceilf((float)pass->particles.total_particle_amount / 64.0f);
-
-        unsigned num_x_groups = max(1, num_x_groups_real);
-        glBindTextureUnit(0, pass->deferred.depth_texture);
-        glBindTextureUnit(1, pass->deferred.gNormalMetal_texture);
-        glDispatchCompute(num_x_groups, 1, 1);
-    }
 }
 
 static void Compute_WorldChunks()
@@ -310,7 +315,7 @@ static void Compute_WorldChunks()
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 19, drawData->lc_world.world_render_data->visibles_ssbo);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 20, drawData->lc_world.world_render_data->sorted_draw_cmds_buffer.buffer);
 
-    for (int i = 0; i < 2; i++)
+    for (int i = 0; i < 3; i++)
     {
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 21 + i, drawData->lc_world.world_render_data->draw_cmds_counters_buffers[i]);
     }
@@ -326,7 +331,6 @@ static void Compute_Meshes()
 
 void Compute_DispatchAll()
 {
-    Compute_Particles();
     Compute_WorldChunks();
 }
 
@@ -422,26 +426,52 @@ void Render_OpaqueScene(RenderPassState rpass_state)
 }
 void Render_SemiOpaqueScene(RenderPassState rpass_state)
 {
+    bool allow_particle_shadows = (r_cvars.r_allowParticleShadows->int_value == 1);
     unsigned shadow_data_offset = dA_size(drawData->lc_world.shadow_sorted_chunk_indexes);
+
+    const int MAX_PARTICLE_SHADOW_SPLITS = 1; //adjust if needed
 
     switch (rpass_state)
     {
+    case RPass__DEPTH_PREPASS:
+    {
+        //Render world chunks
+        glUseProgram(pass->lc.depthPrepass_semi_transparents_shader);
+        Render_SemiTransparentWorldChunks(true, 0);
+
+
+        glUseProgram(drawData->particles.particle_depthPrepass_shader);
+        glDisable(GL_CULL_FACE);
+        Render_Particles();
+        glEnable(GL_CULL_FACE);
+
+        break;
+    }
     case RPass__GBUFFER:
     {
         glUseProgram(pass->lc.transparents_gBuffer_shader);
         Render_SemiTransparentWorldChunks(true, 0);
+
+        glUseProgram(drawData->particles.particle_gBuffer_shader);
+        glDisable(GL_CULL_FACE);
+        Render_Particles();
+        glEnable(GL_CULL_FACE);
+
         break;
     }
     case RPass__SHADOW_MAPPING_SPLIT1:
     {
-        //Render transparent world chunks
         glUseProgram(pass->lc.transparents_shadow_map_shader);
         Shader_SetMatrix4(pass->lc.transparents_shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[0]);
         Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_transparent_offsets[0] + shadow_data_offset);
         Render_SemiTransparentWorldChunks(false, 1);
 
-        //Render other transparent stuff
-
+        if (allow_particle_shadows && MAX_PARTICLE_SHADOW_SPLITS >= 1)
+        {
+            glUseProgram(drawData->particles.particle_shadow_map_shader);
+            Shader_SetMatrix4(drawData->particles.particle_shadow_map_shader, "u_cameraMatrix", scene.scene_data.shadow_matrixes[0]);
+            Render_Particles();
+        }
         break;
     }
     case RPass__SHADOW_MAPPING_SPLIT2:
@@ -452,7 +482,12 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
         Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_transparent_offsets[1] + shadow_data_offset);
         Render_SemiTransparentWorldChunks(false, 2);
 
-        //Render other transparent stuff
+        if (allow_particle_shadows && MAX_PARTICLE_SHADOW_SPLITS >= 2)
+        {
+            glUseProgram(drawData->particles.particle_shadow_map_shader);
+            Shader_SetMatrix4(drawData->particles.particle_shadow_map_shader, "u_cameraMatrix", scene.scene_data.shadow_matrixes[1]);
+            Render_Particles();
+        }
 
         break;
     }
@@ -465,6 +500,12 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
         Render_SemiTransparentWorldChunks(false, 3);
 
         //Render other transparent stuff
+        if (allow_particle_shadows && MAX_PARTICLE_SHADOW_SPLITS >= 3)
+        {
+            glUseProgram(drawData->particles.particle_shadow_map_shader);
+            Shader_SetMatrix4(drawData->particles.particle_shadow_map_shader, "u_cameraMatrix", scene.scene_data.shadow_matrixes[2]);
+            Render_Particles();
+        }
 
         break;
     }
@@ -477,6 +518,12 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
         Render_SemiTransparentWorldChunks(false, 4);
 
         //Render other transparent stuff
+        if (allow_particle_shadows && MAX_PARTICLE_SHADOW_SPLITS >= 4)
+        {
+            glUseProgram(drawData->particles.particle_shadow_map_shader);
+            Shader_SetMatrix4(drawData->particles.particle_shadow_map_shader, "u_cameraMatrix", scene.scene_data.shadow_matrixes[3]);
+            Render_Particles();
+        }
 
         break;
     }

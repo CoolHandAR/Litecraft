@@ -29,7 +29,7 @@
 
 #include "core/cvar.h"
 #include "input.h"
-#include "core/c_common.h"
+#include "core/core_common.h"
 #include "render/r_public.h"
 
 
@@ -101,8 +101,24 @@ R_Texture* test_tex;
 //#define PARTICLE_DEMO
 
 
+void get_vogel_disk(float* r_kernel, int p_sample_count) {
+	const float golden_angle = 2.4;
+
+	for (int i = 0; i < p_sample_count; i++) {
+		float r = sqrt((float)(i) + 0.5) / sqrt((float)(p_sample_count));
+		float theta = (float)(i) * golden_angle;
+
+		r_kernel[i * 4] = cos(theta) * r;
+		r_kernel[i * 4 + 1] = (theta) * r;
+	}
+}
+
+
 void LC_Init()
 {
+	vec4 samples[64];
+	get_vogel_disk(samples, 8);
+
 	LC_Init2();
 
 	Circle_Buffer buf = CircleBuf_Init(sizeof(int), 5);
@@ -134,33 +150,7 @@ void LC_Init()
 	LC_World_Create(8, 8, 8);
 	//LC_World_Create(1, 1, 1);
 
-	dynamic_array* da = dA_INIT(int, 0);
 
-	for (int i = 0; i < 100; i++)
-	{
-		int* v = dA_emplaceBack(da);
-
-		*v = i;
-	}
-
-	int test_arr[100];
-
-	memcpy(test_arr, da->data, sizeof(int) * 100);
-
-	memset(test_arr, 0, sizeof(test_arr));
-
-	dA_erase(da, 0, 1);
-	
-	memcpy(test_arr, da->data, sizeof(int) * 100);
-	memset(test_arr, 0, sizeof(test_arr));
-	dA_erase(da, 0, 1);
-	memcpy(test_arr, da->data, sizeof(int) * 100);
-	int vertex_id = 4;
-
-	if (vertex_id % 2 == 0)
-	{
-		float x = 0;
-	}
 
 	
 
@@ -255,7 +245,9 @@ void LC_Init()
 	Input_saveAllToFile("assets/inputtest.cfg");
 	Input_loadAllFromFile("assets/inputtest.cfg");
 #ifdef USE_NEW_RENDERER
-	RScene_SetSkyboxTexturePanorama("assets/cubemaps/hdr/industrial.hdr");
+	RScene_SetSkyboxTexturePanorama(Resource_get("assets/cubemaps/hdr/industrial.hdr", RESOURCE__TEXTURE_HDR));
+
+	//RScene_SetSkyboxTextureSingleImage("assets/cubemaps/skybox/skybox-day.png");
 
 	DirLight dirlight;
 	dirlight.color[0] = 1;
@@ -292,7 +284,7 @@ void LC_MouseUpdate(double x, double y)
 	}
 	else
 	{
-		if (C_CheckForBlockedInputState())
+		if (Core_CheckForBlockedInputState())
 		{
 			return;
 		}
@@ -400,7 +392,7 @@ void LC_Draw()
 
 	Draw_LCWorld();
 	PL_IssueDrawCmds();
-
+	LC_World_Draw();
 
 	//Draw_AABB(aabb, NULL);
 

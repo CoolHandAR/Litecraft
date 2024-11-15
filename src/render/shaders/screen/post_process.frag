@@ -92,22 +92,36 @@ vec3 tonemap_aces(vec3 color, float white) {
 
 vec3 tonemapColor(vec3 color)
 {   
+#ifdef USE_REINHARD_TONEMAP
+    return ReinhardMapping(color, u_Gamma, u_Exposure);
+#endif
+
+#ifdef USE_UNCHARTED2_TONEMAP
     return Uncharted2ToneMapping(color, u_Gamma, u_Exposure);
-    //return tonemap_aces(color, 2.2);
+#endif
+
+#ifdef USE_ACES_TONEMAP
+    return tonemap_aces(color, u_Exposure);
+#endif
+    return color;
 }
 
 vec3 applyBloom(vec2 coords, vec3 color, float strength)
 {
     vec3 bloom_color = texture(BloomSceneTexture, coords).rgb;
+
     return mix(color, bloom_color, strength);
 }
-vec3 applyDepthOfField(vec2 coords, vec3 color, float strength, float u_minDist, float u_maxDist)
+vec3 applyDepthOfField(float view_depth, vec2 coords, vec3 color, float strength, float focus_intensity, float minDist, float maxDist)
 {
     vec3 dof_color = texture(DofSceneTexture, coords).rgb;
-    float depth = depthToViewSpace(depth_texture, cam.invProj, coords);
-    float focus_depth = depthToViewSpace(depth_texture, cam.invProj, vec2(0.5));
+    float focus_depth = 0;
+    if(focus_intensity > 0)
+    {
+        focus_depth = depthToViewSpace(depth_texture, cam.invProj, vec2(0.5)) * focus_intensity;
+    }
 
-    float blur = smoothstep(u_minDist, u_maxDist, abs(depth - focus_depth));
+    float blur = smoothstep(minDist, maxDist, abs(view_depth - focus_depth));
 
     return mix(color, dof_color, blur);
 }
@@ -194,14 +208,6 @@ vec3 apply_fog(vec3 color, vec2 coords)
     vec3 ViewPos = depthToViewPos(depth_texture, cam.invProj, coords);
     vec3 WorldPos = (cam.invView * vec4(ViewPos, 1.0)).xyz;
 
-    float depth = texture(depth_texture, coords).r;
-
-    //Fix for fog being in the skybox
-    if(depth >= 1.0)
-    {
-        //return color;
-    }
-
     vec3 fog_color = (scene.dirLightColor.rgb * scene.dirLightAmbientIntensity);
     vec3 emission = vec3(0.0);
     float fog_amount = 0.0;
@@ -249,15 +255,20 @@ void main()
     scene_color = applyFXAA(scene_color, u_Exposure);
 #endif
 
+#if defined(USE_DEPTH_OF_FIELD) || defined(USE_FOG)
+    float view_space_depth = depthToViewSpace(depth_texture, cam.invProj, TexCoords);
+#endif
     //FOG
-   // scene_color = apply_fog(scene_color, TexCoords);
+    //scene_color = apply_fog(scene_color, TexCoords);
 
+#ifdef USE_BLOOM
     //BLOOM
-  //  scene_color = applyBloom(TexCoords, scene_color, 0.01);
+    scene_color = applyBloom(TexCoords, scene_color, u_BloomStrength);
+#endif
 
 #ifdef USE_DEPTH_OF_FIELD
     //DEPTH OF FIELD
-    scene_color = applyDepthOfField(TexCoords, scene_color, 1.0, 10, 50);
+    scene_color = applyDepthOfField(view_space_depth, TexCoords, scene_color, 1.0, 1.0, 10, 50);
 #endif
     
     //TONEMAP
@@ -268,7 +279,6 @@ void main()
 
     //DEBANDING
     scene_color.rgb += screen_space_dither(gl_FragCoord.xy);
-
 
     //FINAL COLOR
     FragColor = vec4(scene_color.rgb, 1.0);

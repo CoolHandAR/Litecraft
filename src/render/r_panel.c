@@ -3,7 +3,7 @@
 */
 
 #include "render/r_core.h"
-#include "core/c_common.h"
+#include "core/core_common.h"
 
 extern NK_Data nk;
 extern GLFWwindow* glfw_window;
@@ -18,6 +18,9 @@ static void RPanel_SliderImpl(const char* p_str, float p_minV, float p_maxV, flo
 
 void RPanel_Main()
 {
+	if (!nk.enabled)
+		return;
+
 	if (!nk_begin(nk.ctx, "Renderer panel", nk_rect(200, 20, 300, 300), NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE
 		| NK_WINDOW_TITLE | NK_WINDOW_CLOSABLE))
 	{
@@ -28,7 +31,7 @@ void RPanel_Main()
 
 	if (nk_window_is_active(nk.ctx, "Renderer panel"))
 	{
-		C_BlockInputThisFrame();
+		Core_BlockInputThisFrame();
 	}
 
 	if (nk_tree_push(nk.ctx, NK_TREE_NODE, "General", NK_MAXIMIZED))
@@ -144,20 +147,6 @@ void RPanel_Main()
 		if (nk_slider_float(nk.ctx, 0.0, &normal_bias_slider, 10.0, 0.01))
 		{
 			Cvar_setValueDirectFloat(r_cvars.r_shadowNormalBias, normal_bias_slider);
-		}
-		float variance_min_slider = r_cvars.r_shadowVarianceMin->float_value;
-		nk_layout_row_dynamic(nk.ctx, 25, 2);
-		nk_labelf_wrap(nk.ctx, "Variance min %f", variance_min_slider);
-		if (nk_slider_float(nk.ctx, 0.0, &variance_min_slider, 0.2, 0.001))
-		{
-			Cvar_setValueDirectFloat(r_cvars.r_shadowVarianceMin, variance_min_slider);
-		}
-		float light_bleed_reduction_slider = r_cvars.r_shadowLightBleedReduction->float_value;
-		nk_layout_row_dynamic(nk.ctx, 25, 2);
-		nk_labelf_wrap(nk.ctx, "Light bleed reduction %.2f", light_bleed_reduction_slider);
-		if (nk_slider_float(nk.ctx, 0.0, &light_bleed_reduction_slider, 1.0, 0.01))
-		{
-			Cvar_setValueDirectFloat(r_cvars.r_shadowLightBleedReduction, light_bleed_reduction_slider);
 		}
 		static const char* resolution_items[] = { "1", "640", "1280", "2560", "5120" };
 	

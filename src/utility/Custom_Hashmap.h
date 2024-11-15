@@ -28,7 +28,10 @@ typedef struct
 	size_t key_bit_size;
 	size_t num_items;
 	
+	dynamic_array* _item_free_list;
+
 	bool _is_key_string;
+	bool _is_item_pooled;
 	void* _next;
 } CHMap;
 
@@ -43,8 +46,9 @@ extern "C" {
 \param RESERVE_SIZE The amount of item that can be stored initially
 \return SHMap
 */
-#define CHMAP_INIT(HASH_FUN, CMP_FUN, T, U, RESERVE_SIZE) _CHMap_Init(HASH_FUN, CMP_FUN, sizeof(T), sizeof(U), RESERVE_SIZE)
-#define CHMAP_INIT_STRING(U, RESERVE_SIZE) _CHMap_Init(NULL, NULL, 0, sizeof(U), RESERVE_SIZE)
+#define CHMAP_INIT(HASH_FUN, CMP_FUN, T, U, RESERVE_SIZE) _CHMap_Init(HASH_FUN, CMP_FUN, sizeof(T), sizeof(U), RESERVE_SIZE, false)
+#define CHMAP_INIT_STRING(U, RESERVE_SIZE) _CHMap_Init(NULL, NULL, 0, sizeof(U), RESERVE_SIZE, false)
+#define CHMAP_INIT_POOLED(HASH_FUN, CMP_FUN, T, U, RESERVE_SIZE) _CHMap_Init(HASH_FUN, CMP_FUN, sizeof(T), sizeof(U), RESERVE_SIZE, true)
 	extern void* CHMap_Find(CHMap* const chmap, const void* p_key);
 	extern int CHMap_getItemIndex(CHMap* const chmap, const void* p_key);
 	extern bool CHMap_Has(CHMap* const chmap, const void* p_key);
@@ -71,7 +75,7 @@ typedef struct
 } _CHMap_item;
 
 #define CHM_HASHTABLE_BLOCK_ALLOCATION_SIZE 256
-static CHMap _CHMap_Init(CHMap_HashFun p_hashFun, CHMap_CompareFun p_cmpFun,size_t p_keyBitSize, size_t p_allocSize, size_t p_initReserveSize)
+static CHMap _CHMap_Init(CHMap_HashFun p_hashFun, CHMap_CompareFun p_cmpFun,size_t p_keyBitSize, size_t p_allocSize, size_t p_initReserveSize, bool p_useItemPooling)
 {
 	assert(p_allocSize > 0);
 
@@ -91,6 +95,12 @@ static CHMap _CHMap_Init(CHMap_HashFun p_hashFun, CHMap_CompareFun p_cmpFun,size
 	if (map.key_bit_size == 0)
 	{
 		map._is_key_string = true;
+	}
+
+	if (p_useItemPooling)
+	{
+		map._item_free_list = dA_INIT(unsigned, 0);
+		map._is_item_pooled = true;
 	}
 
 	return map;
@@ -189,6 +199,41 @@ uint32_t _CHMap_hash_buffer(const void* key, int length)
 	h1 ^= length;
 
 	return _CHMap_hash_fmix32(h1);
+}
+
+uint32_t _CHMap_getNewItemIndex(CHMap* const chmap)
+{
+	uint32_t r_index = 0;
+	if (chmap->_is_item_pooled && chmap->_item_free_list->elements_size > 0)
+	{
+		unsigned new_free_list_size = chmap->_item_free_list->elements_size - 1;
+		unsigned* index = dA_at(chmap->_item_free_list, new_free_list_size);
+
+		dA_resize(chmap->_item_free_list, new_free_list_size);
+
+		r_index = *index;
+	}
+	else
+	{
+		dA_emplaceBack(chmap->item_data);
+		r_index = chmap->item_data->elements_size - 1;
+	}
+
+	return r_index;
+}
+
+void _CHMap_eraseItem(CHMap* const chmap, uint32_t p_index)
+{
+	if (chmap->_is_item_pooled)
+	{
+		//add the index id to the free list
+		unsigned* emplaced = dA_emplaceBack(chmap->_item_free_list);
+		*emplaced = p_index;
+	}
+	else
+	{
+		dA_erase(chmap->item_data, p_index, 1);
+	}
 }
 
 uint32_t CHMap_Hash(CHMap* const chmap, const void* p_key)
@@ -353,6 +398,26 @@ int CHMap_getItemIndex(CHMap* const chmap, const void* p_key)
 	return find_item->data_array_index;
 }
 
+void* CHMap_getItemAtIndex(CHMap* const chmap, size_t p_index)
+{
+	if (chmap->_is_item_pooled)
+	{
+		if (chmap->_item_free_list->elements_size > 0)
+		{
+			for (int i = 0; i < chmap->_item_free_list->elements_size; i++)
+			{
+				unsigned* index = dA_at(chmap->_item_free_list, i);
+
+				if (*index == p_index)
+				{
+					return NULL;
+				}
+			}
+		}
+	}
+
+	return (char*)dA_at(chmap->item_data, p_index);
+}
 
 bool CHMap_Has(CHMap* const chmap, const void* p_key)
 {
@@ -405,9 +470,11 @@ void* CHMap_Insert(CHMap* const chmap, const void* p_key, const void* p_data)
 	
 
 	//emplace the item in the data array
-	void* data_ptr = dA_emplaceBack(chmap->item_data);
+	uint32_t item_index = _CHMap_getNewItemIndex(chmap);
+
+	void* data_ptr = dA_at(chmap->item_data, item_index);
 	memcpy(data_ptr, p_data, chmap->item_data->alloc_size);
-	item->data_array_index = chmap->item_data->elements_size - 1;
+	item->data_array_index = item_index;
 
 	if (chmap->hash_table->capacity + 1 < chmap->item_data->elements_size)
 	{
@@ -497,7 +564,7 @@ void CHMap_Erase(CHMap* const chmap, const void* p_key)
 			}
 
 			//erase the item data
-			dA_erase(chmap->item_data, item->data_array_index, 1);
+			_CHMap_eraseItem(chmap, item->data_array_index);
 
 			if (item->key)
 			{
@@ -521,14 +588,17 @@ void CHMap_Erase(CHMap* const chmap, const void* p_key)
 
 	chmap->num_items--;
 
-	//slow but, it checkes for every item in hash table,
-	//looking if the data array index is bigger than the just deleted one
-	//and decreases the index number by one
-	for (item = chmap->_next; item; item = item->next)
+	if (!chmap->_is_item_pooled)
 	{
-		if (item->data_array_index > data_array_index)
+		//slow but, it checkes for every item in hash table,
+		//looking if the data array index is bigger than the just deleted one
+		//and decreases the index number by one
+		for (item = chmap->_next; item; item = item->next)
 		{
-			item->data_array_index--;
+			if (item->data_array_index > data_array_index)
+			{
+				item->data_array_index--;
+			}
 		}
 	}
 }
@@ -575,6 +645,11 @@ void CHMap_Destruct(CHMap* chmap)
 
 	dA_Destruct(chmap->hash_table);
 	dA_Destruct(chmap->item_data);
+
+	if (chmap->_is_item_pooled)
+	{
+		dA_Destruct(chmap->_item_free_list);
+	}
 }
 
 #endif

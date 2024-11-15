@@ -18,7 +18,7 @@
 #define NK_KEYSTATE_BASED_INPUT
 #include <nuklear/nuklear.h>
 #include <nuklear/nuklear_glfw_gl3.h>
-#include "core/c_common.h"
+#include "core/core_common.h"
 
 typedef struct
 {
@@ -167,7 +167,7 @@ static void Con_handleInput()
 	//Hack!!! this is so that when you press backspace to delete input, the nk code only check if pressed on this frame
 	//so we need to reset the backspace state to false
 	static float backspace_timer = 0;
-	backspace_timer += C_getDeltaTime();
+	backspace_timer += Core_getDeltaTime();
 	
 	//make backspace delete faster when, backspace is held longer
 	static float backspace_threshold = 0.0;
@@ -179,7 +179,7 @@ static void Con_handleInput()
 			backspace_timer = 0;
 		}
 
-		backspace_threshold = max(backspace_threshold - C_getDeltaTime(), 0.03);
+		backspace_threshold = max(backspace_threshold - Core_getDeltaTime(), 0.03);
 	}
 	else
 	{
@@ -311,7 +311,7 @@ static void Con_drawSuggestionsWindow()
 
 static void Con_drawWindow()
 {
-	if (!nk_begin(nk.ctx, "Console", nk_rect(520, 50, 500, 500),
+	if (!nk_begin(nk.ctx, "Console", con_core.main_window_bounds,
 		NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_SCALABLE
 		| NK_WINDOW_TITLE | NK_WINDOW_NO_SCROLLBAR | NK_WINDOW_CLOSABLE))
 	{
@@ -398,6 +398,9 @@ bool Con_isOpened()
 
 void Con_Update()
 {
+	if (!nk.enabled)
+		return;
+
 	//check for input
 	if (nk_input_is_key_pressed(&nk.ctx->input, NK_KEY_TAB))
 	{
@@ -411,6 +414,7 @@ void Con_Update()
 	
 	if (!con_core.opened)
 		return;
+
 
 	//Handle kb input
 	Con_handleInput();
@@ -431,6 +435,8 @@ int Con_Init()
 	nk_textedit_init_fixed(&con_core.scroll_edit, con_core.scroll_buffer, sizeof(con_core.scroll_buffer));
 	
 	con_core.suggestion_selection = -1;
+
+	con_core.main_window_bounds = nk_rect(520, 50, 500, 500);
 }
 
 void Con_Cleanup()

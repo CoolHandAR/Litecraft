@@ -43,6 +43,14 @@ typedef struct
 	void* data;
 } AABB_FrustrumCullQueryResultTreeData;
 
+typedef struct
+{
+	unsigned light_index;
+	int next_index;
+
+	vec4 position;
+} AABB_LightNodeData;
+
 AABB_Tree AABB_Tree_Create();
 void AABB_Tree_Destruct(AABB_Tree* p_tree);
 int AABB_Tree_Insert(AABB_Tree* const p_tree, AABB* const p_AABB, void* const p_data);
@@ -51,5 +59,6 @@ void* AABB_Tree_GetIndexData(AABB_Tree* const p_tree, int p_index);
 dynamic_array* AABB_Tree_QueryOverlaps(AABB_Tree* const p_tree, AABB* const p_AABB, void* const p_data);
 dynamic_array* AABB_Tree_QueryRay(AABB_Tree* const p_tree, vec3 from, vec3 dir);
 dynamic_array* AABB_Tree_QueryPlaneRay(AABB_Tree* const p_tree, vec3 from, vec3 dir, vec3 normal, float distance);
-int AABB_Tree_IntersectsFrustrumPlanes(AABB_Tree* const p_tree, vec4 frusturm_planes[6], int p_maxCullCount, AABB_FrustrumCullQueryResult* r_query, AABB_FrustrumCullQueryResult* r_queryVisibles);
+int AABB_Tree_IntersectsFrustrumPlanes(AABB_Tree* const p_tree, vec4 frusturm_planes[6], int p_maxCullCount, AABB_FrustrumCullQueryResult* r_query, AABB_FrustrumCullQueryResult* r_queryVisibles, AABB_FrustrumCullQueryResultTreeData* r_queryVertexIndex);
 int AABB_Tree_IntersectsFrustrumBox(AABB_Tree* const p_tree, vec3 p_box[2], int p_maxCullCount, AABB_FrustrumCullQueryResult* r_query, AABB_FrustrumCullQueryResult* r_queryVisibles, AABB_FrustrumCullQueryResultTreeData* r_queryVertexIndex);
+int AABB_Tree_IntersectsFrustrumPlanesLightsTest(AABB_Tree* const p_tree, vec4 frusturm_planes[6], int p_maxCullCount, AABB_LightNodeData* r_query);

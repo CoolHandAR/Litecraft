@@ -13,6 +13,7 @@
 #include "r_model.h"
 #include "core/cvar.h"
 #include "lc/lc_world.h"
+#include "utility/u_object_pool.h"
 
 /*
 * ~~~~~~~~~~~~~~~~~~~~
@@ -107,9 +108,9 @@ typedef struct
 typedef struct
 {
 	R_CMD__PolygonMode polygon_mode;
-	AABB aabb;
+	vec3 box[2];
 	vec4 color;
-} R_CMD_DrawAABB;
+} R_CMD_DrawCube;
 
 typedef struct
 {
@@ -156,8 +157,9 @@ typedef enum R_CMD
 {
 	//DRAWING
 	R_CMD__TEXTURE,
-	R_CMD__AABB,
+	R_CMD__CUBE,
 	R_CMD__TEXTURED_CUBE,
+	R_CMD__QUAD,
 	R_CMD__TEXT,
 	R_CMD__LINE,
 	R_CMD__TRIANGLE,
@@ -208,7 +210,7 @@ typedef struct
 	unsigned white_texture;
 	int tex_index;
 	unsigned vao, vbo, ebo;
-} R_ScreenQuadDrawData;
+} RDraw_ScreenQuadData;
 
 #define LINE_VERTICES_BUFFER_SIZE 1024
 
@@ -217,7 +219,8 @@ typedef struct
 	BasicVertex vertices[LINE_VERTICES_BUFFER_SIZE];
 	size_t vertices_count;
 	unsigned vao, vbo;
-} R_LineDrawData;
+	R_Shader shader;
+} RDraw_LineData;
 
 #define TRIANGLE_VERTICES_BUFFER_SIZE 1024
 
@@ -229,7 +232,7 @@ typedef struct
 
 	unsigned texture_ids[32];
 	int texture_index;
-} R_TriangleDrawData;
+} RDraw_TriangleData;
 
 #define TEXT_VERTICES_BUFFER_SIZE 1024
 
@@ -240,14 +243,24 @@ typedef struct
 	size_t vertices_count;
 	size_t indices_count;
 	unsigned vao, vbo, ebo;
-} R_TextDrawData;
+} RDraw_TextData;
+
+typedef struct
+{
+	unsigned vao, vbo;
+	unsigned instance_vbo;
+	int instance_count;
+	dynamic_array* vertices_buffer;
+	R_Shader shader;
+	unsigned texture_ids[32];
+	int texture_index;
+	size_t allocated_size;
+} RDraw_CubeData;
 
 typedef struct
 {
 	bool draw;
-	bool offset_update_consumed;
 	WorldRenderData* world_render_data;
-	dynamic_array* opaque_draw_cmds_array;
 
 	dynamic_array* shadow_firsts[4];
 	dynamic_array* shadow_counts[4];
@@ -260,16 +273,42 @@ typedef struct
 
 	int shadow_sorted_chunk_offsets[4];
 	int shadow_sorted_chunk_transparent_offsets[4];
-} R_LCWorldDrawData;
+} RDraw_LCWorldData;
+
+
+typedef struct
+{	
+	R_Shader particle_render_shader;
+	R_Shader particle_shadow_map_shader;
+	R_Shader particle_depthPrepass_shader;
+	R_Shader particle_gBuffer_shader;
+
+	int total_particle_amount;
+	int total_emitter_amount;
+
+	unsigned texture_ids[32];
+	int texture_index;
+	
+	int instance_count;
+
+	unsigned vao, vbo;
+	unsigned instance_vbo;
+
+	size_t allocated_size;
+
+	dynamic_array* instance_buffer;
+} RDraw_ParticleData;
 
 typedef struct
 {
-	R_LCWorldDrawData lc_world;
-	R_ScreenQuadDrawData screen_quad;
-	R_LineDrawData lines;
-	R_TriangleDrawData triangle;
-	R_TextDrawData text;
-} R_DrawData;
+	RDraw_LCWorldData lc_world;
+	RDraw_ScreenQuadData screen_quad;
+	RDraw_LineData lines;
+	RDraw_TriangleData triangle;
+	RDraw_TextData text;
+	RDraw_CubeData cube;
+	RDraw_ParticleData particles;
+} RDraw_DrawData;
 
 /*
 * ~~~~~~~~~~~~~~~~~~~~
@@ -280,6 +319,7 @@ typedef struct
 typedef struct
 {
 	R_Shader depthPrepass_shader;
+	R_Shader depthPrepass_semi_transparents_shader;
 	R_Shader gBuffer_shader;
 	R_Shader shadow_map_shader;
 	R_Shader transparents_forward_shader;
@@ -287,6 +327,7 @@ typedef struct
 	R_Shader occlussion_boxes_shader;
 	R_Shader transparents_shadow_map_shader;
 	R_Shader transparents_gBuffer_shader;
+	R_Shader water_shader;
 } RPass_LCSpecificData;
 
 typedef struct
@@ -305,13 +346,7 @@ typedef struct
 {
 	unsigned FBO;
 	unsigned MainSceneColorBuffer;
-
-	unsigned transparent_FBO;
-	unsigned transparent_accum_texture;
-	unsigned transparent_reveal_texture;
-
 	R_Shader skybox_shader;
-	R_Shader oit_composite_shader;
 } RPass_MainScene;
 
 typedef struct
@@ -332,7 +367,6 @@ typedef struct
 
 typedef struct
 {
-	unsigned FBO;
 	unsigned dof_texture;
 	R_Shader bohek_blur_shader;
 } RPass_DOF;
@@ -349,6 +383,7 @@ typedef struct
 	R_Shader irradiance_convulution_shader;
 	R_Shader prefilter_cubemap_shader;
 	R_Shader brdf_shader;
+	R_Shader single_image_cubemap_convert_shader;
 
 	mat4 cube_view_matrixes[6];
 	mat4 cube_proj;
@@ -356,20 +391,6 @@ typedef struct
 
 typedef struct
 {
-	R_Shader particle_process_shader;
-	R_Shader emitter_process_shader;
-	R_Shader particle_render_shader;
-	R_Shader particle_shadow_map_shader;
-
-	int total_particle_amount;
-	int total_emitter_amount;
-
-	unsigned texture_ids[32];
-} RPass_Particles;
-
-typedef struct
-{
-	R_Shader basic_3d_shader;
 	R_Shader triangle_3d_shader;
 	R_Shader box_blur_shader;
 	R_Shader upsample_shader;
@@ -394,12 +415,17 @@ typedef struct
 typedef struct
 {
 	R_Shader depth_shader;
+	R_Shader blur_shader;
 	unsigned FBO;
-	unsigned moment_maps;
 	unsigned depth_maps;
 	vec4 cascade_levels;
 	mat4 cascade_projections[4];
 	float split_bias_scales[4];
+	float shadow_map_size;
+
+	vec2 shadow_sample_kernels[32];
+	int num_shadow_sample_kernels;
+	float quality_radius_scale;
 } RPass_ShadowMappingData;
 
 typedef struct
@@ -414,8 +440,7 @@ typedef struct
 	RPass_IBL ibl;
 	RPass_ProcessData post;
 	RPass_ShadowMappingData shadow;
-	RPass_Particles particles;
-} R_RenderPassData;
+} RPass_PassData;
 
 /*
 * ~~~~~~~~~~~~~~~~~~~~
@@ -459,7 +484,6 @@ typedef struct
 	Cvar* r_limitFPS;
 	Cvar* r_maxFPS;
 	Cvar* r_useDirShadowMapping;
-	Cvar* r_DirShadowMapResolution;
 	Cvar* r_skipOclussionCulling;
 	
 	Cvar* r_useVolumetricLights;
@@ -477,9 +501,12 @@ typedef struct
 	Cvar* r_Gamma;
 	Cvar* r_Exposure;
 	Cvar* r_bloomStrength;
+	Cvar* r_bloomThreshold;
+	Cvar* r_bloomSoftThreshold;
 	Cvar* r_Brightness;
 	Cvar* r_Contrast;
 	Cvar* r_Saturation;
+	Cvar* r_TonemapMode; // 0 = Reinhard, 1 = Uncharted2 tonemapping, 2 = Aces Filmic 
 
 	//WINDOW SPECIFIC
 	Cvar* w_width;
@@ -499,8 +526,9 @@ typedef struct
 	Cvar* r_allowTransparentShadows;
 	Cvar* r_shadowNormalBias;
 	Cvar* r_shadowBias;
-	Cvar* r_shadowVarianceMin;
-	Cvar* r_shadowLightBleedReduction;
+	Cvar* r_shadowQualityLevel; //256 + (level * 256)
+	Cvar* r_shadowBlurLevel; 
+	Cvar* r_shadowSplits;
 
 	//DEBUG
 	Cvar* r_drawDebugTexture; //-1 disabled, 0 = Normal, 1 = Albedo, 2 = Depth, 3 = Metal, 4 = Rough, 5 = AO, 6 = BLOOM
@@ -558,6 +586,8 @@ typedef struct
 	float dirLightAmbientIntensity;
 	float dirLightSpecularIntensity;
 
+	float ambientLightInfluence;
+
 	unsigned numPointLights;
 	unsigned numSpotLights;
 	
@@ -570,27 +600,25 @@ typedef struct
 	float heightFogCurve;
 	float heightFogMin;
 	float heightFogMax;
-	
-
-	float shadow_light_bleed_reduction;
-	float shadow_variance_min;
 
 	vec4 shadow_splits;
+	vec4 shadow_bias;
+	vec4 shadow_normal_bias;
+	vec4 shadow_blur_factors;
+
+	int shadow_split_count;
 
 	mat4 shadow_matrixes[4];
 }R_SceneData;
 
 #define MAX_CULL_QUERY_BUFFER_ITEMS 5000
-#define MAX_CULL_LC_SHADOW_QUERY_BUFFER_ITEMS 7000
+#define MAX_CULL_LC_SHADOW_QUERY_BUFFER_ITEMS 5000
 typedef struct
 {
 	AABB_FrustrumCullQueryResult lc_world_frustrum_query_buffer[MAX_CULL_QUERY_BUFFER_ITEMS];
 	AABB_FrustrumCullQueryResult lc_world_frustrum_sorted_query_buffer[MAX_CULL_QUERY_BUFFER_ITEMS];
 
-	AABB_FrustrumCullQueryResult lc_world_frustrum_shadow_query_buffer[4][MAX_CULL_LC_SHADOW_QUERY_BUFFER_ITEMS];
 	AABB_FrustrumCullQueryResultTreeData lc_world_frustrum_shadow_sorted_query_buffer[4][MAX_CULL_LC_SHADOW_QUERY_BUFFER_ITEMS];
-
-	unsigned sorted_shadow_chunk_data_indexes[4][5000];
 
 	int lc_world_shadow_cull_count[4];
 	int lc_world_shadow_cull_transparent_count[4];
@@ -599,6 +627,30 @@ typedef struct
 
 } R_SceneCullData;
 
+#define CLUSTERS_X 16
+#define CLUSTERS_Y 9
+#define CLUSTERS_Z 16
+#define MAX_LIGHTS_PER_CLUSTER 50
+typedef struct
+{
+	int count;
+	int offset;
+	int light_indices[50];
+} ClusterItem;
+typedef struct
+{
+	vec3 cluster_bounding_boxes[CLUSTERS_X * CLUSTERS_Y * CLUSTERS_Z][2];
+	vec3 min_max[2];
+	uint32_t lights[CLUSTERS_X][CLUSTERS_Y][CLUSTERS_Z];
+	ClusterItem light_grid[CLUSTERS_X * CLUSTERS_Y * CLUSTERS_Z];
+	uint32_t light_indexes[CLUSTERS_X * CLUSTERS_Y * CLUSTERS_Z * MAX_LIGHTS_PER_CLUSTER];
+	int lights_in_clusters;
+	AABB_Tree light_tree;
+	AABB_LightNodeData frustrum_culled_lights[1000];
+	
+	int culled_light_count;
+} R_ClustersData;
+
 typedef struct
 {
 	R_SceneCameraData camera;
@@ -606,9 +658,13 @@ typedef struct
 
 	R_SceneCullData cull_data;
 
+	R_ClustersData clusters_data;
+
 	unsigned camera_ubo;
 	unsigned scene_ubo;
-	unsigned shadow_ubo;
+	unsigned cluster_items_ssbo;
+	unsigned light_indexes_ssbo;
+	unsigned light_nodes_ssbo;
 
 	bool dirty_cam;
 }R_Scene;
@@ -656,13 +712,12 @@ typedef struct
 
 	FL_Head* particle_emitter_clients;
 
+	Object_Pool* point_lights_pool;
+	
 	RenderStorageBuffer instances;
 	RenderStorageBuffer point_lights;
 	DynamicRenderBuffer mesh_vertices;
 	DynamicRenderBuffer mesh_indices;
-	DynamicRenderBuffer particles;
-	RenderStorageBuffer particle_emitters;
-	DynamicRenderBuffer collider_boxes;
 	RenderStorageBuffer materials;
 	RenderStorageBuffer texture_handles;
 	RenderStorageBuffer draw_elements_commands;
@@ -677,6 +732,7 @@ typedef struct
 */
 void RInternal_UpdatePostProcessShader(bool p_recompile);
 void RInternal_UpdateDeferredShadingShader(bool p_recompile);
+void RInternal_GetShadowQualityData(int p_qualityLevel, int p_blurLevel, float* r_shadowMapSize, float* r_kernels, int* r_numKernels, float* r_qualityRadius);
 
 /*
 * ~~~~~~~~~~~~~~~~~~~~

@@ -11,7 +11,6 @@ in VS_OUT
     mat3 TBN;
     vec2 TexCoords;
 	vec2 TexOffset;
-    flat int Block_hp;
 } vs_in;
 
 uniform sampler2D texture_atlas;
@@ -28,10 +27,10 @@ void main()
     vec4 AlbedoColor = texture(texture_atlas, texCoords);
 
 #ifdef SEMI_TRANSPARENT
-    if(AlbedoColor.a < 0.5)
-    {
-        discard;
-    }
+    //if(AlbedoColor.a < 0.5)
+   // {
+     //   discard;
+    //}
 
 #endif
 

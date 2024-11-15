@@ -29,6 +29,10 @@ typedef struct
 	uint8_t block_type;
 } ChunkVertex;
 
+typedef struct
+{
+	int8_t position[3];
+} ChunkWaterVertex;
 
 typedef struct
 {
@@ -43,6 +47,7 @@ typedef struct
 
 	int opaque_index;
 	int transparent_index;
+	int water_index;
 
 	int draw_cmd_index;
 
@@ -63,10 +68,16 @@ typedef struct
 	size_t vertex_count;
 
 	size_t transparent_vertex_count;
+
+	size_t water_vertex_count;
 	
 	bool vertex_loaded;
 
 	bool user_modified;
+
+	bool is_deleted;
+
+	bool is_generated;
 
 } LC_Chunk;
 
@@ -74,6 +85,7 @@ typedef struct
 {
 	ChunkVertex* opaque_vertices;
 	ChunkVertex* transparent_vertices;
+	ChunkWaterVertex* water_vertices;
 } GeneratedChunkVerticesResult;
 
 uint8_t LC_getBlockInheritedType(uint8_t block_type);
@@ -83,7 +95,7 @@ bool LC_isblockEmittingLight(uint8_t block_type);
 bool LC_isBlockTransparent(uint8_t block_type);
 bool LC_isBlockWater(uint8_t blockType);
 bool LC_isBlockProp(uint8_t blockType);
-AABB LC_getBlockTypeAABB(uint8_t blockType);
+void LC_getBlockTypeAABB(uint8_t blockType, vec3 dest[2]);
 const char* LC_getBlockName(uint8_t block_type);
 
 LC_BiomeType LC_getBiomeType(float p_x, float p_z);
@@ -95,4 +107,5 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVertices(LC_Chunk* const chunk);
 GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chunk);
 unsigned LC_generateBlockInfoGLBuffer();
 void LC_Chunk_CalculateWaterBounds(LC_Chunk* const _chunk, ivec3 dest[2]);
-
+void LC_Chunk_SetBlock(LC_Chunk* const p_chunk, int x, int y, int z, uint8_t block_type);
+uint8_t LC_Chunk_getType(LC_Chunk* const p_chunk, int x, int y, int z);

@@ -1,6 +1,6 @@
 #include "r_public.h"
 #include "input.h"
-#include "core/c_common.h"
+#include "core/core_common.h"
 #include <core/resource_manager.h>
 
 extern NK_Data nk;
@@ -57,6 +57,9 @@ void ParticleDemo_Init()
 
 void ParticleDemo_Main()
 {
+	if (!nk.enabled)
+		return;
+
 	if (Input_IsActionJustPressed("Open particle demo") && !Con_isOpened())
 	{
 		s_opened = !s_opened;
@@ -77,7 +80,7 @@ void ParticleDemo_Main()
 
 	if (nk_window_is_active(nk.ctx, "Particle demo panel") && nk_window_is_hovered(nk.ctx))
 	{
-		C_BlockInputThisFrame();
+		Core_BlockInputThisFrame();
 	}
 	
 	bool update = false;
@@ -85,16 +88,16 @@ void ParticleDemo_Main()
 	if (nk_tree_push(nk.ctx, NK_TREE_NODE, "General", NK_MAXIMIZED))
 	{
 		nk_layout_row_dynamic(nk.ctx, 25, 2);
-		int playing = !(e->settings.state_flags & EMITTER_STATE_FLAG__EMITTING);
+		int playing = !(e->emitting);
 		if (nk_checkbox_label(nk.ctx, "Playing", &playing))
 		{
-			e->settings.state_flags ^= EMITTER_STATE_FLAG__EMITTING;
+			e->emitting = !e->emitting;
 			update = true;
 		}
-		int one_shot = !(e->settings.settings_flags & EMITTER_SETTINGS_FLAG__ONE_SHOT);
+		int one_shot = !(e->one_shot);
 		if (nk_checkbox_label(nk.ctx, "One shot", &one_shot))
 		{
-			e->settings.settings_flags ^= EMITTER_SETTINGS_FLAG__ONE_SHOT;
+			e->one_shot = !e->one_shot;
 			update = true;
 		}
 		nk_layout_row_dynamic(nk.ctx, 25, 2);

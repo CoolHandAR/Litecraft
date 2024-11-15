@@ -57,9 +57,20 @@ void* Resource_get(const char* p_path, ResourceType p_resType)
 
 		break;
 	}
+	case RESOURCE__TEXTURE_HDR:
 	case RESOURCE__TEXTURE:
 	{
-		R_Texture texture = Texture_Load(p_path, NULL);
+		R_Texture texture;
+		texture.id = 0;
+		
+		if (p_resType == RESOURCE__TEXTURE_HDR)
+		{
+			texture = HDRTexture_Load(p_path, NULL);
+		}
+		else
+		{
+			texture = Texture_Load(p_path, NULL);
+		}
 
 		//failed to load
 		if (texture.id == 0)

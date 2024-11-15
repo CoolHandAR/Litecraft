@@ -26,8 +26,7 @@ CORE ENGINE FUNCTIONS
 #define NUKLEAR_MAX_VERTEX_BUFFER 512 * 1024
 #define NUKLEAR_MAX_ELEMENT_BUFFER 128 * 1024
 
-#define USE_NEW_RENDERER
-#include "core/c_common.h"
+#include "core/core_common.h"
 #define NK_INCLUDE_DEFAULT_FONT
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -43,19 +42,11 @@ CORE ENGINE FUNCTIONS
 #include <nuklear/nuklear_glfw_gl3.h>
 
 
+#define CONTROL_STEPS 12
 
-#define MAX_PHYS_STEPS 6
-#define MAX_PHYS_DELTA_TIME 1.0
-#define PHYS_DESIRED_FPS 60.0f
-#define PHYS_MS_PER_SECOND 1000.0f
-
-extern void r_startFrame1();
-extern void r_endFrame1();
 extern void Window_EndFrame();
-extern bool C_init();
-extern void C_Exit();
-extern void r_startFrame();
-extern void r_endFrame();
+extern bool Core_init();
+extern void Core_Exit();
 extern void Input_processActions();
 extern void Con_Update();
 extern void ThreadCore_ShutdownInactiveThreads();
@@ -65,38 +56,233 @@ extern void LC_Draw();
 extern void LC_World_StartFrame();
 extern void LC_World_EndFrame();
 
-typedef struct C_EngineTiming
+typedef struct
 {
 	size_t ticks;
 	size_t phys_ticks;
-	float delta_time;
+	size_t frames_drawn;
+
+	double delta_time;
+	double phys_delta_time;
+
+	double prev_time;
+	double time_accum;
+	double time_deficit;
+
+	double lerp_fraction;
+
+	int frame_physics_steps;
+
+	int typical_physics_steps[CONTROL_STEPS];
+	int accumulated_physics_steps[CONTROL_STEPS];
+
 	bool phys_in_frame;
-} C_EngineTiming;
+} Core_EngineTiming;
 
 NK_Data nk;
-static C_EngineTiming s_engineTiming;
+static Core_EngineTiming s_engineTiming;
 static bool s_blockedInput = false;
 
-size_t C_getTicks()
+static void Core_CalcMainTimer()
+{
+	//inspired by godot's main tymer sync system https://github.com/godotengine/godot/blob/master/main/main_timer_sync.cpp#L414
+
+	double new_time = glfwGetTime();
+
+	double delta_time = new_time - s_engineTiming.prev_time;
+	s_engineTiming.prev_time = new_time;
+
+	const int physics_fps = 60;
+	const double physics_delta = 1.0 / (double)physics_fps;
+	const double physics_jitter_fix = 0.5;
+
+	float min_output_step = delta_time / 8;
+	min_output_step = max(min_output_step, 1E-6);
+
+	delta_time += s_engineTiming.time_deficit;
+
+	s_engineTiming.time_accum += delta_time;
+	
+	double delta_time_2 = delta_time;
+
+	int physics_steps = floor(s_engineTiming.time_accum * physics_fps);
+
+	int min_typical_steps = s_engineTiming.typical_physics_steps[0];
+	int max_typical_steps = min_typical_steps + 1;
+
+	bool update_typical = false;
+
+	for (int i = 0; i < CONTROL_STEPS - 1; i++)
+	{
+		int steps_left_to_match_typical = s_engineTiming.typical_physics_steps[i + 1] - s_engineTiming.accumulated_physics_steps[i];
+
+		if (steps_left_to_match_typical > max_typical_steps ||
+			steps_left_to_match_typical + 1 < min_typical_steps)
+		{
+			update_typical = true;
+			break;
+		}
+
+		if (steps_left_to_match_typical > min_typical_steps) {
+			min_typical_steps = steps_left_to_match_typical;
+		}
+		if (steps_left_to_match_typical + 1 < max_typical_steps) {
+			max_typical_steps = steps_left_to_match_typical + 1;
+		}
+	}
+
+	if (physics_steps < min_typical_steps)
+	{
+		const int max_possible_steps = floor((s_engineTiming.time_accum) * physics_fps + physics_jitter_fix);
+		if (max_possible_steps < min_typical_steps)
+		{
+			physics_steps = max_possible_steps;
+			update_typical = true;
+		}
+		else
+		{
+			physics_steps = min_typical_steps;
+		}
+	}
+	else if (physics_steps > max_typical_steps)
+	{
+		const int min_possible_steps = floor((s_engineTiming.time_accum) * physics_fps - physics_jitter_fix);
+		if (min_possible_steps > max_typical_steps)
+		{
+			physics_steps = min_possible_steps;
+			update_typical = true;
+		}
+		else
+		{
+			physics_steps = max_typical_steps;
+		}
+	}
+
+	physics_steps = max(physics_steps, 0);
+
+	s_engineTiming.time_accum -= physics_steps * physics_delta;
+
+
+	for (int i = CONTROL_STEPS - 2; i >= 0; --i)
+	{
+		s_engineTiming.accumulated_physics_steps[i + 1] = s_engineTiming.accumulated_physics_steps[i] + physics_steps;
+	}
+
+	s_engineTiming.accumulated_physics_steps[0] = physics_steps;
+
+	if (update_typical)
+	{
+		for (int i = CONTROL_STEPS - 1; i >= 0; i--)
+		{
+			if (s_engineTiming.typical_physics_steps[i] > s_engineTiming.accumulated_physics_steps[i])
+			{
+				s_engineTiming.typical_physics_steps[i] = s_engineTiming.accumulated_physics_steps[i];
+			}
+			else if (s_engineTiming.typical_physics_steps[i] < s_engineTiming.accumulated_physics_steps[i] - 1)
+			{
+				s_engineTiming.typical_physics_steps[i] = s_engineTiming.accumulated_physics_steps[i] - 1;
+			}
+		}
+	}
+
+	const double idle_minus_accum = delta_time - s_engineTiming.time_accum;
+
+	double min_average_physics_steps = 0;
+	double max_average_physics_steps = 0;
+
+	int consistent_steps = 0;
+
+	min_average_physics_steps = s_engineTiming.typical_physics_steps[0];
+	max_average_physics_steps = min_average_physics_steps + 1;
+	for (int i = 1; i < CONTROL_STEPS; ++i)
+	{
+		const float typical_lower = s_engineTiming.typical_physics_steps[i];
+		const float current_min = typical_lower / (i + 1);
+		if (current_min > max_average_physics_steps) 
+		{
+			consistent_steps = i;
+			break;
+		}
+		else if (current_min > min_average_physics_steps) 
+		{
+			min_average_physics_steps = current_min;
+		}
+		const float current_max = (typical_lower + 1) / (i + 1);
+		if (current_max < min_average_physics_steps) 
+		{
+			consistent_steps = i;
+			break;
+		}
+		else if (current_max < max_average_physics_steps) 
+		{
+			max_average_physics_steps = current_max;
+		}
+	}
+
+	if (consistent_steps == 0 || consistent_steps > 3)
+	{
+		delta_time = Math_Clampd(delta_time, min_average_physics_steps * physics_delta, max_average_physics_steps * physics_delta);
+	}
+	float max_clock_deviation = physics_jitter_fix * physics_delta;
+	delta_time = Math_Clampd(delta_time, delta_time_2 - max_clock_deviation, delta_time_2 + max_clock_deviation);
+
+	delta_time = Math_Clampd(delta_time, idle_minus_accum, idle_minus_accum + physics_delta);
+
+	if (delta_time < min_output_step)
+	{
+		delta_time = min_output_step;
+	}
+
+	s_engineTiming.time_accum = delta_time - idle_minus_accum;
+
+	if (s_engineTiming.time_accum > physics_delta)
+	{
+		const int extra_physics_steps = floor(s_engineTiming.time_accum * physics_fps);
+		s_engineTiming.time_accum -= extra_physics_steps * physics_delta;
+		physics_steps += extra_physics_steps;
+	}
+
+	s_engineTiming.time_deficit = delta_time_2 - delta_time;
+
+
+	static const int max_physics_steps = 8;
+	if (physics_steps > max_physics_steps) 
+	{
+		delta_time -= (physics_steps - max_physics_steps) * physics_delta;
+		physics_steps = max_physics_steps;
+	}
+
+	s_engineTiming.lerp_fraction = s_engineTiming.time_accum / physics_delta;
+	s_engineTiming.delta_time = delta_time;
+	s_engineTiming.phys_delta_time = physics_delta;
+	s_engineTiming.frame_physics_steps = physics_steps;
+}
+
+size_t Core_getTicks()
 {
 	return s_engineTiming.ticks;
 }
-size_t C_getPhysicsTicks()
+size_t Core_getPhysicsTicks()
 {
 	return s_engineTiming.phys_ticks;
 }
 
-float C_getDeltaTime()
+double Core_getDeltaTime()
 {
 	return s_engineTiming.delta_time;
 }
 
-float C_getPhysDeltaTime()
+double Core_getPhysDeltaTime()
 {
-	return 0.0f;
+	return s_engineTiming.phys_delta_time;
 }
 
-bool C_CheckForBlockedInputState()
+double Core_getLerpFraction()
+{
+	return s_engineTiming.lerp_fraction;
+}
+
+bool Core_CheckForBlockedInputState()
 {
 	if (s_blockedInput == true)
 	{
@@ -106,24 +292,13 @@ bool C_CheckForBlockedInputState()
 	return false;
 }
 
-void C_BlockInputThisFrame()
+void Core_BlockInputThisFrame()
 {
 	s_blockedInput = true;
 }
 
-void C_Loop()
+static void Core_Loop()
 {
-	//TIMING CONSTANTS. 
-	//It is better to to put them as variables instead of macros since i am afraid of macro casts
-	const float MS_PER_SECOND = PHYS_MS_PER_SECOND;
-	const float DESIRED_FPS = PHYS_DESIRED_FPS;
-	const float DESIRED_FRAME_TIME = MS_PER_SECOND / DESIRED_FPS;
-	const float MAX_DELTA_TIME = 1.0f;
-	const int MAX_PHYSICS_STEPS = 6;
-
-	float previous_frame = glfwGetTime();
-	float previous_render_frame = 0;
-
 	/*
 	* ~~~~~~~~~~~~~~~~~~
 	*	MAIN LOOP
@@ -137,20 +312,15 @@ void C_Loop()
 		
 		s_blockedInput = false;
 
-		nk_glfw3_new_frame(&nk.glfw);
+		if(nk.enabled) nk_glfw3_new_frame(&nk.glfw);
 
 		/*
 		* ~~~~~~~~~~~~~~~~~~
 		*	DELTA TIMINGS UPDATE
 		* ~~~~~~~~~~~~~~~~~~
 		*/
+		Core_CalcMainTimer();
 
-		float new_time = glfwGetTime();
-		float delta_time = new_time - previous_frame;
-		previous_frame = new_time;
-		float total_delta_time = delta_time / DESIRED_FRAME_TIME;
-		s_engineTiming.delta_time = delta_time;
-	
 		/*
 		* ~~~~~~~~~~~~~~~~~~~~~~~~~~
 		*	RENDER RELATED REQUESTS
@@ -179,7 +349,7 @@ void C_Loop()
 		*	CORE GAME LOOP
 		* ~~~~~~~~~~~~~~~~~~
 		*/
-		LC_Loop(delta_time);
+		LC_Loop(s_engineTiming.delta_time);
 		LC_World_StartFrame();
 	
 		/*
@@ -194,18 +364,15 @@ void C_Loop()
 		* PHYSICS LOOP
 		* ~~~~~~~~~~~~~~~~~~
 		*/
-		int physics_steps = 0;
-		while (total_delta_time > 0.0f && physics_steps < MAX_PHYSICS_STEPS)
+		double delta = s_engineTiming.phys_delta_time;	
+		for (int physics_steps = 0; physics_steps < s_engineTiming.frame_physics_steps; physics_steps++)
 		{
 			s_engineTiming.phys_in_frame = true;
 			
-			float physics_delta_time = min(total_delta_time, MAX_DELTA_TIME);
-			
-			LC_PhysLoop(physics_delta_time);
+			LC_PhysLoop(delta);
 
-			total_delta_time -= physics_delta_time;
 			s_engineTiming.phys_ticks++;
-			physics_steps++;
+
 			s_engineTiming.phys_in_frame = false;
 		}
 		
@@ -218,12 +385,13 @@ void C_Loop()
 		//RENDER
 		RCore_End();
 
-		nk_glfw3_render(&nk.glfw, NK_ANTI_ALIASING_ON, NUKLEAR_MAX_VERTEX_BUFFER, NUKLEAR_MAX_ELEMENT_BUFFER);
+		if (nk.enabled) nk_glfw3_render(&nk.glfw, NK_ANTI_ALIASING_ON, NUKLEAR_MAX_VERTEX_BUFFER, NUKLEAR_MAX_ELEMENT_BUFFER);
 		glfwSwapBuffers(glfw_window);
 
 		LC_World_EndFrame();
 		ThreadCore_ShutdownInactiveThreads();
 		s_engineTiming.ticks++;
+		s_engineTiming.frames_drawn++;
 		glfwPollEvents();
 
 		Window_EndFrame();
@@ -231,22 +399,27 @@ void C_Loop()
 }
 
 
-int C_entry()
+int Core_entry()
 {
-	if (!C_init()) return -1;
-
+	if (!Core_init()) return -1;
 	LC_Init();
+	memset(&s_engineTiming, 0, sizeof(Core_EngineTiming));
 	
-	memset(&s_engineTiming, 0, sizeof(C_EngineTiming));
-	
+	nk.enabled = true;
+
+	for (int i = CONTROL_STEPS - 1; i >= 0; --i) 
+	{
+		s_engineTiming.typical_physics_steps[i] = i;
+		s_engineTiming.accumulated_physics_steps[i] = i;
+	}
 
 	//START CORE LOOP
-	C_Loop();
-
+	Core_Loop();
 
 	//CLEAN UP
-	C_Exit();
+	Core_Exit();
 	LC_Cleanup();
+
 
 	return 0;
 }

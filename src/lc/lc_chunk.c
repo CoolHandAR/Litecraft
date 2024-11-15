@@ -244,41 +244,41 @@ bool LC_isBlockProp(uint8_t blockType)
 	return LC_BLOCK_MISC_DATA[blockType].material_type == 3;
 }
 
-AABB LC_getBlockTypeAABB(uint8_t blockType)
+void LC_getBlockTypeAABB(uint8_t blockType, vec3 dest[2])
 {
-	AABB aabb;
+	float width = 1;
+	float height = 1;
+	float length = 1;
 
 	if (LC_isBlockProp(blockType))
 	{
 		if (blockType == LC_BT__DEAD_BUSH || blockType == LC_BT__GRASS_PROP)
 		{
-			aabb.width = 0.7;
-			aabb.height = 0.8;
-			aabb.length = 0.7;
+			width = 0.5;
+			height = 0.8;
+			length = 0.5;
 		}
 		else
 		{
-			aabb.width = 0.5;
-			aabb.height = 0.5;
-			aabb.length = 0.5;
+			width = 0.5;
+			height = 0.5;
+			length = 0.5;
 		}
-
-		aabb.position[0] = -(aabb.width * 0.5);
-		aabb.position[1] = -(aabb.height * 0.5);
-		aabb.position[2] = -(aabb.length * 0.5);
 	}
 	else
 	{
-		aabb.position[0] = -0.5;
-		aabb.position[1] = -0.5;
-		aabb.position[2] = -0.5;
 
-		aabb.width = 1.0;
-		aabb.height = 1.0;
-		aabb.length = 1.0;
+		width = 1.0;
+		height = 1.0;
+		length = 1.0;
 	}
+	dest[0][0] = -(0.5 * width);
+	dest[0][1] = -(0.5 * height);
+	dest[0][2] = -(0.5) * length;
 
-	return aabb;
+	dest[1][0] = width - (width * 0.5);
+	dest[1][1] = height - (height* 0.5);
+	dest[1][2] = length - (length * 0.5);
 }
 
 const char* LC_getBlockName(uint8_t block_type)
@@ -765,6 +765,7 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 
 	ChunkVertex* vertices = NULL;
 	ChunkVertex* transparent_vertices = NULL;
+	ChunkWaterVertex* water_vertices = NULL;
 
 	assert(chunk->alive_blocks > 0 && "Invalid chunk block count");
 
@@ -790,6 +791,17 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 		}
 	}
 
+	if (chunk->water_blocks > 0)
+	{
+		water_vertices = calloc(chunk->water_blocks * 6, sizeof(ChunkWaterVertex));
+
+		if (!water_vertices)
+		{
+			printf("Failed to malloc cube vertices\n");
+			return NULL;
+		}
+	}
+
 	//[0] BACK, [1] FRONT, [2] LEFT, [3] RIGHT, [4] BOTTOM, [5] TOP
 	bool drawn_faces[LC_CHUNK_WIDTH][LC_CHUNK_HEIGHT][LC_CHUNK_LENGTH][6];
 	memset(&drawn_faces, 0, sizeof(drawn_faces));
@@ -799,9 +811,7 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 
 	size_t vert_index = 0;
 	size_t transparent_index = 0;
-
-	float add_offset = 0;
-	float prev_offset = 0;
+	size_t water_index = 0;
 
 	for (int x = 0; x < LC_CHUNK_WIDTH; x++)
 	{
@@ -873,14 +883,11 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 				{
 					buffer = transparent_vertices;
 					index = &transparent_index;
-					prev_offset += 0.0001;
-					add_offset = prev_offset;
 				}
 				else if (!LC_isBlockWater(chunk->blocks[x][y][z].type))
 				{
 					buffer = vertices;
 					index = &vert_index;
-					add_offset = 0;
 				}
 
 				size_t max_x = x;
@@ -1338,15 +1345,61 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 		}
 	}
 
+	if (chunk->water_blocks > 0)
+	{
+		ivec3 water_bounds[2];
+		LC_Chunk_CalculateWaterBounds(chunk, water_bounds);
+
+		water_bounds[1][0] -= water_bounds[0][0] - 1;
+		water_bounds[1][2] -= water_bounds[0][2] - 1;
+
+		index = &water_index;
+
+		int8_t norm = 1;
+
+		water_vertices[*index].position[0] = water_bounds[0][0];
+		water_vertices[*index].position[1] = water_bounds[1][1];
+		water_vertices[*index].position[2] = water_bounds[0][2];
+		*index = *index + 1;
+
+		water_vertices[*index].position[0] = water_bounds[0][0] + water_bounds[1][0];
+		water_vertices[*index].position[1] = water_bounds[1][1];
+		water_vertices[*index].position[2] = water_bounds[0][2];
+		*index = *index + 1;
+
+		water_vertices[*index].position[0] = water_bounds[0][0] + water_bounds[1][0];
+		water_vertices[*index].position[1] = water_bounds[1][1];
+		water_vertices[*index].position[2] = water_bounds[0][2] + water_bounds[1][2];
+		*index = *index + 1;
+
+		water_vertices[*index].position[0] = water_bounds[0][0];
+		water_vertices[*index].position[1] = water_bounds[1][1];
+		water_vertices[*index].position[2] = water_bounds[0][2];
+		*index = *index + 1;
+
+		water_vertices[*index].position[0] = water_bounds[0][0];
+		water_vertices[*index].position[1] = water_bounds[1][1];
+		water_vertices[*index].position[2] = water_bounds[0][2] + water_bounds[1][2];
+		*index = *index + 1;
+
+		water_vertices[*index].position[0] = water_bounds[0][0] + water_bounds[1][0];
+		water_vertices[*index].position[1] = water_bounds[1][1];
+		water_vertices[*index].position[2] = water_bounds[0][2] + water_bounds[1][2];
+		*index = *index + 1;
+	}
+
+
 	float end_time = glfwGetTime();
 
 	printf("%f \n", end_time - start_time);
 
 	chunk->vertex_count = vert_index;
 	chunk->transparent_vertex_count = transparent_index;
+	chunk->water_vertex_count = water_index;
 
 	result->opaque_vertices = vertices;
 	result->transparent_vertices = transparent_vertices;
+	result->water_vertices = water_vertices;
 
 	printf("%d \n", chunk->vertex_count);
 
@@ -1354,16 +1407,17 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 }
 LC_BiomeType LC_getBiomeType(float p_x, float p_z)
 {
-	float noise = noise2(p_x / 4096.0, p_z / 4096.0) * 2;
+	float noise = noise2(p_x / 4096.0, p_z / 4096.0);
 
+	float abs_noise = fabsf(noise);
 	//Positive noise
 	if (noise > 0)
 	{
-		if (p_x + noise > 20)
+		if (noise > 20)
 		{
 			return LC_Biome_Desert;
 		}
-		if (p_z + noise > 30)
+		if (noise > 30)
 		{
 			return LC_Biome_GrassyPlains;
 		}
@@ -1376,20 +1430,7 @@ LC_BiomeType LC_getBiomeType(float p_x, float p_z)
 			return LC_Biome_SnowyPlains;
 		}
 	}
-	//Negative noise
-	else
-	{
-		float abs_noise = fabsf(noise);
 
-		if (p_x + abs_noise > 20)
-		{
-			return LC_Biome_RockyMountains;
-		}
-		if (p_z + abs_noise > 30)
-		{
-			return LC_Biome_None;
-		}
-	}
 
 	return LC_Biome_GrassyPlains;
 }
@@ -1415,9 +1456,9 @@ static void LC_getBiomeNoiseData(LC_BiomeType p_biome, float p_x, float p_y, flo
 	}
 	case LC_Biome_RockyMountains:
 	{
-		float surface_height_multiplier = fabsf(noise2(p_x / 256.0, p_z / 256.0) * 100);
+		float surface_height_multiplier = fabsf(noise2(p_x / 256.0, p_z / 256.0) * 1);
 		float surface_height = fabsf(stb_perlin_noise3(p_x / 256.0, p_y / 256.0, p_z / 256.0, 0, 0, 0) * surface_height_multiplier);
-		float flatness = stb_perlin_ridge_noise3(p_x / 256.0, 0, p_z / 256.0, 2.0, 1.8, 1.2, 3) * 20;
+		float flatness = stb_perlin_ridge_noise3(p_x / 256.0, 0, p_z / 256.0, 2.0, 1.8, 1.2, 3) * 12;
 		*r_surfaceHeight = surface_height + flatness;
 		return;
 	}
@@ -1430,7 +1471,7 @@ static void LC_getBiomeNoiseData(LC_BiomeType p_biome, float p_x, float p_y, flo
 	}
 	case LC_Biome_Desert:
 	{
-		float height_multiplier = noise3(p_x / 512.0, p_y / 256.0, p_z / 512.0) * 300;
+		float height_multiplier = noise3(p_x / 512.0, p_y / 256.0, p_z / 512.0) * 100;
 		float surface_height = noise2(p_x / 256.0, p_z / 256.0) * height_multiplier;
 		float flatness = stb_perlin_fbm_noise3(p_x / 256.0, 0, p_z / 256.0, 2.34, 1.4, 4);
 		*r_surfaceHeight = surface_height + flatness;
@@ -1444,10 +1485,10 @@ static void LC_getBiomeNoiseData(LC_BiomeType p_biome, float p_x, float p_y, flo
 static LC_Block LC_generateBlock(float p_x, float p_y, float p_z, int p_seed)
 {
 	LC_BiomeType biome_type = LC_getBiomeType(p_x, p_z);
-	biome_type = LC_Biome_SnowyMountains;
+	//biome_type = LC_Biome_GrassyPlains;
 
-	float surface_height_multiplier = fabsf(noise2(p_x / 256.0, p_z / 256.0) * 500);
-	float surface_height = fabsf(stb_perlin_noise3(p_x / 256.0, p_y / 256.0, p_z / 256.0, 0, 0, 0) * surface_height_multiplier);
+	float surface_height_multiplier = 0;
+	float surface_height = 0;
 
 	LC_getBiomeNoiseData(biome_type, p_x, p_y, p_z, &surface_height);
 	
@@ -1456,30 +1497,43 @@ static LC_Block LC_generateBlock(float p_x, float p_y, float p_z, int p_seed)
 	float surface_y = surface_height;
 
 	float sea_level = 12;
+	float deep_surface = -2;
 
 	LC_Block block;
+	block.type = LC_BT__NONE;
 
 	//Terrain shaping stage
 	if (p_y < surface_y)
 	{
 		block.type = LC_BT__STONE;
 	}
-	//else if (p_y < sea_level)
-	//{
-		//block.type = LC_BT__WATER;
-	//}
+	else if (p_y < sea_level && biome_type != LC_Biome_Desert)
+	{
+		block.type = LC_BT__WATER;
+	}
 	else
 	{
 		block.type = LC_BT__NONE;
 	}
 
+	float cave_noise = stb_perlin_ridge_noise3(p_x / 32.0, p_y / 32.0, p_z / 32.0, 2.0, 1.5, 1.07, 2);
 
-	float noise_3d = fabsf(stb_perlin_turbulence_noise3(p_x / 256.0, p_y / 256.0, p_z / 256.0, 2.0, 0.6, 1)) * 25;
-
-	float both = surface_y + noise_3d;
-
-	if (block.type == LC_BT__STONE)
+	if (block.type != LC_BT__WATER && cave_noise < 0.5 && cave_noise > 0.2)
 	{
+		if (cave_noise == 0.4)
+		{
+			block.type == LC_BT__AMETHYST;
+		}
+		else
+		{
+			block.type = LC_BT__NONE;
+		}
+		
+	}
+	else if (block.type == LC_BT__STONE)
+	{
+		float noise_3d = fabsf(stb_perlin_turbulence_noise3(p_x / 256.0, p_y / 256.0, p_z / 256.0, 2.0, 0.6, 1)) * 25;
+		float both = surface_y + noise_3d;
 		switch (biome_type)
 		{
 		case LC_Biome_SnowyMountains:
@@ -1496,7 +1550,7 @@ static LC_Block LC_generateBlock(float p_x, float p_y, float p_z, int p_seed)
 		}
 		case LC_Biome_SnowyPlains:
 		{
-			if (both > 10)
+			if (both > 25)
 			{
 				block.type = LC_BT__SNOW;
 			}
@@ -1509,13 +1563,13 @@ static LC_Block LC_generateBlock(float p_x, float p_y, float p_z, int p_seed)
 		}
 		case LC_Biome_RockyMountains:
 		{
-			if (both > 50)
+			if (both > 35)
 			{
 				block.type = LC_BT__STONE;
 			}
 			else
 			{
-				block.type = LC_BT__GRASS;
+				block.type = LC_BT__DIRT;
 			}
 			break;
 		}
@@ -1526,17 +1580,17 @@ static LC_Block LC_generateBlock(float p_x, float p_y, float p_z, int p_seed)
 		}
 		case LC_Biome_GrassyPlains:
 		{
-			if (both < 18)
+			if (p_y > sea_level)
 			{
-				block.type = LC_BT__DIRT;
+				block.type = LC_BT__GRASS;
 			}
-			else if (both < 1)
+			else if (p_y < deep_surface)
 			{
 				block.type = LC_BT__STONE;
 			}
 			else
 			{
-				block.type = LC_BT__GRASS;
+				block.type = LC_BT__DIRT;
 			}
 			break;
 		}
@@ -1552,7 +1606,7 @@ static LC_Block LC_generateBlock(float p_x, float p_y, float p_z, int p_seed)
 
 	/*
 	static int test = 0;
-	test = rand() % 5;
+	test = Math_rand() % 5;
 	if (test == 0)
 	{
 		block.type = LC_BT__STONE;
@@ -1593,7 +1647,7 @@ LC_Chunk LC_Chunk_Create(int p_x, int p_y, int p_z)
 	return chunk;
 }
 
-static uint8_t LC_Chunk_getType(LC_Chunk* const p_chunk, int x, int y, int z)
+uint8_t LC_Chunk_getType(LC_Chunk* const p_chunk, int x, int y, int z)
 {
 	//bounds check
 	if (x < 0 || x >= LC_CHUNK_WIDTH)
@@ -1615,7 +1669,7 @@ static uint8_t LC_Chunk_getType(LC_Chunk* const p_chunk, int x, int y, int z)
 	return block->type;
 }
 
-static void LC_Chunk_SetBlock(LC_Chunk* const p_chunk, int x, int y, int z, uint8_t block_type)
+void LC_Chunk_SetBlock(LC_Chunk* const p_chunk, int x, int y, int z, uint8_t block_type)
 {
 	//bounds check
 	if (x < 0 || x >= LC_CHUNK_WIDTH)
@@ -1701,16 +1755,22 @@ static bool LC_Chunk_CanTreeGrowInto(LC_BlockType p_bt)
 
 static inline void LC_Chunk_GenerateAdditionalBlocks(LC_Chunk* _chunk, int p_x, int p_y, int p_z, int p_gX, int p_gY, int p_gZ)
 {
-	LC_BlockType block_type = _chunk->blocks[p_x][p_y][p_z].type;
+	uint8_t block_type = _chunk->blocks[p_x][p_y][p_z].type;
 
-	LC_BlockType left_block = LC_Chunk_getType(_chunk, p_x, p_y, p_z);
+	uint8_t left_block = LC_Chunk_getType(_chunk, p_x - 1, p_y, p_z);
+	uint8_t right_block = LC_Chunk_getType(_chunk, p_x + 1, p_y, p_z);
+	uint8_t front_block = LC_Chunk_getType(_chunk, p_x, p_y, p_z + 1);
+	uint8_t back_block = LC_Chunk_getType(_chunk, p_x, p_y, p_z - 1);
+	uint8_t up_block = LC_Chunk_getType(_chunk, p_x, p_y + 1, p_z);
+	uint8_t down_block = LC_Chunk_getType(_chunk, p_x, p_y - 1, p_z);
+
 
 	if (block_type == LC_BT__SAND)
 	{
 		//Cactus
-		if (p_gY > 15 && (rand() % 500) == 5)
+		if (p_gY > 0 && (Math_rand() % 512) == 0)
 		{
-			int cactus_height = rand() % 5;
+			int cactus_height = Math_rand() % 5;
 
 			for (int i = 0; i < cactus_height; i++)
 			{
@@ -1718,36 +1778,68 @@ static inline void LC_Chunk_GenerateAdditionalBlocks(LC_Chunk* _chunk, int p_x, 
 			}
 		}
 		//Dead bush
-		else if (p_gY > 10 && LC_Chunk_getType(_chunk, p_x, p_y + 2, p_z) == LC_BT__NONE && LC_Chunk_getType(_chunk, p_x - 1, p_y + 1, p_z) == LC_BT__NONE
-			&& LC_Chunk_getType(_chunk, p_x, p_y + 1, p_z + 1) == LC_BT__NONE)
+		else if ((Math_rand() % 100) == 0)
 		{
-			if ((rand() % 100) == 2)
-			{
-				LC_Chunk_SetBlock(_chunk, p_x, p_y + 1, p_z, LC_BT__DEAD_BUSH);
-			}
+			LC_Chunk_SetBlock(_chunk, p_x, p_y + 1, p_z, LC_BT__DEAD_BUSH);
 		}
 	}
 	else if (block_type == LC_BT__SNOW || block_type == LC_BT__GRASS_SNOW)
 	{
 		//Dead bush
-		if (p_gY > 12 && LC_Chunk_getType(_chunk, p_x, p_y + 2, p_z) == LC_BT__NONE && LC_Chunk_getType(_chunk, p_x - 1, p_y + 1, p_z) == LC_BT__NONE
-			&& LC_Chunk_getType(_chunk, p_x, p_y + 1, p_z + 1) == LC_BT__NONE)
+		if ((Math_rand() % 16) == 0 && p_gY > 12 && (up_block == LC_BT__NONE || LC_isBlockWater(up_block)) && (left_block == LC_BT__NONE || back_block == LC_BT__NONE))
 		{
-			if ((rand() % 50) == 2)
-			{
-				LC_Chunk_SetBlock(_chunk, p_x, p_y + 1, p_z, LC_BT__DEAD_BUSH);
-			}
+			LC_Chunk_SetBlock(_chunk, p_x, p_y + 1, p_z, LC_BT__DEAD_BUSH);
 		}
-	}
-	//Generate a tree
-	else if (block_type == LC_BT__GRASS || block_type == LC_BT__DIRT)
-	{
-		if (p_gY > 15 && p_gY < 300 && p_y > 1 && p_x > 4 && p_z > 4 && p_x < LC_CHUNK_WIDTH - 3 && p_z - LC_CHUNK_LENGTH - 3 && (rand() % 24) == 3)
+		else if ((Math_rand() % 16) == 0 && p_gY > 12 && p_gY < 300 && p_y < LC_CHUNK_HEIGHT - 5 && p_x > 2 && p_z > 2 && p_x < LC_CHUNK_WIDTH - 2
+			&& p_z < LC_CHUNK_LENGTH - 2 && up_block == LC_BT__NONE && right_block == LC_BT__NONE && front_block == LC_BT__NONE && back_block == LC_BT__NONE)
 		{
 			const int MIN_TREE_HEIGHT = 5;
 
 			//Generate trunk
-			int tree_height = max(rand() % 10, MIN_TREE_HEIGHT);
+			int tree_height = max(Math_rand() % 5, MIN_TREE_HEIGHT);
+
+			for (int i = 0; i < tree_height; i++)
+			{
+				LC_Chunk_SetBlock(_chunk, p_x, p_y + i, p_z, LC_BT__TRUNK);
+			}
+
+			//Generate tree leaves
+			for (int iy = -2; iy <= 2; iy++)
+			{
+				int minH = (iy < -1 || iy > 1) ? 0 : -1;
+				int maxH = (iy < -1 || iy > 1) ? 0 : 1;
+				for (int ix = -1 + minH; ix <= 1 + maxH; ix++)
+				{
+					int x1 = abs(ix - p_x);
+					for (int iz = -1 + minH; iz <= 1 + maxH; iz++)
+					{
+						int z1 = abs(iz - p_z);
+						int total = ix * ix + iy * iy + iz * iz;
+
+						uint8_t sample_block_type = LC_Chunk_getType(_chunk, p_x + ix, p_y + tree_height + iy, p_z + iz);
+
+						if (total + 2 < Math_rand() % 24 && x1 != 2 - minH && x1 != 2 + maxH && z1 != 2 - minH && z1 != 2 + maxH &&
+							(sample_block_type == LC_BT__NONE || sample_block_type == LC_BT__SNOWYLEAVES))
+						{
+							LC_Chunk_SetBlock(_chunk, p_x + ix, p_y + tree_height + iy, p_z + iz, LC_BT__SNOWYLEAVES);
+						}
+					}
+				}
+			}
+
+		}
+
+	}
+	else if (block_type == LC_BT__GRASS || block_type == LC_BT__DIRT)
+	{
+		//generate a tree
+		if ((Math_rand() % 4) == 0 && p_gY > 12 && p_gY < 300 && p_y < LC_CHUNK_HEIGHT - 5 && p_x > 2 && p_z > 2 && p_x < LC_CHUNK_WIDTH - 2
+			&& p_z < LC_CHUNK_LENGTH - 2 && up_block == LC_BT__NONE  && right_block == LC_BT__NONE && front_block == LC_BT__NONE && back_block == LC_BT__NONE)
+		{
+			const int MIN_TREE_HEIGHT = 5;
+
+			//Generate trunk
+			int tree_height = max(Math_rand() % 5, MIN_TREE_HEIGHT);
 
 			for (int i = 0; i < tree_height; i++)
 			{
@@ -1755,32 +1847,39 @@ static inline void LC_Chunk_GenerateAdditionalBlocks(LC_Chunk* _chunk, int p_x, 
 			}
 			
 			//Generate tree leaves
-			for (int ix = -3; ix <= 3; ix++)
-			{
-				for (int iy = -3; iy <= 3; iy++)
+			for (int iy = -2; iy <= 2; iy++)
+			{	
+				int minH = (iy < -1 || iy > 1) ? 0 : -1;
+				int maxH = (iy < -1 || iy > 1) ?  0 : 1;
+				for (int ix = -1 + minH; ix <= 1 + maxH; ix++)
 				{
-					for (int iz = -3; iz <= 3; iz++)
+					int x1 = abs(ix - p_x);
+					for (int iz = -1 + minH; iz <= 1 + maxH; iz++)
 					{
+						int z1 = abs(iz - p_z);
 						int total = ix * ix + iy * iy + iz * iz;
 
-						if (total < 8 + (rand() & 1) && LC_Chunk_getType(_chunk, p_x + ix, p_y + tree_height + iy, p_z + iz) == LC_BT__NONE)
+						uint8_t sample_block_type = LC_Chunk_getType(_chunk, p_x + ix, p_y + tree_height + iy, p_z + iz);
+
+						if (total + 2 < Math_rand() % 24 && x1 != 2 - minH && x1 != 2 + maxH && z1 != 2 - minH && z1 != 2 + maxH && 
+							(sample_block_type == LC_BT__NONE || sample_block_type == LC_BT__TREELEAVES))
 						{
-							LC_Chunk_SetBlock(_chunk, p_x + ix, p_y + tree_height+  iy, p_z + iz, LC_BT__TREELEAVES);
+							LC_Chunk_SetBlock(_chunk, p_x + ix, p_y + tree_height + iy, p_z + iz, LC_BT__TREELEAVES);
 						}
-						
 					}
 				}
 			}
+
 		}
-		else if (p_gY > 10 && p_y > 13 && LC_Chunk_getType(_chunk, p_x, p_y + 2, p_z) == LC_BT__NONE)
+		else if (p_gY > 20 && (up_block == LC_BT__NONE || LC_isBlockWater(up_block)) && (left_block == LC_BT__NONE || back_block == LC_BT__NONE))
 		{
 			//grass prop
-			if ((rand() % 22) == 1)
+			if ((Math_rand() % 12) == 0)
 			{
 				LC_Chunk_SetBlock(_chunk, p_x, p_y + 1, p_z, LC_BT__GRASS_PROP);
 			}
 			//flower prop
-			else if ((rand() % 32) == 4)
+			else if ((Math_rand() % 12) == 0)
 			{
 				LC_Chunk_SetBlock(_chunk, p_x, p_y + 1, p_z, LC_BT__FLOWER);
 			}
@@ -1800,6 +1899,7 @@ void LC_Chunk_GenerateBlocks(LC_Chunk* const _chunk, int _seed)
 				int g_y = y + _chunk->global_position[1];
 				int g_z = z + _chunk->global_position[2];
 
+
 				//Generate block
 				if (_chunk->blocks[x][y][z].type == LC_BT__NONE)
 				{
@@ -1807,7 +1907,15 @@ void LC_Chunk_GenerateBlocks(LC_Chunk* const _chunk, int _seed)
 
 					LC_Chunk_SetBlock(_chunk, x, y, z, generated_block.type);
 				}
-				//LC_Chunk_SetBlock(_chunk, x, y, z, LC_BT__STONE);
+				if (y < 5)
+				{
+					//LC_Chunk_SetBlock(_chunk, x, y, z, LC_BT__STONE);
+				}
+				else
+				{
+					//LC_Chunk_SetBlock(_chunk, x, y, z, LC_BT__NONE);
+				}
+				
 				
 				//Skip if no block was generated
 				if (_chunk->blocks[x][y][z].type == LC_BT__NONE)
@@ -1818,8 +1926,7 @@ void LC_Chunk_GenerateBlocks(LC_Chunk* const _chunk, int _seed)
 				//Generate additional blocks like trees, cactuses, etc..
 				LC_Chunk_GenerateAdditionalBlocks(_chunk, x, y, z, g_x, g_y, g_z);
 
-			
-			
+				
 			}
 
 		}
@@ -1920,10 +2027,25 @@ void LC_Chunk_CalculateWaterBounds(LC_Chunk* const _chunk, ivec3 dest[2])
 
 				if (blocks_visited >= _chunk->water_blocks)
 				{
+					dest[0][0] = minWaterX;
+					dest[0][1] = minWaterY;
+					dest[0][2] = minWaterZ;
+
+					dest[1][0] = maxWaterX;
+					dest[1][1] = maxWaterY;
+					dest[1][2] = maxWaterZ;
 					return;
 				}
 			}
 		}
 	}
+
+	dest[0][0] = minWaterX;
+	dest[0][1] = minWaterY;
+	dest[0][2] = minWaterZ;
+
+	dest[1][0] = maxWaterX;
+	dest[1][1] = maxWaterY;
+	dest[1][2] = maxWaterZ;
 
 }

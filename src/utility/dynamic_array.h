@@ -46,7 +46,8 @@ extern "C" {
     extern bool dA_reserve(dynamic_array* p_dA, size_t p_toReserve);
     extern bool dA_shrinkToFit(dynamic_array* p_dA);
     extern void* dA_emplaceBack(dynamic_array* const p_dA);
-    extern bool dA_emplaceBackMultiple(dynamic_array* p_dA, size_t p_size);
+    extern void* dA_emplaceBackMultiple(dynamic_array* p_dA, size_t p_size);
+    extern bool dA_emplaceBackMultipleData(dynamic_array* p_dA, size_t p_size, const void* p_data);
     extern bool dA_popBack(dynamic_array* p_dA);
     extern bool dA_popBackMultiple(dynamic_array* p_dA, size_t p_size);
     extern void dA_memcpy(const dynamic_array* p_dA, size_t p_destIndex, const void* p_data);
@@ -56,6 +57,7 @@ extern "C" {
     extern size_t dA_getItemsByteSize(const dynamic_array* p_dA);
     extern size_t dA_getTotalByteCapacitySize(const dynamic_array* p_dA);
     extern size_t dA_size(const dynamic_array* p_dA);
+    extern size_t dA_capacity(const dynamic_array* p_dA);
     extern bool dA_isEmpty(const dynamic_array* p_dA);
     extern void dA_Destruct(dynamic_array* p_dA);
 #ifdef __cplusplus
@@ -217,11 +219,6 @@ void* dA_at(dynamic_array* const p_dA, size_t p_index)
 {
     _dA_assertSetData(p_dA);
 
-    if (p_index >= p_dA->elements_size)
-    {
-        float x = 0;
-    }
-
     assert(p_index < p_dA->elements_size && "Index out of bounds");
 
     void* ptr = (char*)p_dA->data + (p_index * p_dA->alloc_size);
@@ -359,6 +356,25 @@ void* dA_emplaceBackData(dynamic_array* const p_dA, const void* p_data)
     return last;
 }
 
+void* dA_emplaceBackMultiple(dynamic_array* p_dA, size_t p_size)
+{
+    _dA_assertSetData(p_dA);
+
+    if (p_size == 0)
+        return NULL;
+
+    size_t prev_size = p_dA->elements_size;
+
+    if (!_dA_handleAlloc(p_dA, p_size))
+    {
+        return false;
+    }
+
+    void* at = dA_at(p_dA, prev_size);
+
+    return at;
+}
+
 /**
 Emplaces multiple items at the back of the array
 
@@ -367,14 +383,29 @@ Emplaces multiple items at the back of the array
 
 \return True on success
 */
-bool dA_emplaceBackMultiple(dynamic_array* p_dA, size_t p_size)
+bool dA_emplaceBackMultipleData(dynamic_array* p_dA, size_t p_size, const void* p_data)
 {
     _dA_assertSetData(p_dA);
 
     if (p_size == 0)
         return false;
 
-    return _dA_handleAlloc(p_dA, p_size);
+
+    size_t prev_size = p_dA->elements_size;
+
+    if (!_dA_handleAlloc(p_dA, p_size))
+    {
+        return false;
+    }
+
+    void* at = dA_at(p_dA, prev_size);
+
+    if (p_data)
+    {
+        memcpy(at, p_data, p_dA->alloc_size * p_size);
+    }
+
+    return true;
 }
 
 /**
@@ -563,6 +594,12 @@ size_t dA_size(const dynamic_array* p_dA)
     _dA_assertSetData(p_dA);
 
     return p_dA->elements_size;
+}
+size_t dA_capacity(const dynamic_array* p_dA)
+{
+    _dA_assertSetData(p_dA);
+
+    return p_dA->capacity;
 }
 /**
 Returns true if elements size is 0

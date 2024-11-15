@@ -59,12 +59,13 @@ typedef struct
 	PUBLIC DRAW FUNCTIONS
 * ~~~~~~~~~~~~~~~~~~~~~~~~
 */
-void LC_Draw_DrawShowPos(vec3 pos, vec3 vel, float yaw, float pitch, uint8_t held_block, int corner);
+void LC_Draw_DrawShowPos(vec3 pos, vec3 vel, float yaw, float pitch, uint8_t held_block, uint8_t selected_block, int corner);
 void LC_Draw_ChunkInfo(LC_Chunk* const chunk, int corner);
 void LC_Draw_Hotbar(LC_Hotbar* const hotbar);
 void LC_Draw_Inventory(LC_BlockType blocks[21][6], LC_Hotbar* const hotbar);
 void LC_Draw_Crosshair();
 void LC_Draw_WorldInfo(LC_World* const world, int corner);
+void LC_Draw_WaterOverlayScreenTexture(int water_level);
 /*
 * ~~~~~~~~~~~~~~~~~~~~
 	RESOURCES

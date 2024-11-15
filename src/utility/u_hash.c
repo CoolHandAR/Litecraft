@@ -125,3 +125,11 @@ uint32_t Hash_ivec3(ivec3 v)
 	h = Hash_uint32(v[2], h);
 	return hash_fmix32(h);
 }
+
+uint32_t Hash_id(uint32_t x)
+{
+	x = ((x >> (uint32_t)(16)) ^ x) * (uint32_t)(0x45d9f3b);
+	x = ((x >> (uint32_t)(16)) ^ x) * (uint32_t)(0x45d9f3b);
+	x = (x >> (uint32_t)(16)) ^ x;
+	return x;
+}

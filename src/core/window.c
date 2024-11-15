@@ -3,7 +3,7 @@
 #include <glad/glad.h>
 #include "lc_core.h"
 #include <stdio.h>
-#include "c_common.h"
+#include "core/core_common.h"
 #include "cvar.h"
 #include <Windows.h>
 #include <assert.h>

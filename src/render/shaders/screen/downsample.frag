@@ -15,6 +15,9 @@ uniform vec2 u_srcResolution;
 
 // which mip we are writing to, used for Karis average
 uniform int u_mipLevel = 1;
+uniform float u_threshold;
+uniform float u_softThreshold;
+uniform float u_gamma;
 
 in vec2 TexCoords;
 
@@ -28,8 +31,8 @@ vec3 ToSRGB(vec3 v)   { return PowVec3(v, invGamma); }
 
 float sRGBToLuma(vec3 col)
 {
-    //return dot(col, vec3(0.2126f, 0.7152f, 0.0722f));
-	return dot(col, vec3(0.299f, 0.587f, 0.114f));
+    return dot(col, vec3(0.2126f, 0.7152f, 0.0722f));
+	//return dot(col, vec3(0.299f, 0.587f, 0.114f));
 }
 
 float KarisAverage(vec3 col)
@@ -37,6 +40,23 @@ float KarisAverage(vec3 col)
 	// Formula is 1 / (1 + luma)
 	float luma = sRGBToLuma(ToSRGB(col)) * 0.25f;
 	return 1.0f / (1.0f + luma);
+}
+
+vec3 preFilter(vec3 col, float threshold, float soft_threshold)
+{	
+	float knee = threshold * soft_threshold;
+	float y = threshold - knee;
+	float z = 2.0 * knee;
+	float w = 0.25f / (knee + 0.00001f);
+
+	float brightness = max(col.r, max(col.g, col.b));
+	float soft = brightness - y;
+	soft = clamp(soft, 0, z);
+	soft = soft * soft * w;
+	float contribution = max(soft, brightness - threshold);
+	contribution /= max(brightness, 0.00001);
+
+	return col * contribution;
 }
 
 // NOTE: This is the readable version of this shader. It will be optimized!
@@ -103,6 +123,9 @@ void main()
 	  groups[3] *= KarisAverage(groups[3]);
 	  groups[4] *= KarisAverage(groups[4]);
 	  downsample = groups[0]+groups[1]+groups[2]+groups[3]+groups[4];
+
+	  downsample = preFilter(downsample, u_threshold, u_softThreshold);
+
 	  downsample = max(downsample, 0.0001f);
 	  break;
 	default:

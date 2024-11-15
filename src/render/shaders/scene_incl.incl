@@ -24,6 +24,8 @@ struct SceneData
 	float dirLightAmbientIntensity;
 	float dirLightSpecularIntensity;
 
+    float ambientLightInfluence;
+
 	uint numPointLights;
 	uint numSpotLights;
     
@@ -37,10 +39,12 @@ struct SceneData
 	float heightFogMin;
 	float heightFogMax;
 
-    float shadow_light_bleed_reduction;
-	float shadow_variance_min;
-
     vec4 shadow_splits;
+    vec4 shadow_bias;
+	vec4 shadow_normal_bias;
+    vec4 shadow_blur_factors;
+
+    int shadow_split_count;
 
 	mat4 shadow_matrixes[4];
 };
