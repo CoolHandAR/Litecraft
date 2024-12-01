@@ -142,7 +142,14 @@ void RCore_onWindowResize(int width, int height)
 
 	//DOF
 	glBindTexture(GL_TEXTURE_2D, pass->dof.dof_texture);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+	if (r_cvars.r_DepthOfFieldMode->int_value == 1)
+	{
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width / 2, height / 2, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+	}
+	else
+	{
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+	}
 
 	//General
 	glBindTexture(GL_TEXTURE_2D, pass->general.depth_halfsize_texture);
@@ -192,6 +199,12 @@ static void RCore_checkForModifiedCvars()
 	{
 
 	}
+	if (r_cvars.r_useDepthOfField->modified || r_cvars.r_DepthOfFieldMode->modified)
+	{
+		RCore_onWindowResize(backend_data->screenSize[0], backend_data->screenSize[1]);
+		r_cvars.r_useDepthOfField->modified = false;
+		r_cvars.r_DepthOfFieldMode->modified = false;
+	}
 	if (r_cvars.r_useSsao->modified || r_cvars.r_ssaoHalfSize->modified)
 	{
 		RCore_onWindowResize(backend_data->screenSize[0], backend_data->screenSize[1]);
@@ -211,30 +224,13 @@ static void RCore_checkForModifiedCvars()
 		r_cvars.r_ssaoRadius->modified = false;
 		r_cvars.r_ssaoStrength->modified = false;
 	}
-	if (r_cvars.r_Exposure->modified || r_cvars.r_Gamma->modified || r_cvars.r_Brightness->modified || r_cvars.r_Contrast->modified ||
-		r_cvars.r_Saturation->modified ||r_cvars.r_bloomStrength->modified)
+	if (r_cvars.r_useBloom->modified)
 	{
-		RInternal_UpdatePostProcessShader(false);
-
-		r_cvars.r_Exposure->modified = false;
-		r_cvars.r_Gamma->modified = false;
-		r_cvars.r_Brightness->modified = false;
-		r_cvars.r_Contrast->modified = false;
-		r_cvars.r_Saturation->modified = false;
-		r_cvars.r_bloomStrength->modified = false;
-	}
-	if (r_cvars.r_useFxaa->modified || r_cvars.r_TonemapMode->modified || r_cvars.r_useDepthOfField->modified || r_cvars.r_useBloom->modified)
-	{
-		RInternal_UpdatePostProcessShader(true);
-
 		if (r_cvars.r_useBloom->modified)
 		{
 			RCore_onWindowResize(backend_data->screenSize[0], backend_data->screenSize[1]);
 		}
 
-		r_cvars.r_useFxaa->modified = false;
-		r_cvars.r_TonemapMode->modified = false;
-		r_cvars.r_useDepthOfField->modified = false;
 		r_cvars.r_useBloom->modified = false;
 	}
 	if (r_cvars.r_useDirShadowMapping->modified)
@@ -370,11 +366,11 @@ static void RCore_UploadGpuData()
 
 	//Camera update
 	glBindBuffer(GL_UNIFORM_BUFFER, scene.camera_ubo);
-	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(R_SceneCameraData), &scene.camera);
+	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(RScene_CameraData), &scene.camera);
 
 	//Scene update
 	glBindBuffer(GL_UNIFORM_BUFFER, scene.scene_ubo);
-	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(R_SceneData), &scene.scene_data);
+	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(RScene_UBOData), &scene.scene_data);
 
 	//Clusters update
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.cluster_items_ssbo);
@@ -390,6 +386,16 @@ static void RCore_UploadGpuData()
 	{
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.light_nodes_ssbo);
 		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(AABB_LightNodeData) * scene.clusters_data.culled_light_count, scene.clusters_data.frustrum_culled_lights);
+	}
+	if (scene.scene_data.numPointLights > 0)
+	{
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, storage.point_lights.buffer);
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(PointLight2) * scene.scene_data.numPointLights, storage.point_lights_backbuffer->data);
+	}
+	if (scene.scene_data.numSpotLights > 0)
+	{
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, storage.spot_lights.buffer);
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(SpotLight) * scene.scene_data.numSpotLights, storage.spot_lights_backbuffer->data);
 	}
 
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -477,6 +483,8 @@ Dispatches various computes, adds jobs to render thread, updates metrics
 */
 void RCore_Start()
 {
+	//BVH_Tree_DrawNodes(&scene.cull_data.static_partition_tree, NULL, NULL, false);
+
 	//Render panel, metrics ui
 	RCore_DrawUI();
 

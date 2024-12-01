@@ -123,7 +123,7 @@ _Internal: DO NOT USE!
 void _dA_assertSetData(const dynamic_array* p_dA)
 {
     assert(p_dA != NULL && "The dynamic array data is NULL");
-    // assert(p_dA->data != NULL && "Data is not initizialized with dA_init()");
+    //assert(p_dA->data != NULL && "Data is not initizialized with dA_init()");
     assert(p_dA->alloc_size > 0 && "Alloc size can't be equal or lower than 0");
 }
 
@@ -133,6 +133,17 @@ _Internal: DO NOT USE!
 bool _dA_safeRealloc(dynamic_array* p_dA, size_t p_size)
 {
     void* prev = p_dA->data;
+
+    if (prev == NULL)
+    {
+        void* data = malloc(p_size);
+
+        if (data)
+        {
+            p_dA->data = data;
+        }
+        return true;
+    }
 
     p_dA->data = realloc(prev, p_size);
 

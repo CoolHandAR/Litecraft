@@ -6,40 +6,8 @@ extern R_Scene scene;
 
 #include "core/core_common.h"
 
-void RInternal_UpdatePostProcessShader(bool p_recompile)
-{
-    if (p_recompile)
-    {
-        if (pass->post.post_process_shader > 0)
-        {
-            glDeleteProgram(pass->post.post_process_shader);
-        }
+extern void Render_Cube();
 
-        const char* DEFINES[4] =
-        {
-            (r_cvars.r_useFxaa->int_value) ? "USE_FXAA" : "",
-            (r_cvars.r_useDepthOfField->int_value) ? "USE_DEPTH_OF_FIELD" : "",
-            (r_cvars.r_TonemapMode->int_value == 0) ? "USE_REINHARD_TONEMAP" : ((r_cvars.r_TonemapMode->int_value == 1) ? "USE_UNCHARTED2_TONEMAP" : "USE_ACES_TONEMAP"),
-            (r_cvars.r_useBloom->int_value) ? "USE_BLOOM" : ""
-        };
-        pass->post.post_process_shader = Shader_CompileFromFileDefine("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/post_process.frag", NULL, DEFINES, 4);
-        Core_Printf("Post process shader recompiled!");
-    }
-
-    glUseProgram(pass->post.post_process_shader);
-    Shader_SetFloat(pass->post.post_process_shader, "u_Exposure", r_cvars.r_Exposure->float_value);
-    Shader_SetFloat(pass->post.post_process_shader, "u_Gamma", r_cvars.r_Gamma->float_value);
-    Shader_SetFloat(pass->post.post_process_shader, "u_Brightness", r_cvars.r_Brightness->float_value);
-    Shader_SetFloat(pass->post.post_process_shader, "u_Contrast", r_cvars.r_Contrast->float_value);
-    Shader_SetFloat(pass->post.post_process_shader, "u_Saturation", r_cvars.r_Saturation->float_value);
-    Shader_SetFloat(pass->post.post_process_shader, "u_BloomStrength", r_cvars.r_bloomStrength->float_value);
-
-    //SETUP SHADER UNIFORMS
-    Shader_SetInteger(pass->post.post_process_shader, "depth_texture", 0);
-    Shader_SetInteger(pass->post.post_process_shader, "MainSceneTexture", 1);
-    Shader_SetInteger(pass->post.post_process_shader, "BloomSceneTexture", 2);
-    Shader_SetInteger(pass->post.post_process_shader, "DofSceneTexture", 3);
-}
 
 void RInternal_UpdateDeferredShadingShader(bool p_recompile)
 {
@@ -147,5 +115,83 @@ void RInternal_GetShadowQualityData(int p_qualityLevel, int p_blurLevel, float* 
     if (r_qualityRadius)
     {
         *r_qualityRadius = quality_radius;
+    }
+}
+
+void RInternal_ProcessIBLCubemap(bool p_fast, bool p_irradiance, bool p_prefilter, bool p_brdf)
+{
+    float irradiance_sample_delta = (p_fast) ? (0.025 * 10.0) : (0.025);
+    int prefilter_brdf_sample_count = (p_fast) ? (32) : (1024);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
+    glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
+    if (p_irradiance)
+    {
+        //CONVULUTE CUBEMAP
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 32, 32);
+        glUseProgram(pass->ibl.irradiance_convulution_shader);
+        Shader_SetInteger(pass->ibl.irradiance_convulution_shader, "environmentMap", 0);
+        Shader_SetMatrix4(pass->ibl.irradiance_convulution_shader, "u_proj", pass->ibl.cube_proj);
+        Shader_SetFloat(pass->ibl.irradiance_convulution_shader, "u_sampleDelta", irradiance_sample_delta);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.envCubemapTexture);
+
+        glViewport(0, 0, 32, 32);
+        for (int i = 0; i < 6; i++)
+        {
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.irradianceCubemapTexture, 0);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+
+            Shader_SetMatrix4(pass->ibl.irradiance_convulution_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
+            Render_Cube();
+        }
+    }
+    if (p_prefilter)
+    {
+        //PREFILTER CUBEMAP
+        glUseProgram(pass->ibl.prefilter_cubemap_shader);
+        Shader_SetInteger(pass->ibl.prefilter_cubemap_shader, "environmentMap", 0);
+        Shader_SetMatrix4(pass->ibl.prefilter_cubemap_shader, "u_proj", pass->ibl.cube_proj);
+        Shader_SetInteger(pass->ibl.prefilter_cubemap_shader, "u_sampleCount", prefilter_brdf_sample_count);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.envCubemapTexture);
+
+        unsigned int maxMipLevels = 5;
+        for (unsigned int mip = 0; mip < maxMipLevels; ++mip)
+        {
+            unsigned int mipWidth = (unsigned)(128 * pow(0.5, mip));
+            unsigned int mipHeight = (unsigned)(128 * pow(0.5, mip));
+
+            glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, mipWidth, mipHeight);
+            glViewport(0, 0, mipWidth, mipHeight);
+
+            float roughness = (float)mip / (float)(maxMipLevels - 1);
+            Shader_SetFloat(pass->ibl.prefilter_cubemap_shader, "u_roughness", roughness);
+
+            for (unsigned int i = 0; i < 6; ++i)
+            {
+                Shader_SetMatrix4(pass->ibl.prefilter_cubemap_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.prefilteredCubemapTexture, mip);
+
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                Render_Cube();
+            }
+        }
+    }
+    if (p_brdf)
+    {
+        //BRDF GENERATION
+        glUseProgram(pass->ibl.brdf_shader);
+        Shader_SetInteger(pass->ibl.brdf_shader, "u_sampleCount", prefilter_brdf_sample_count);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 512, 512);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->ibl.brdfLutTexture, 0);
+        glViewport(0, 0, 512, 512);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        glDisable(GL_BLEND);
+        Render_Quad();
     }
 }

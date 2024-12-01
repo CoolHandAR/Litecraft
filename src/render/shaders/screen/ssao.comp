@@ -68,7 +68,15 @@ void main()
 
     coords *= u_uvMultiplier;
 
-    vec3 ViewPos = depthToViewPos(depth_texture, cam.invProj, coords);
+    float depth = texture(depth_texture, coords).r;
+
+    if(depth >= 1.0)
+    {
+        imageStore(ssaoOutput, ivec2(gl_GlobalInvocationID.xy), vec4(0, 0, 0, 0));
+        return;
+    }
+
+    vec3 ViewPos = depthToViewPosDirect(depth, cam.invProj, coords);
     vec3 WorldPos = (cam.invView * vec4(ViewPos, 1.0)).xyz;
     vec3 Normal = texture(gNormalMetal, coords).rgb * 2.0 - 1.0;
     vec2 NoiseScale = vec2(u_viewportSize.x / 4.0, u_viewportSize.y / 4.0);

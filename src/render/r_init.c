@@ -13,6 +13,7 @@ textures and etc...
 #include <glad/glad.h>
 #include <assert.h>
 #include <GLFW/glfw3.h>
+#include "shaders/shader_info.h"
 
 
 extern R_CMD_Buffer* cmdBuffer;
@@ -102,6 +103,10 @@ static void Init_registerCvars()
     r_cvars.r_shadowBlurLevel = Cvar_Register("r_shadowBlurLevel", "1", NULL, CVAR__SAVE_TO_FILE, 0, 4);
     r_cvars.r_shadowSplits = Cvar_Register("r_shadowSplits", "4", NULL, CVAR__SAVE_TO_FILE, 1, 4);
     
+    //DOF SPECIFIC
+    r_cvars.r_DepthOfFieldMode = Cvar_Register("r_DepthOfFieldMode", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+    r_cvars.r_DepthOfFieldQuality = Cvar_Register("r_DepthOfFieldQuality", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+
     //DEBUG
     r_cvars.r_drawDebugTexture = Cvar_Register("r_drawDebugTexture", "-1", NULL, CVAR__SAVE_TO_FILE, -1, 6);
     r_cvars.r_wireframe = Cvar_Register("r_wireframe", "0", NULL, CVAR__SAVE_TO_FILE, 0, 2);
@@ -484,10 +489,10 @@ static void Init_ParticleDrawData()
     drawData->particles.instance_buffer = dA_INIT(float, 0);
     
     const float quad_vertices[] =
-    {       -1, -1, 0,   0, 0,    0, 0, 1,  
-            -1,  1, 0,   0, 1,    0, 0, 1,
-             1,  1, 0,   1, 1,    0, 0, 1,
-             1, -1, 0,   1, 0,    0, 0, 1,
+    {       -1, 1, 0,   0, 0,    0, 0, 1,  
+            -1, -1, 0,   0, 1,    0, 0, 1,
+             1, -1, 0,   1, 1,    0, 0, 1,
+             1, 1, 0,   1, 0,    0, 0, 1,
     };
 
     //setup vao and vbo
@@ -562,28 +567,19 @@ static void Init_DrawData()
 
 static void Init_GeneralPassData()
 {
-    pass->general.triangle_3d_shader = Shader_CompileFromFile("src/render/shaders/triangle_3d.vert", "src/render/shaders/triangle_3d.frag", NULL);
     pass->general.box_blur_shader = ComputeShader_CompileFromFile("src/render/shaders/screen/box_blur.comp");
     pass->general.downsample_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/downsample.frag", NULL);
     pass->general.upsample_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/upsample.frag", NULL);
     pass->general.copy_shader = ComputeShader_CompileFromFile("src/render/shaders/screen/copy.comp");
 
-    glUseProgram(pass->general.triangle_3d_shader);
-#ifndef USE_BINDLESS_TEXTURES
-    GLint texture_array_location = glGetUniformLocation(pass->general.triangle_3d_shader, "texture_arr");
-    int samplers[32];
-
-    for (int i = 0; i < 32; i++)
-    {
-        samplers[i] = i;
-    }
-
-    glUniform1iv(texture_array_location, 32, samplers);
-#endif
 
     glGenFramebuffers(1, &pass->general.halfsize_fbo);
+    glGenFramebuffers(1, &pass->general.reflection_fbo);
     glGenTextures(1, &pass->general.depth_halfsize_texture);
     glGenTextures(1, &pass->general.normal_halfsize_texture);
+   // glGenTextures(1, &pass->general.perlin_noise_texture);
+    glGenTextures(1, &pass->general.reflection_texture);
+    glGenTextures(1, &pass->general.reflection_depth);
 
     glBindTexture(GL_TEXTURE_2D, pass->general.depth_halfsize_texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, INIT_WIDTH / 2, INIT_HEIGHT / 2, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
@@ -605,12 +601,40 @@ static void Init_GeneralPassData()
 
     CheckBoundFrameBufferStatus("General");
 
+
+    glBindTexture(GL_TEXTURE_2D, pass->general.reflection_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    glBindTexture(GL_TEXTURE_2D, pass->general.reflection_depth);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, INIT_WIDTH, INIT_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, pass->general.reflection_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->general.reflection_texture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, pass->general.reflection_depth, 0);
+    CheckBoundFrameBufferStatus("Reflection");
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+
+    R_Texture noise = Texture_Load("assets/perlin_noise.png", NULL);
+
+    pass->general.perlin_noise_texture = noise.id;
+    
 }
 
 static void Init_PostProcessData()
 {
-    RInternal_UpdatePostProcessShader(true);
+    bool result;
+    pass->post.post_process_shader = Shader_PixelCreate("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/post_process.frag", POST_PROCESS_DEFINE_MAX, POST_PROCESS_UNIFORM_MAX
+        , 4, POST_PROCESS_DEFINES_STR, POST_PROCESS_UNIFORMS_STR, POST_PROCESS_TEXTURES_STR, &result);
+
     pass->post.debug_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/debug_screen.frag", NULL);
 
     glUseProgram(pass->post.debug_shader);
@@ -646,6 +670,7 @@ static void Init_LCSpecificData()
     pass->lc.transparents_gBuffer_shader = Shader_CompileFromFileDefine("src/render/shaders/lc_world/lc_g_buffer.vert", "src/render/shaders/lc_world/lc_g_buffer.frag", NULL, define, 1);
     pass->lc.depthPrepass_semi_transparents_shader = Shader_CompileFromFileDefine("src/render/shaders/lc_world/lc_depth.vert", "src/render/shaders/lc_world/lc_depth.frag", NULL, define, 1);
     pass->lc.water_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_water.vert", "src/render/shaders/lc_world/lc_water.frag", NULL);
+    pass->lc.clip_distance_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_clipped.vert", "src/render/shaders/lc_world/lc_clipped.frag", NULL);
 
     //SETUP SHADER UNIFORMS
     glUseProgram(pass->lc.gBuffer_shader);
@@ -680,6 +705,16 @@ static void Init_LCSpecificData()
     Shader_SetInteger(pass->lc.water_shader, "skybox_texture", 0);
     Shader_SetInteger(pass->lc.water_shader, "dudv_map", 1);
     Shader_SetInteger(pass->lc.water_shader, "normal_map", 2);
+    Shader_SetInteger(pass->lc.water_shader, "reflection_texture", 3);
+    Shader_SetInteger(pass->lc.water_shader, "refraction_texture", 4);
+    Shader_SetInteger(pass->lc.water_shader, "refraction_depth", 5);
+    Shader_SetInteger(pass->lc.water_shader, "displacement_map", 6);
+    Shader_SetInteger(pass->lc.water_shader, "noise_1_texture", 7);
+    Shader_SetInteger(pass->lc.water_shader, "noise_2_texture", 8);
+    Shader_SetInteger(pass->lc.water_shader, "gradient_map", 9);
+
+    glUseProgram(pass->lc.clip_distance_shader);
+    Shader_SetInteger(pass->lc.clip_distance_shader, "texture_atlas", 0);
 }
 
 static void Init_DeferredData()
@@ -770,7 +805,7 @@ static void Init_MainSceneData()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->scene.MainSceneColorBuffer, 0);
-    unsigned int attachments[1] = { GL_COLOR_ATTACHMENT0 };
+    unsigned int attachments[1] = { GL_COLOR_ATTACHMENT0};
     glDrawBuffers(1, attachments);
 
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, pass->deferred.depth_texture, 0);
@@ -869,21 +904,18 @@ static void Init_BloomData()
 
 static void Init_DofData()
 {
-    //SETUP SHADER
-    pass->dof.bohek_blur_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/dof_blur.frag", NULL);
-
-    glUseProgram(pass->dof.bohek_blur_shader);
-    Shader_SetInteger(pass->dof.bohek_blur_shader, "source_texture", 0);
-    Shader_SetInteger(pass->dof.bohek_blur_shader, "depth_texture", 1);
+    bool result;
+    pass->dof.shader = Shader_ComputeCreate("src/render/shaders/screen/dof.comp", DOF_DEFINE_MAX, DOF_UNIFORM_MAX, 3, DOF_DEFINES_STR, DOF_UNIFORMS_STR, DOF_TEXTURES_STR, &result);
 
     glGenTextures(1, &pass->dof.dof_texture);
 
     glBindTexture(GL_TEXTURE_2D, pass->dof.dof_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, INIT_WIDTH / 2, INIT_HEIGHT / 2, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
 }
 
 static void Init_IBLData()
@@ -894,6 +926,11 @@ static void Init_IBLData()
     pass->ibl.irradiance_convulution_shader = Shader_CompileFromFile("src/render/shaders/cubemap/cubemap.vert", "src/render/shaders/cubemap/irradiance_convolution.frag", NULL);
     pass->ibl.prefilter_cubemap_shader = Shader_CompileFromFile("src/render/shaders/cubemap/cubemap.vert", "src/render/shaders/cubemap/prefilter_cubemap.frag", NULL);
     pass->ibl.brdf_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/brdf.frag", NULL);
+    pass->ibl.sky_compute_shader = Shader_CompileFromFile("src/render/shaders/cubemap/cubemap.vert", "src/render/shaders/cubemap/sky_compute.frag", NULL);
+    
+    glUseProgram(pass->ibl.sky_compute_shader);
+    Shader_SetInteger(pass->ibl.sky_compute_shader, "noise_texture", 0);
+    Shader_SetInteger(pass->ibl.sky_compute_shader, "night_texture", 1);
 
     glGenFramebuffers(1, &pass->ibl.FBO);
     glGenRenderbuffers(1, &pass->ibl.RBO);
@@ -901,6 +938,7 @@ static void Init_IBLData()
     glGenTextures(1, &pass->ibl.prefilteredCubemapTexture);
     glGenTextures(1, &pass->ibl.irradianceCubemapTexture);
     glGenTextures(1, &pass->ibl.brdfLutTexture);
+    glGenTextures(1, &pass->ibl.nightTexture);
 
     glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.envCubemapTexture);
     for (unsigned int i = 0; i < 6; ++i)
@@ -949,6 +987,17 @@ static void Init_IBLData()
     glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 512, 512);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, pass->ibl.RBO);
+
+    glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.nightTexture);
+    for (unsigned int i = 0; i < 6; ++i)
+    {
+        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F, 512, 512, 0, GL_RGB, GL_FLOAT, NULL);
+    }
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
     CheckBoundFrameBufferStatus("IBL");
 
@@ -1037,6 +1086,47 @@ static void Init_ShadowMappingData()
     pass->shadow.shadow_map_size = SHADOW_MAP_SIZE;
 }
 
+static void Init_WaterData()
+{
+    glGenFramebuffers(1, &pass->water.reflection_fbo);
+
+    glGenTextures(1, &pass->water.reflection_texture);
+    glGenRenderbuffers(1, &pass->water.reflection_rbo);
+
+    glBindTexture(GL_TEXTURE_2D, pass->water.reflection_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    
+    glBindRenderbuffer(GL_RENDERBUFFER, pass->water.reflection_rbo);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, INIT_WIDTH, INIT_HEIGHT);
+    
+    glBindFramebuffer(GL_FRAMEBUFFER, pass->water.reflection_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->water.reflection_texture, 0);
+    
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, pass->water.reflection_rbo);
+
+    CheckBoundFrameBufferStatus("Reflection");
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+}
+
+static void Init_GodrayData()
+{
+    pass->godray.shader = ComputeShader_CompileFromFile("src/render/shaders/screen/godray.comp");
+
+    glGenTextures(1, &pass->godray.godray_fog_texture);
+
+    glBindTexture(GL_TEXTURE_2D, pass->godray.godray_fog_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+}
 
 static void Init_PassData()
 {
@@ -1050,6 +1140,8 @@ static void Init_PassData()
     Init_DofData();
     Init_IBLData();
     Init_ShadowMappingData();
+    Init_WaterData();
+    Init_GodrayData();
 }
 
 static void Init_SceneData()
@@ -1061,10 +1153,10 @@ static void Init_SceneData()
     glGenBuffers(1, &scene.light_nodes_ssbo);
 
     glBindBuffer(GL_UNIFORM_BUFFER, scene.camera_ubo);
-    glBufferData(GL_UNIFORM_BUFFER, sizeof(R_SceneCameraData), NULL, GL_STREAM_DRAW);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(RScene_CameraData), NULL, GL_STREAM_DRAW);
 
     glBindBuffer(GL_UNIFORM_BUFFER, scene.scene_ubo);
-    glBufferData(GL_UNIFORM_BUFFER, sizeof(R_SceneData), NULL, GL_DYNAMIC_DRAW);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(RScene_UBOData), NULL, GL_DYNAMIC_DRAW);
 
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.cluster_items_ssbo);
     glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(scene.clusters_data.light_grid), NULL, GL_DYNAMIC_DRAW);
@@ -1076,7 +1168,10 @@ static void Init_SceneData()
     glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(scene.clusters_data.frustrum_culled_lights), NULL, GL_DYNAMIC_DRAW);
 
     scene.clusters_data.light_tree = AABB_Tree_Create();
+   // scene.cull_data.dynamic_partition_tree = BVH_Tree_Create(0.5);
+    scene.cull_data.static_partition_tree = BVH_Tree_Create(0.0);
 
+    scene.render_instances_pool = Object_Pool_INIT(RenderInstance, 0);
 
     //Init scene defaults
     scene.scene_data.heightFogMin = 30;
@@ -1099,6 +1194,26 @@ static void Init_SceneData()
     scene.scene_data.dirLightSpecularIntensity = 24;
 
     scene.scene_data.ambientLightInfluence = 1.0;
+
+    scene.scene_environment.sky_color[0] = 0.0;
+    scene.scene_environment.sky_color[1] = 0.6;
+    scene.scene_environment.sky_color[2] = 1.0;
+
+    scene.scene_environment.sky_horizon_color[0] = 0.6;
+    scene.scene_environment.sky_horizon_color[1] = 0.6;
+    scene.scene_environment.sky_horizon_color[2] = 0.8;
+
+    scene.scene_environment.ground_bottom_color[0] = 0.8;
+    scene.scene_environment.ground_bottom_color[1] = 0.8;
+    scene.scene_environment.ground_bottom_color[2] = 0.8;
+
+    scene.scene_environment.ground_horizon_color[0] = 0.4;
+    scene.scene_environment.ground_horizon_color[1] = 0.4;
+    scene.scene_environment.ground_horizon_color[2] = 0.6;
+
+  
+    float sky_curve = 0.15;
+    float ground_curve = 0.02;
 }
 
 static bool _initRenderThread()
@@ -1140,11 +1255,14 @@ static void Init_StorageBuffers()
 
     storage.particle_emitter_clients = FL_INIT(ParticleEmitterSettings);
 
-    storage.point_lights_pool = Object_Pool_INIT(PointLight2, 1);
-
-    storage.instances = RSB_Create(100, sizeof(vec4), RSB_FLAG__RESIZABLE);
-    storage.point_lights = RSB_Create(100, sizeof(PointLight2), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE | RSB_FLAG__POOLABLE);
-    storage.texture_handles = RSB_Create(100, sizeof(GLuint64), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE | RSB_FLAG__POOLABLE);
+    storage.point_lights_pool = Object_Pool_INIT(PointLight2, 0);
+    storage.point_lights_backbuffer = dA_INIT(PointLight2, 0);
+    storage.spot_lights_pool = Object_Pool_INIT(SpotLight, 0);
+    storage.spot_lights_backbuffer = dA_INIT(SpotLight, 0);
+   
+    storage.spot_lights = RSB_Create(10000, sizeof(SpotLight), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE);
+    storage.point_lights = RSB_Create(10000, sizeof(PointLight2), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE);
+    storage.texture_handles = RSB_Create(1, sizeof(GLuint64), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE | RSB_FLAG__POOLABLE);
 }
 
 static void Init_RendererResources()
@@ -1217,7 +1335,7 @@ void Init_SetupGLBindingPoints()
     //0: POINT LIGHTS
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, storage.point_lights.buffer);
     //1: SPOT LIGHTS
-    //glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, storage.point_lights.buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, storage.spot_lights.buffer);
     //2: CLUSTER ITEMS
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, scene.cluster_items_ssbo);
     //3: LIGHT INDEXES
@@ -1227,8 +1345,7 @@ void Init_SetupGLBindingPoints()
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, scene.light_nodes_ssbo);
 
 
-    //7: INSTANCE DATA
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, storage.instances.buffer);
+
 
 }
 
@@ -1347,12 +1464,18 @@ void Renderer_Exit()
 {
     FL_Destruct(storage.particle_emitter_clients);
 
-    RSB_Destruct(&storage.instances);
+    RSB_Destruct(&storage.spot_lights);
     RSB_Destruct(&storage.point_lights);
     RSB_Destruct(&storage.texture_handles);
     
+    dA_Destruct(storage.point_lights_backbuffer);
+    dA_Destruct(storage.spot_lights_backbuffer);
     dA_Destruct(drawData->cube.vertices_buffer);
     dA_Destruct(drawData->particles.instance_buffer);
+
+    Object_Pool_Destruct(scene.render_instances_pool);
+    Object_Pool_Destruct(storage.point_lights_pool);
+    Object_Pool_Destruct(storage.spot_lights_pool);
 
     for (int i = 0; i < 4; i++)
     {
@@ -1364,6 +1487,12 @@ void Renderer_Exit()
     }
     dA_Destruct(drawData->lc_world.shadow_sorted_chunk_indexes);
     dA_Destruct(drawData->lc_world.shadow_sorted_chunk_transparent_indexes);
+
+    BVH_Tree_Destruct(&scene.cull_data.static_partition_tree);
+
+    //destroy shaders
+    Shader_Destruct(&pass->dof.shader);
+    Shader_Destruct(&pass->post.post_process_shader);
 
     //Mem clean up
     free(cmdBuffer->cmds_data);

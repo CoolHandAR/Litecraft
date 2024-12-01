@@ -14,6 +14,8 @@
 #include "core/cvar.h"
 #include "lc/lc_world.h"
 #include "utility/u_object_pool.h"
+#include "utility/BVH_Tree.h"
+#include "r_shader2.h"
 
 /*
 * ~~~~~~~~~~~~~~~~~~~~
@@ -212,7 +214,7 @@ typedef struct
 	unsigned vao, vbo, ebo;
 } RDraw_ScreenQuadData;
 
-#define LINE_VERTICES_BUFFER_SIZE 1024
+#define LINE_VERTICES_BUFFER_SIZE 2048
 
 typedef struct
 {
@@ -328,6 +330,7 @@ typedef struct
 	R_Shader transparents_shadow_map_shader;
 	R_Shader transparents_gBuffer_shader;
 	R_Shader water_shader;
+	R_Shader clip_distance_shader;
 } RPass_LCSpecificData;
 
 typedef struct
@@ -368,7 +371,7 @@ typedef struct
 typedef struct
 {
 	unsigned dof_texture;
-	R_Shader bohek_blur_shader;
+	RShader shader;
 } RPass_DOF;
 
 typedef struct
@@ -379,19 +382,42 @@ typedef struct
 	unsigned prefilteredCubemapTexture;
 	unsigned irradianceCubemapTexture;
 	unsigned brdfLutTexture;
+	unsigned nightTexture;
 	R_Shader equirectangular_to_cubemap_shader;
 	R_Shader irradiance_convulution_shader;
 	R_Shader prefilter_cubemap_shader;
 	R_Shader brdf_shader;
 	R_Shader single_image_cubemap_convert_shader;
+	R_Shader sky_compute_shader;
 
 	mat4 cube_view_matrixes[6];
 	mat4 cube_proj;
+
+	bool update_irradiance;
+	bool update_prefilter;
+	bool update_brdf;
 } RPass_IBL;
 
 typedef struct
 {
-	R_Shader triangle_3d_shader;
+	unsigned reflection_fbo;
+	unsigned reflection_texture;
+	unsigned reflection_rbo;
+
+	mat4 reflection_view_matrix;
+	mat4 reflection_projView_matrix;
+
+	vec2 reflection_size;
+} RPass_Water;
+
+typedef struct
+{
+	unsigned godray_fog_texture;
+	R_Shader shader;
+} RPass_Godray;
+
+typedef struct
+{
 	R_Shader box_blur_shader;
 	R_Shader upsample_shader;
 	R_Shader copy_shader;
@@ -401,12 +427,18 @@ typedef struct
 	unsigned halfsize_fbo;
 	unsigned depth_halfsize_texture;
 	unsigned normal_halfsize_texture;
+	unsigned perlin_noise_texture;
+	unsigned reflection_texture;
+	unsigned reflection_depth;
+	unsigned reflection_fbo;
+
+	mat4 reflection_matrix;
 }RPass_General;
 
 typedef struct
 {
-	R_Shader post_process_shader;
 	R_Shader debug_shader;
+	RShader post_process_shader;
 } RPass_ProcessData;
 
 #define SHADOW_CASCADE_LEVELS 4
@@ -440,6 +472,8 @@ typedef struct
 	RPass_IBL ibl;
 	RPass_ProcessData post;
 	RPass_ShadowMappingData shadow;
+	RPass_Water water;
+	RPass_Godray godray;
 } RPass_PassData;
 
 /*
@@ -530,6 +564,12 @@ typedef struct
 	Cvar* r_shadowBlurLevel; 
 	Cvar* r_shadowSplits;
 
+	//DOF
+	Cvar* r_DepthOfFieldMode; //0 == box, 1 == circular
+	Cvar* r_DepthOfFieldQuality;
+	Cvar* r_DepthOfFieldFar;
+	Cvar* r_DepthOfFieldNear;
+
 	//DEBUG
 	Cvar* r_drawDebugTexture; //-1 disabled, 0 = Normal, 1 = Albedo, 2 = Depth, 3 = Metal, 4 = Rough, 5 = AO, 6 = BLOOM
 	Cvar* r_wireframe;
@@ -574,7 +614,7 @@ typedef struct
 
 	float z_near;
 	float z_far;
-}R_SceneCameraData;
+}RScene_CameraData;
 
 //Must match GL struct
 typedef struct
@@ -609,10 +649,39 @@ typedef struct
 	int shadow_split_count;
 
 	mat4 shadow_matrixes[4];
-}R_SceneData;
+} RScene_UBOData;
+
+typedef struct
+{
+	vec3 sky_color;
+	vec3 sky_horizon_color;
+	vec3 ground_horizon_color;
+	vec3 ground_bottom_color;
+} RScene_Environment;
+
+typedef enum
+{
+	INST__NONE,
+	INST__SPOT_LIGHT,
+	INST__POINT_LIGHT,
+	INST__MESH,
+	INST__MAX
+} RenderInstanceType;
+
+typedef struct
+{
+	int instance_index;
+	int data_index;
+	BVH_ID bvh_id;
+	RenderInstanceType type;
+	bool dynamic;
+
+	vec3 box[2];
+} RenderInstance;
 
 #define MAX_CULL_QUERY_BUFFER_ITEMS 5000
 #define MAX_CULL_LC_SHADOW_QUERY_BUFFER_ITEMS 5000
+#define MAX_CULL_INSTANCES 10000
 typedef struct
 {
 	AABB_FrustrumCullQueryResult lc_world_frustrum_query_buffer[MAX_CULL_QUERY_BUFFER_ITEMS];
@@ -625,7 +694,12 @@ typedef struct
 
 	int lc_world_in_frustrum_count;
 
-} R_SceneCullData;
+	BVH_Tree static_partition_tree;
+	BVH_Tree dynamic_partition_tree;
+
+	int static_cull_instances_count;
+	int static_cull_instance_result[MAX_CULL_INSTANCES];
+} RScene_CullData;
 
 #define CLUSTERS_X 16
 #define CLUSTERS_Y 9
@@ -653,12 +727,16 @@ typedef struct
 
 typedef struct
 {
-	R_SceneCameraData camera;
-	R_SceneData scene_data;
+	RScene_CameraData camera;
 
-	R_SceneCullData cull_data;
+	RScene_UBOData scene_data;
+	RScene_CullData cull_data;
+
+	RScene_Environment scene_environment;
 
 	R_ClustersData clusters_data;
+
+	Object_Pool* render_instances_pool;
 
 	unsigned camera_ubo;
 	unsigned scene_ubo;
@@ -713,9 +791,14 @@ typedef struct
 	FL_Head* particle_emitter_clients;
 
 	Object_Pool* point_lights_pool;
-	
-	RenderStorageBuffer instances;
+	Object_Pool* spot_lights_pool;
+
+	dynamic_array* point_lights_backbuffer;
+	dynamic_array* spot_lights_backbuffer;
+
 	RenderStorageBuffer point_lights;
+	RenderStorageBuffer spot_lights;
+
 	DynamicRenderBuffer mesh_vertices;
 	DynamicRenderBuffer mesh_indices;
 	RenderStorageBuffer materials;
@@ -730,9 +813,9 @@ typedef struct
 	r_internal.c
 * ~~~~~~~~~~~~~~~~~~~
 */
-void RInternal_UpdatePostProcessShader(bool p_recompile);
 void RInternal_UpdateDeferredShadingShader(bool p_recompile);
 void RInternal_GetShadowQualityData(int p_qualityLevel, int p_blurLevel, float* r_shadowMapSize, float* r_kernels, int* r_numKernels, float* r_qualityRadius);
+void RInternal_ProcessIBLCubemap(bool p_fast, bool p_irradiance, bool p_prefilter, bool p_brdf);
 
 /*
 * ~~~~~~~~~~~~~~~~~~~~
@@ -748,6 +831,7 @@ typedef enum
 	RPass__SHADOW_MAPPING_SPLIT2,
 	RPass__SHADOW_MAPPING_SPLIT3,
 	RPass__SHADOW_MAPPING_SPLIT4,
+	RPass__REFLECTION_CLIP,
 	RPass__DEBUG_PASS,
 } RenderPassState;
 

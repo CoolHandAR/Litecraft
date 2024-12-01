@@ -1,5 +1,8 @@
 #include "r_core.h"
 
+#include "core/core_common.h"
+#include "render/shaders/shader_info.h"
+
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Performs all the passes that make up the scene
@@ -16,7 +19,6 @@ extern void Render_SemiOpaqueScene(RenderPassState rpass_state);
 extern void Render_Quad();
 extern void Render_Cube();
 extern void Render_SimpleScene();
-extern void Render_Particles();
 extern void Render_DrawChunkOcclusionBoxes();
 extern void Render_UI();
 extern void Render_WorldWaterChunks();
@@ -27,6 +29,14 @@ static void Pass_GetRoundedDispatchGroupsForScreen(float p_x, float p_y, float p
 {
 	*r_x = ceilf(p_x / p_xLocal);
 	*r_y = ceilf(p_y / p_yLocal);
+}
+
+static void Pass_DispatchScreenCompute(float p_width, float p_height, float p_xLocal, float p_yLocal)
+{
+	GLuint x = ceilf(p_width / p_xLocal);
+	GLuint y = ceilf(p_height / p_yLocal);
+
+	glDispatchCompute(x, y, 1);
 }
 
 
@@ -239,23 +249,113 @@ static void Pass_BloomTextureSample()
 
 static void Pass_DepthOfField()
 {
-	//Incorrect depth of field implementation, but pretty fast
-
 	if (!r_cvars.r_useDepthOfField->int_value)
 		return;
-
-	glUseProgram(pass->general.box_blur_shader);
 	
-	glBindTextureUnit(0, pass->scene.MainSceneColorBuffer);
+	//CIRCLE OF CONFUSION PASS. Store near and far depths in scene's alpha channel 
+	Shader_ResetDefines(&pass->dof.shader);
+
+	Shader_SetDefine(&pass->dof.shader, DOF_DEFINE_COC_PASS, true);
+	Shader_Use(&pass->dof.shader);
+
+	Shader_SetFloat2(&pass->dof.shader, DOF_UNIFORM_VIEWPORTSIZE, backend_data->screenSize[0], backend_data->screenSize[1]);
+	Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_BLUR_SIZE, 8.0);
+
+	glBindTextureUnit(0, pass->deferred.depth_texture);
+	glBindImageTexture(0, pass->scene.MainSceneColorBuffer, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16F);
+	Pass_DispatchScreenCompute(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8);
+
+	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+	Shader_ResetDefines(&pass->dof.shader);
+	
+	int quality = (r_cvars.r_DepthOfFieldQuality->int_value);
+	bool use_circle_blur = (r_cvars.r_DepthOfFieldMode->int_value == 1);
+	bool composite_pass = false;
+
+	glBindTextureUnit(1, pass->scene.MainSceneColorBuffer);
 	glBindImageTexture(0, pass->dof.dof_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
-	Shader_SetInteger(pass->general.box_blur_shader, "u_size", 6);
 
-	unsigned dispatch_x = 1;
-	unsigned dispatch_y = 1;
-	Pass_GetRoundedDispatchGroupsForScreen(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8, &dispatch_x, &dispatch_y);
+	//BLURRING PASS. Use the circle of confusion from scene's alpha texture to blur into a blurred texture
+	if (use_circle_blur)
+	{
+		composite_pass = true;
 
-	glDispatchCompute(dispatch_x, dispatch_y, 1);
+		static const float blur_scales[2] = { 8.0, 1.0 };
+
+		float scale = blur_scales[quality];
+
+		Shader_SetDefine(&pass->dof.shader, DOF_DEFINE_BOKEH_CIRCULAR, true);
+
+		Shader_Use(&pass->dof.shader);
+
+		Shader_SetFloat2(&pass->dof.shader, DOF_UNIFORM_VIEWPORTSIZE, backend_data->halfScreenSize[0], backend_data->halfScreenSize[1]);
+		Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_BLUR_SCALE, scale);
+		Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_BLUR_SIZE, 8.0);
+	
+		Pass_DispatchScreenCompute(backend_data->halfScreenSize[0], backend_data->halfScreenSize[1], 8, 8);
+	}
+	else
+	{
+		static const int blur_steps[2] = {6, 24};
+
+		int steps = blur_steps[quality];
+
+		//box blur
+		Shader_SetDefine(&pass->dof.shader, DOF_DEFINE_BOKEH_BOX, true);
+		Shader_Use(&pass->dof.shader);
+		
+		//first pass
+		Shader_SetInt(&pass->dof.shader, DOF_UNIFORM_SECOND_PASS, false);
+		Shader_SetFloat2(&pass->dof.shader, DOF_UNIFORM_VIEWPORTSIZE, backend_data->screenSize[0], backend_data->screenSize[1]);
+		Shader_SetInt(&pass->dof.shader, DOF_UNIFORM_BLUR_STEPS, steps);
+		Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_BLUR_SIZE, 8.0);
+
+		Pass_DispatchScreenCompute(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8);
+
+		glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+		//second pass
+		Shader_SetInt(&pass->dof.shader, DOF_UNIFORM_SECOND_PASS, true);
+		glBindTextureUnit(1, pass->dof.dof_texture);
+		glBindImageTexture(0, pass->scene.MainSceneColorBuffer, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+
+		Pass_DispatchScreenCompute(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8);
+	}
+		
+	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+	
+	if (composite_pass)
+	{
+		//COMPOSITE PASS. Combine scene's texture with the blurred texture
+		Shader_ResetDefines(&pass->dof.shader);
+
+		Shader_SetDefine(&pass->dof.shader, DOF_DEFINE_COMPOSITE, true);
+		Shader_Use(&pass->dof.shader);
+		Shader_SetFloat2(&pass->dof.shader, DOF_UNIFORM_VIEWPORTSIZE, backend_data->screenSize[0], backend_data->screenSize[1]);
+
+		glBindTextureUnit(2, pass->dof.dof_texture);
+		glBindImageTexture(0, pass->scene.MainSceneColorBuffer, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16F);
+		Pass_DispatchScreenCompute(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8);
+	}
 }
+
+static void Pass_Godrays()
+{
+	glUseProgram(pass->godray.shader);
+
+	Shader_SetInteger(pass->godray.shader, "depth_texture", 0);
+	Shader_SetInteger(pass->godray.shader, "shadowMapsDepth", 1);
+	Shader_SetVector2f(pass->godray.shader, "u_viewportSize", backend_data->screenSize[0], backend_data->screenSize[1]);
+
+	glBindTextureUnit(0, pass->deferred.depth_texture);
+	glBindTextureUnit(1, pass->shadow.depth_maps);
+
+	glBindImageTexture(0, pass->godray.godray_fog_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+	glDispatchCompute(backend_data->screenSize[0] / 8, backend_data->screenSize[1] / 8, 1);
+	
+}
+
 
 static void Pass_deferredShading()
 {
@@ -269,7 +369,7 @@ static void Pass_deferredShading()
 	//use shader
 	glUseProgram(pass->deferred.shading_shader);
 
-	//Shader_SetInteger(pass->deferred.shading_shader, "u_maxLightCount", scene.clusters_data.culled_light_count);
+	bool use_simple_cubemap_for_reflection = true;
 
 	//setup textures
 	glBindTextureUnit(0, pass->deferred.gNormalMetal_texture);
@@ -281,7 +381,7 @@ static void Pass_deferredShading()
 	//IBL Textures
 	glBindTextureUnit(5, pass->ibl.brdfLutTexture);
 	glBindTextureUnit(6, pass->ibl.irradianceCubemapTexture);
-	glBindTextureUnit(7, pass->ibl.prefilteredCubemapTexture);
+	glBindTextureUnit(7, (use_simple_cubemap_for_reflection) ? pass->ibl.envCubemapTexture : pass->ibl.prefilteredCubemapTexture);
 
 	//draw quad
 	Render_Quad();
@@ -289,10 +389,65 @@ static void Pass_deferredShading()
 	glEnable(GL_DEPTH_TEST);
 }
 
+static void Pass_ProcessCubemap()
+{
+	glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
+	glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
+	glViewport(0, 0, 512, 512);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 512, 512);
+
+	glUseProgram(pass->ibl.sky_compute_shader);
+	glBindTextureUnit(0, pass->general.perlin_noise_texture);
+	glBindTextureUnit(1, pass->ibl.nightTexture);
+	Shader_SetMatrix4(pass->ibl.sky_compute_shader, "u_proj", pass->ibl.cube_proj);
+
+	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_skyColor", scene.scene_environment.sky_color);
+	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_skyHorizonColor", scene.scene_environment.sky_horizon_color);
+	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_groundHorizonColor", scene.scene_environment.ground_horizon_color);
+	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_groundColor", scene.scene_environment.ground_bottom_color);
+
+	static float time = 0;
+	time += Core_getDeltaTime();
+
+	Shader_SetFloat(pass->ibl.sky_compute_shader, "u_time", time);
+	for (int i = 0; i < 6; i++)
+	{
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.envCubemapTexture, 0);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+		Shader_SetMatrix4(pass->ibl.sky_compute_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
+		Render_Cube();
+	}
+	static bool dirty = true;
+	if(dirty)
+	{
+		RInternal_ProcessIBLCubemap(false, true, true, true);
+		dirty = false;
+	}
+	else
+	{
+		RInternal_ProcessIBLCubemap(true, true, false, false);
+	}
+	if (pass->ibl.update_brdf || pass->ibl.update_irradiance || pass->ibl.update_prefilter)
+	{
+		RInternal_ProcessIBLCubemap(false, pass->ibl.update_irradiance, pass->ibl.update_prefilter, pass->ibl.update_brdf);
+
+		pass->ibl.update_brdf = false;
+		pass->ibl.update_irradiance = false;
+		pass->ibl.update_prefilter = false;
+	}
+
+	//RESET VIEWPROT
+	glViewport(0, 0, backend_data->screenSize[0], backend_data->screenSize[1]);
+}
+
 static void Pass_Skybox()
 {
 	if (!r_cvars.r_drawSky->int_value)
 		return;
+
+	Pass_ProcessCubemap();
+	glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
 
 	mat4 view_no_translation;
 	glm_mat4_identity(view_no_translation);
@@ -302,16 +457,6 @@ static void Pass_Skybox()
 	view_no_translation[2][1] = scene.camera.view[2][1];
 	view_no_translation[2][2] = scene.camera.view[2][2];
 	view_no_translation[2][3] = scene.camera.view[2][3];
-
-	static float rotation = 0;
-	rotation += 0.000001 * Core_getDeltaTime();
-
-	vec3 axis;
-	axis[0] = 0;
-	axis[1] = 1;
-	axis[2] = 0;
-
-	glm_rotate(view_no_translation, glm_deg(rotation), axis);
 
 	glUseProgram(pass->scene.skybox_shader);
 	Shader_SetMatrix4(pass->scene.skybox_shader, "u_proj", scene.camera.proj);
@@ -323,7 +468,7 @@ static void Pass_Skybox()
 	glDepthMask(GL_FALSE);
 
 	Render_Cube();
-
+	
 	glDepthFunc(GL_LESS);
 	glDepthMask(GL_TRUE);
 }
@@ -340,6 +485,9 @@ static void Pass_Transparents()
 	//Render other objects
 	//render water
 	glDisable(GL_CULL_FACE);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+	glDepthMask(GL_FALSE);
 	Render_WorldWaterChunks();
 
 
@@ -354,7 +502,55 @@ static void Pass_Transparents()
 
 }
 
-void Pass_OcclussionBoxes()
+static void Pass_ReflectionTexture()
+{
+	R_Camera* cam = Camera_getCurrent();
+
+	if (!cam)
+	{
+		return;
+	}
+
+	glBindFramebuffer(GL_FRAMEBUFFER, pass->water.reflection_fbo);
+	glBindRenderbuffer(GL_RENDERBUFFER, pass->water.reflection_rbo);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	mat4 view_no_translation;
+	glm_mat4_identity(view_no_translation);
+	glm_mat3_make(pass->water.reflection_view_matrix, view_no_translation);
+
+	view_no_translation[2][0] = pass->water.reflection_view_matrix[2][0];
+	view_no_translation[2][1] = pass->water.reflection_view_matrix[2][1];
+	view_no_translation[2][2] = pass->water.reflection_view_matrix[2][2];
+	view_no_translation[2][3] = pass->water.reflection_view_matrix[2][3];
+
+	glUseProgram(pass->scene.skybox_shader);
+	Shader_SetMatrix4(pass->scene.skybox_shader, "u_proj", scene.camera.proj);
+	Shader_SetMatrix4(pass->scene.skybox_shader, "u_view", view_no_translation);
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.envCubemapTexture);
+	glDepthFunc(GL_LEQUAL);
+	glDepthMask(GL_FALSE);
+
+	Render_Cube();
+
+	glDepthFunc(GL_LESS);
+	glDepthMask(GL_TRUE);
+
+
+	glEnable(GL_CLIP_DISTANCE0);
+	//glViewport(0, 0, backend_data->screenSize[0] / 4, backend_data->screenSize[1] / 4);
+
+	Render_OpaqueScene(RPass__REFLECTION_CLIP);
+
+	glDisable(GL_CLIP_DISTANCE0);
+
+	//glViewport(0, 0, backend_data->screenSize[0], backend_data->screenSize[1]);
+	glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
+}
+
+static void Pass_OcclussionBoxes()
 {
 	glUseProgram(pass->lc.occlussion_boxes_shader);
 	glDisable(GL_CULL_FACE); //always disable cull face, causes lots of issues otherwise
@@ -392,7 +588,7 @@ static void Pass_PostProcess()
 		glBindTextureUnit(1, pass->deferred.gColorRough_texture);
 		glBindTextureUnit(2, pass->deferred.depth_texture);
 		glBindTextureUnit(3, pass->ao.ao_texture);
-		glBindTextureUnit(4, pass->bloom.mip_textures[0]);
+		glBindTextureUnit(4, pass->godray.godray_fog_texture);
 	}
 	//Normal post process pass
 	else
@@ -402,8 +598,21 @@ static void Pass_PostProcess()
 		glBindTextureUnit(0, pass->deferred.depth_texture);
 		glBindTextureUnit(1, pass->scene.MainSceneColorBuffer);
 		glBindTextureUnit(2, pass->bloom.mip_textures[0]);
-		glBindTextureUnit(3, pass->dof.dof_texture);
-		glUseProgram(pass->post.post_process_shader);
+
+		Shader_SetDefine(&pass->post.post_process_shader, POST_PROCESS_DEFINE_USE_FXAA, r_cvars.r_useFxaa->int_value);
+		Shader_SetDefine(&pass->post.post_process_shader, POST_PROCESS_DEFINE_USE_BLOOM, r_cvars.r_useBloom->int_value);
+		Shader_SetDefine(&pass->post.post_process_shader, POST_PROCESS_DEFINE_USE_REINHARD_TONEMAP, r_cvars.r_TonemapMode->int_value == 0);
+		Shader_SetDefine(&pass->post.post_process_shader, POST_PROCESS_DEFINE_USE_UNCHARTED2_TONEMAP, r_cvars.r_TonemapMode->int_value == 1);
+		Shader_SetDefine(&pass->post.post_process_shader, POST_PROCESS_DEFINE_USE_ACES_TONEMAP, r_cvars.r_TonemapMode->int_value == 2);
+
+		Shader_Use(&pass->post.post_process_shader);
+		
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_BLOOMSTRENGTH, r_cvars.r_bloomStrength->float_value);
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_CONTRAST, r_cvars.r_Contrast->float_value);
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_SATURATION, r_cvars.r_Saturation->float_value);
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_BRIGHTNESS, r_cvars.r_Brightness->float_value);
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_GAMMA, r_cvars.r_Gamma->float_value);
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_EXPOSURE, r_cvars.r_Exposure->float_value);
 	}
 	glDisable(GL_DEPTH_TEST);
 	glDisable(GL_BLEND);
@@ -460,6 +669,9 @@ void Pass_Main()
 	//Render boxes for oclussion culling
 	Pass_OcclussionBoxes();
 
+	//Render reflection texture
+	Pass_ReflectionTexture();
+
 	//Render all transparent objects
 	Pass_Transparents();
 
@@ -471,8 +683,11 @@ void Pass_Main()
 	
 	glDisable(GL_CULL_FACE);
 	glDisable(GL_BLEND);
+
 	//Blur the main scene buffer for Depth of field effects
 	Pass_DepthOfField();
+
+	Pass_Godrays();
 
 	//Bind to the default framebuffer
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);

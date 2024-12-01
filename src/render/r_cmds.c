@@ -989,6 +989,24 @@ static void Process_CameraUpdate()
 
     scene.camera.screen_size[0] = backend_data->screenSize[0];
     scene.camera.screen_size[1] = backend_data->screenSize[1];
+
+
+    bool process_reflection_matrix = true;
+    if (process_reflection_matrix)
+    {
+        R_Camera reflection_camera = *cam;
+        reflection_camera.data.position[1] -= 2 * (reflection_camera.data.position[1] - 12);
+        reflection_camera.data.pitch *= -1;
+        reflection_camera.data.camera_up[1] = -1;
+        Camera_updateFront(&reflection_camera);
+
+        static const vec3 up = { 0, -1, 0 };
+
+        vec3 center;
+        glm_vec3_add(reflection_camera.data.position, reflection_camera.data.camera_front, center);
+        glm_lookat(reflection_camera.data.position, center, up, pass->water.reflection_view_matrix);
+        glm_mat4_mul(scene.camera.proj, pass->water.reflection_view_matrix, pass->water.reflection_projView_matrix);
+    }
 }
 
 static void Process_CalcShadowSplits(vec4 dest, float p_minZ, float p_maxZ, float p_splitLambda, int splits)
@@ -1060,10 +1078,16 @@ static void Process_CalcShadowMatrixes()
     split_distances[3] = scene.scene_data.shadow_splits[2];
     split_distances[4] = scene.scene_data.shadow_splits[3];
 
+    vec3 light_dir;
+    light_dir[0] = scene.scene_data.dirLightDirection[0];
+    light_dir[1] = scene.scene_data.dirLightDirection[1];
+    light_dir[2] = scene.scene_data.dirLightDirection[2];
+    glm_vec3_normalize(light_dir);
+
     vec3 negative_look_at;
-    negative_look_at[0] = -scene.scene_data.dirLightDirection[0];
-    negative_look_at[1] = -scene.scene_data.dirLightDirection[1];
-    negative_look_at[2] = -scene.scene_data.dirLightDirection[2];
+    negative_look_at[0] = -light_dir[0];
+    negative_look_at[1] = -light_dir[1];
+    negative_look_at[2] = -light_dir[2];
 
     vec3 up;
     glm_vec3_zero(up);
@@ -1151,9 +1175,9 @@ static void Process_CalcShadowMatrixes()
 
         //calculate the light view matrix
         vec3 eye;
-        eye[0] = frustrum_center[0] + (scene.scene_data.dirLightDirection[0] * radius);
-        eye[1] = frustrum_center[1] + (scene.scene_data.dirLightDirection[1] * radius);
-        eye[2] = frustrum_center[2] + (scene.scene_data.dirLightDirection[2] * radius);
+        eye[0] = frustrum_center[0] + (light_dir[0] * radius);
+        eye[1] = frustrum_center[1] + (light_dir[1] * radius);
+        eye[2] = frustrum_center[2] + (light_dir[2] * radius);
         
         mat4 lightView;
         glm_lookat(eye, frustrum_center, up, lightView);
@@ -1203,9 +1227,56 @@ static void Process_CalcShadowMatrixes()
 
 }
 
+static void Process_CullRegisterHit(const void* _data, BVH_ID _index)
+{
+    scene.cull_data.static_cull_instance_result[scene.cull_data.static_cull_instances_count] = _data;
+
+    scene.cull_data.static_cull_instances_count++;
+}
+
 //#define CULL_SHADOWS_PLANES
 static void Process_CullScene()
 {
+    scene.cull_data.static_cull_instances_count = 0;
+    scene.scene_data.numPointLights = 0;
+    scene.scene_data.numSpotLights = 0;
+
+    dA_clear(storage.point_lights_backbuffer);
+    dA_clear(storage.spot_lights_backbuffer);
+
+    //Cull scene
+    int static_cull_count = BVH_Tree_Cull_Planes(&scene.cull_data.static_partition_tree, scene.camera.frustrum_planes, 6, 1000, Process_CullRegisterHit);
+
+    //printf("%i \n", static_cull_count);
+
+   // static_cull_count = 0;
+
+
+    for (int i = 0; i < static_cull_count; i++)
+    {
+        int instance_index = scene.cull_data.static_cull_instance_result[i];
+
+        RenderInstance* instance = dA_at(scene.render_instances_pool->pool, instance_index);
+
+        if (instance->type == INST__POINT_LIGHT)
+        {
+            PointLight2* point_light = dA_at(storage.point_lights_pool->pool, instance->data_index);
+
+            scene.scene_data.numPointLights++;
+
+            dA_emplaceBackData(storage.point_lights_backbuffer, point_light);
+        }
+        else if (instance->type == INST__SPOT_LIGHT)
+        {
+            SpotLight* spot_light = dA_at(storage.spot_lights_pool->pool, instance->data_index);
+
+            scene.scene_data.numSpotLights++;
+
+            dA_emplaceBackData(storage.spot_lights_backbuffer, spot_light);
+        }
+    }
+
+
     //Cull lc world chunks
     if (drawData->lc_world.draw && drawData->lc_world.world_render_data)
     {
@@ -1217,6 +1288,9 @@ static void Process_CullScene()
                 MAX_CULL_QUERY_BUFFER_ITEMS, scene.cull_data.lc_world_frustrum_query_buffer, scene.cull_data.lc_world_frustrum_sorted_query_buffer, NULL);
 
             drawData->lc_world.world_render_data->chunks_in_frustrum_count = scene.cull_data.lc_world_in_frustrum_count;
+
+           // scene.cull_data.lc_world_in_frustrum_count = 1000;
+            //drawData->lc_world.world_render_data->chunks_in_frustrum_count = 1000;
         }
         
         //cull chunks in shadow

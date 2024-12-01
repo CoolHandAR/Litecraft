@@ -4,6 +4,7 @@ layout(location = 0) out vec4 FragColor;
 in vec3 WorldPos;
 
 uniform samplerCube environmentMap;
+uniform float u_sampleDelta = 0.025;
 
 const float PI = 3.14159265359;
 
@@ -23,7 +24,7 @@ void main()
     vec3 right = normalize(cross(up, N));
     up         = normalize(cross(N, right));
        
-    float sampleDelta = 0.025;
+    float sampleDelta = u_sampleDelta;
     float nrSamples = 0.0;
     for(float phi = 0.0; phi < 2.0 * PI; phi += sampleDelta)
     {

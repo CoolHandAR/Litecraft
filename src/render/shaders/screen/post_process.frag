@@ -10,7 +10,6 @@ in vec2 TexCoords;
 uniform sampler2D depth_texture;
 uniform sampler2D MainSceneTexture;
 uniform sampler2D BloomSceneTexture;
-uniform sampler2D DofSceneTexture;
 
 uniform float u_Gamma;
 uniform float u_Exposure = 0.6;
@@ -106,24 +105,21 @@ vec3 tonemapColor(vec3 color)
     return color;
 }
 
+vec3 linear_to_srgb(vec3 color) { // convert linear rgb to srgb, assumes clamped input in range [0;1]
+	const vec3 a = vec3(0.055f);
+	return mix((vec3(1.0f) + a) * pow(color.rgb, vec3(1.0f / 2.4f)) - a, 12.92f * color.rgb, lessThan(color.rgb, vec3(0.0031308f)));
+}
 vec3 applyBloom(vec2 coords, vec3 color, float strength)
 {
     vec3 bloom_color = texture(BloomSceneTexture, coords).rgb;
 
-    return mix(color, bloom_color, strength);
-}
-vec3 applyDepthOfField(float view_depth, vec2 coords, vec3 color, float strength, float focus_intensity, float minDist, float maxDist)
-{
-    vec3 dof_color = texture(DofSceneTexture, coords).rgb;
-    float focus_depth = 0;
-    if(focus_intensity > 0)
-    {
-        focus_depth = depthToViewSpace(depth_texture, cam.invProj, vec2(0.5)) * focus_intensity;
-    }
+    vec3 out_color = mix(color, bloom_color, strength);
+    //vec3 out_color = vec3(0.0);
 
-    float blur = smoothstep(minDist, maxDist, abs(view_depth - focus_depth));
+    //out_color.rgb = clamp(color.rgb, vec3(0.0f), vec3(1.0f));
+	//out_color.rgb = max((color.rgb + bloom_color.rgb) - (color.rgb * bloom_color.rgb), vec3(0.0));
 
-    return mix(color, dof_color, blur);
+    return out_color;
 }
 
 vec3 applyBrightnessContrastSaturation(vec3 color, float brightness, float contrast, float saturation)
@@ -255,7 +251,7 @@ void main()
     scene_color = applyFXAA(scene_color, u_Exposure);
 #endif
 
-#if defined(USE_DEPTH_OF_FIELD) || defined(USE_FOG)
+#if defined(USE_FOG)
     float view_space_depth = depthToViewSpace(depth_texture, cam.invProj, TexCoords);
 #endif
     //FOG
@@ -265,14 +261,10 @@ void main()
     //BLOOM
     scene_color = applyBloom(TexCoords, scene_color, u_BloomStrength);
 #endif
-
-#ifdef USE_DEPTH_OF_FIELD
-    //DEPTH OF FIELD
-    scene_color = applyDepthOfField(view_space_depth, TexCoords, scene_color, 1.0, 1.0, 10, 50);
-#endif
     
     //TONEMAP
     scene_color = tonemapColor(scene_color);
+
 
     //BCS
     scene_color = applyBrightnessContrastSaturation(scene_color, u_Brightness, u_Contrast, u_Saturation);

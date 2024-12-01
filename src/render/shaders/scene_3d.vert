@@ -134,7 +134,7 @@ void main()
      matrix[3].xyz = position;
    
      vec3 up = vec3(0.0, 1.0, 0.0);
-     vec3 dirLightDirection = normalize(scene.dirLightDirection.xyz);
+     vec3 dirLightDirection = normalize(-scene.dirLightDirection.xyz);
      mat3 local = mat3(normalize(cross(up, dirLightDirection)), up, dirLightDirection);
      //Rotate the matrix so that it will always face the dir light direction
      //this allows our shadows to always look flat and ignore stuff like billboarding

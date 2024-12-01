@@ -7,6 +7,7 @@
 
 #include "r_core.h"
 #include "r_public.h"
+#include "core/core_common.h"
 
 extern RDraw_DrawData* drawData;
 extern R_RendererResources resources;
@@ -77,7 +78,9 @@ static void Render_TriangleBatch()
     if (data->vertices_count == 0)
         return;
 
-    glUseProgram(pass->general.triangle_3d_shader);
+    return;
+
+   // glUseProgram(pass->general.triangle_3d_shader);
 
     glBindTextures(0, 32, data->texture_ids);
 
@@ -104,7 +107,7 @@ static void Render_CubeInstances()
     glDrawArraysInstanced(GL_TRIANGLES, 0, 36, drawData->cube.instance_count);
 }
 
-void Render_Particles()
+static void Render_Particles()
 {
     RDraw_ParticleData* data = &drawData->particles;
 
@@ -251,7 +254,7 @@ void Render_WorldWaterChunks()
     glUseProgram(pass->lc.water_shader);
 
     static float time = 0;
-    time += 0.001 * Core_getDeltaTime();
+    time += 0.01 * Core_getDeltaTime();
     time = time - (int)time;
 
     Shader_SetFloat(pass->lc.water_shader, "u_moveFactor", time);
@@ -259,6 +262,13 @@ void Render_WorldWaterChunks()
     glBindTextureUnit(0, pass->ibl.envCubemapTexture);
     glBindTextureUnit(1, drawData->lc_world.world_render_data->texture_dudv->id);
     glBindTextureUnit(2, drawData->lc_world.world_render_data->water_normal_map->id);
+    glBindTextureUnit(3, pass->water.reflection_texture);
+    glBindTextureUnit(4, pass->scene.MainSceneColorBuffer);
+    glBindTextureUnit(5, pass->deferred.depth_texture);
+  //  glBindTextureUnit(6, drawData->lc_world.world_render_data->water_displacement_texture->id);
+   // glBindTextureUnit(7, drawData->lc_world.world_render_data->water_noise_texture_1->id);
+   // glBindTextureUnit(8, drawData->lc_world.world_render_data->water_noise_texture_2->id);
+    glBindTextureUnit(9, drawData->lc_world.world_render_data->gradient_map->id);
 
     glBindVertexArray(drawData->lc_world.world_render_data->water_vao);
     glBindBuffer(GL_ARRAY_BUFFER, drawData->lc_world.world_render_data->water_vertex_buffer.buffer);
@@ -416,6 +426,15 @@ void Render_OpaqueScene(RenderPassState rpass_state)
 
         break;
     }
+    case RPass__REFLECTION_CLIP:
+    {
+        glUseProgram(pass->lc.clip_distance_shader);
+        Shader_SetMatrix4(pass->lc.clip_distance_shader, "u_matrix", pass->water.reflection_projView_matrix);
+        Shader_SetFloat(pass->lc.clip_distance_shader, "u_clipDistance", -12);
+
+        Render_OpaqueWorldChunks(true, 0);
+        break;
+    }
     case RPass__DEBUG_PASS:
     {
         break;
@@ -424,6 +443,7 @@ void Render_OpaqueScene(RenderPassState rpass_state)
         break;
     }
 }
+
 void Render_SemiOpaqueScene(RenderPassState rpass_state)
 {
     bool allow_particle_shadows = (r_cvars.r_allowParticleShadows->int_value == 1);
@@ -431,12 +451,23 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
 
     const int MAX_PARTICLE_SHADOW_SPLITS = 1; //adjust if needed
 
+    static float delta = 0;
+    static uint64_t prev_tick = 0;
+
+    if (Core_getTicks() != prev_tick)
+    {
+        delta += Core_getDeltaTime() * 0.5;
+        prev_tick = Core_getTicks();
+    }
+  
+
     switch (rpass_state)
     {
     case RPass__DEPTH_PREPASS:
     {
         //Render world chunks
         glUseProgram(pass->lc.depthPrepass_semi_transparents_shader);
+        Shader_SetFloat(pass->lc.depthPrepass_semi_transparents_shader, "frameTimeCounter", delta);
         Render_SemiTransparentWorldChunks(true, 0);
 
 
@@ -450,7 +481,9 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
     case RPass__GBUFFER:
     {
         glUseProgram(pass->lc.transparents_gBuffer_shader);
+        Shader_SetFloat(pass->lc.transparents_gBuffer_shader, "frameTimeCounter", delta);
         Render_SemiTransparentWorldChunks(true, 0);
+        
 
         glUseProgram(drawData->particles.particle_gBuffer_shader);
         glDisable(GL_CULL_FACE);
@@ -464,6 +497,8 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
         glUseProgram(pass->lc.transparents_shadow_map_shader);
         Shader_SetMatrix4(pass->lc.transparents_shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[0]);
         Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_transparent_offsets[0] + shadow_data_offset);
+        Shader_SetFloat(pass->lc.transparents_shadow_map_shader, "frameTimeCounter", delta);
+        Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_enableWave", 1);
         Render_SemiTransparentWorldChunks(false, 1);
 
         if (allow_particle_shadows && MAX_PARTICLE_SHADOW_SPLITS >= 1)
@@ -480,6 +515,7 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
         glUseProgram(pass->lc.transparents_shadow_map_shader);
         Shader_SetMatrix4(pass->lc.transparents_shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[1]);
         Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_transparent_offsets[1] + shadow_data_offset);
+        Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_enableWave", 1);
         Render_SemiTransparentWorldChunks(false, 2);
 
         if (allow_particle_shadows && MAX_PARTICLE_SHADOW_SPLITS >= 2)
@@ -497,6 +533,7 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
         glUseProgram(pass->lc.transparents_shadow_map_shader);
         Shader_SetMatrix4(pass->lc.transparents_shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[2]);
         Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_transparent_offsets[2] + shadow_data_offset);
+        Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_enableWave", 0);
         Render_SemiTransparentWorldChunks(false, 3);
 
         //Render other transparent stuff
@@ -515,6 +552,7 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
         glUseProgram(pass->lc.transparents_shadow_map_shader);
         Shader_SetMatrix4(pass->lc.transparents_shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[3]);
         Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_transparent_offsets[3] + shadow_data_offset);
+        Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_enableWave", 0);
         Render_SemiTransparentWorldChunks(false, 4);
 
         //Render other transparent stuff

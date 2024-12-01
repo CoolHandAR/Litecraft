@@ -6,6 +6,7 @@ in vec3 WorldPos;
 
 uniform samplerCube environmentMap;
 uniform float u_roughness;
+uniform int u_sampleCount = 1024;
 
 const float PI = 3.14159265359;
 // ----------------------------------------------------------------------------

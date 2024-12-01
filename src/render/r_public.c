@@ -43,6 +43,48 @@ static void _copyToCmdBuffer(R_CMD p_cmdEnum, void* p_cmdData, unsigned int p_cm
 	cmdBuffer->cmds_counter++;
 }
 
+static void RScene_BoxTranslate(vec3 box[2], vec3 position, vec3 dest[2])
+{
+	glm_vec3_add(position, box[0], dest[0]);
+	glm_vec3_add(position, box[1], dest[1]);
+}
+
+static RenderInstance* RScene_RegisterInstance(RenderInstanceType p_type, bool p_dynamic)
+{
+	RenderInstanceID instance_id = Object_Pool_Request(scene.render_instances_pool);
+
+	RenderInstance* instance = dA_at(scene.render_instances_pool->pool, instance_id);
+
+	instance->instance_index = instance_id;
+	instance->type = p_type;
+	instance->dynamic = p_dynamic;
+	instance->bvh_id = -1;
+	
+	return instance;
+}
+
+static BVH_ID RScene_InstanceSetBVH(RenderInstance* const p_instance, vec3 position)
+{
+	if (p_instance->dynamic)
+	{
+
+	}
+	else
+	{
+		vec3 translated_box[2];
+		RScene_BoxTranslate(p_instance->box, position, translated_box);
+
+		BVH_ID partition_id = BVH_Tree_Insert(&scene.cull_data.static_partition_tree, translated_box, p_instance->instance_index);
+
+		p_instance->bvh_id = partition_id;
+
+		return partition_id;
+	}
+
+	return -1;
+}
+
+
 void Draw_ScreenTexture(R_Texture* p_texture, M_Rect2Df* p_textureRegion, float p_x, float p_y, float p_xScale, float p_yScale, float p_rotation)
 {
 	if (!p_texture)
@@ -308,57 +350,161 @@ void RScene_SetFog(FogSettings p_fog_settings)
 	scene.scene_data.depthFogCurve = p_fog_settings.depthFogCurve;
 }
 
-LightID RScene_RegisterPointLight(PointLight2 p_pointLight)
+RenderInstanceID RScene_RegisterPointLight(PointLight2 p_pointLight, bool p_dynamic)
 {
-	LightID lid = RSB_Request(&storage.point_lights);
-	LightID object_pool_id = Object_Pool_Request(storage.point_lights_pool);
+	RenderInstance* render_instance = RScene_RegisterInstance(INST__POINT_LIGHT, p_dynamic);
 
-	PointLight* ptr = dA_at(storage.point_lights_pool->pool, object_pool_id);
+	LightID light_id = Object_Pool_Request(storage.point_lights_pool);
 
-	assert(lid == object_pool_id);
-
-	const float maxBrightness = fmaxf(fmaxf(p_pointLight.color[0], p_pointLight.color[1]), p_pointLight.color[2]);
-	p_pointLight.radius = (-p_pointLight.linear + sqrt(p_pointLight.linear * p_pointLight.linear - 4 * p_pointLight.quadratic * (p_pointLight.constant - (256.0f / 5.0f) * maxBrightness))) / (2.0f * p_pointLight.quadratic);
-
-	glNamedBufferSubData(storage.point_lights.buffer, lid * sizeof(PointLight2), sizeof(PointLight2), &p_pointLight);
-
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, storage.point_lights.buffer);
-	scene.scene_data.numPointLights++;
-
+	PointLight2* ptr = dA_at(storage.point_lights_pool->pool, light_id);
 	memcpy(ptr, &p_pointLight, sizeof(PointLight2));
 
-	AABB aabb;
-	aabb.position[0] = p_pointLight.position[0] - (p_pointLight.radius * 0.5);
-	aabb.position[1] = p_pointLight.position[1] - (p_pointLight.radius * 0.5);
-	aabb.position[2] = p_pointLight.position[2] - (p_pointLight.radius * 0.5);
+	render_instance->data_index = light_id;
 
-	aabb.width = p_pointLight.radius;
-	aabb.height = p_pointLight.radius;
-	aabb.length = p_pointLight.radius;
+	float size = p_pointLight.radius;
 
-	AABB_Tree_Insert(&scene.clusters_data.light_tree, &aabb, lid);
+	render_instance->box[0][0] = -size;
+	render_instance->box[0][1] = -size;
+	render_instance->box[0][2] = -size;
 
-	return lid;
+	render_instance->box[1][0] = size;
+	render_instance->box[1][1] = size;
+	render_instance->box[1][2] = size;
+
+
+	RScene_InstanceSetBVH(render_instance, p_pointLight.position);
+
+	return render_instance->instance_index;
 }
 
-void RSCene_DeletePointLight(LightID p_lightID)
+RenderInstanceID RScene_RegisterSpotLight(SpotLight p_spotLight, bool p_dynamic)
 {
-	if (p_lightID > storage.point_lights.used_size)
+	RenderInstance* render_instance = RScene_RegisterInstance(INST__SPOT_LIGHT, p_dynamic);
+
+	LightID light_id = Object_Pool_Request(storage.spot_lights_pool);
+
+	SpotLight* ptr = dA_at(storage.spot_lights_pool->pool, light_id);
+	memcpy(ptr, &p_spotLight, sizeof(SpotLight));
+
+	render_instance->data_index = light_id;
+
+	float size = tan(glm_rad(p_spotLight.angle)) * p_spotLight.range;
+
+	render_instance->box[0][0] = -size;
+	render_instance->box[0][1] = -size;
+	render_instance->box[0][2] = -p_spotLight.range;
+
+	render_instance->box[1][0] = size;
+	render_instance->box[1][1] = size;
+	render_instance->box[1][2] = p_spotLight.range;
+
+	RScene_InstanceSetBVH(render_instance, p_spotLight.position);
+	
+	return render_instance->instance_index;
+}
+
+
+void* RScene_GetRenderInstanceData(RenderInstanceID p_id)
+{
+	RenderInstance* render_instance = dA_at(scene.render_instances_pool->pool, p_id);
+
+	switch (render_instance->type)
 	{
-		//return;
+	case INST__POINT_LIGHT:
+	{
+		return dA_at(storage.point_lights_pool->pool, render_instance->data_index);
+	}
+	case INST__SPOT_LIGHT:
+	{
+		return dA_at(storage.spot_lights_pool->pool, render_instance->data_index);
+	}
+	default:
+		break;
 	}
 
-	PointLight2 blank;
-	memset(&blank, 0, sizeof(blank));
-	glNamedBufferSubData(storage.point_lights.buffer, p_lightID * sizeof(PointLight2), sizeof(PointLight2), &blank);
+	return NULL;
+}
 
-	RSB_FreeItem(&storage.point_lights, p_lightID, false);
-	Object_Pool_Free(storage.point_lights_pool, p_lightID, true);
+void RScene_DeleteRenderInstance(RenderInstanceID p_id)
+{
+	RenderInstance* instance = dA_at(scene.render_instances_pool->pool, p_id);
+
+	if (instance->type == INST__POINT_LIGHT)
+	{
+		Object_Pool_Free(storage.point_lights_pool, instance->data_index, true);
+	}
+	else if (instance->type == INST__SPOT_LIGHT)
+	{
+		Object_Pool_Free(storage.spot_lights_pool, instance->data_index, true);
+	}
+
+	if (instance->bvh_id >= 0)
+	{
+		if (instance->dynamic)
+		{
+
+		}
+		else
+		{
+			BVH_Tree_Remove(&scene.cull_data.static_partition_tree, instance->bvh_id);
+		}
+	}
+
+	Object_Pool_Free(scene.render_instances_pool, p_id, true);
+}
+
+
+void RScene_SetRenderInstancePosition(RenderInstanceID p_id, vec3 position)
+{
+	RenderInstance* instance = dA_at(scene.render_instances_pool->pool, p_id);
+
+	if (instance->type == INST__POINT_LIGHT)
+	{
+		PointLight2* point_light = dA_at(storage.point_lights_pool->pool, instance->data_index);
+
+		if (glm_vec3_eqv(point_light->position, position))
+		{
+			return;
+		}
+
+		point_light->position[0] = position[0];
+		point_light->position[1] = position[1];
+		point_light->position[2] = position[2];
+	}
+	else if (instance->type == INST__SPOT_LIGHT)
+	{
+		SpotLight* spot_light = dA_at(storage.spot_lights_pool->pool, instance->data_index);
+
+		if (glm_vec3_eqv(spot_light->position, position))
+		{
+			return;
+		}
+
+		spot_light->position[0] = position[0];
+		spot_light->position[1] = position[1];
+		spot_light->position[2] = position[2];
+	}
+
+	vec3 translated_box[2];
+	RScene_BoxTranslate(instance->box, position, translated_box);
+
+	if (instance->bvh_id >= 0)
+	{
+		if (instance->dynamic)
+		{
+
+		}
+		else
+		{
+			BVH_Tree_UpdateBounds(&scene.cull_data.static_partition_tree, instance->bvh_id, translated_box);
+		}
+	}
 }
 
 static void RScene_CubemapCompute()
 {
 	//CONVULUTE CUBEMAP
+	glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
 	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 32, 32);
 	glUseProgram(pass->ibl.irradiance_convulution_shader);
 	Shader_SetInteger(pass->ibl.irradiance_convulution_shader, "environmentMap", 0);
@@ -431,6 +577,7 @@ void RScene_SetSkyboxTexturePanorama(R_Texture* p_tex)
 	Shader_SetMatrix4(pass->ibl.equirectangular_to_cubemap_shader, "u_proj", pass->ibl.cube_proj);
 
 	glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
+	glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
 	glViewport(0, 0, 512, 512);
 	//CONVERT PANORAMA TO A CUBEMAP
 	for (int i = 0; i < 6; i++)
@@ -458,7 +605,6 @@ void RScene_SetSkyboxTextureSingleImage(const char* p_path)
 
 	glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
 	glViewport(0, 0, 512, 512);
-	//CONVERT PANORAMA TO A CUBEMAP
 	for (int i = 0; i < 6; i++)
 	{
 		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.envCubemapTexture, 0);
@@ -472,14 +618,62 @@ void RScene_SetSkyboxTextureSingleImage(const char* p_path)
 	RScene_CubemapCompute();
 }
 
-ModelID RScene_RegisterModel(R_Model* p_model)
-{
-	return 0;
-}
-
 void RScene_SetAmbientLightInfluence(float p_ratio)
 {
 	scene.scene_data.ambientLightInfluence = glm_clamp(p_ratio, 0.0, 1.0);
+}
+
+void RScene_SetSkyColor(vec3 color)
+{
+	glm_vec3_copy(color, scene.scene_environment.sky_color);
+}
+
+void RScene_SetSkyHorizonColor(vec3 color)
+{
+	glm_vec3_copy(color, scene.scene_environment.sky_horizon_color);
+}
+
+void RScene_SetGroundHorizonColor(vec3 color)
+{
+	glm_vec3_copy(color, scene.scene_environment.ground_horizon_color);
+}
+
+void RScene_SetGroundColor(vec3 color)
+{
+	glm_vec3_copy(color, scene.scene_environment.ground_bottom_color);
+}
+
+void RScene_ForceUpdateIBL()
+{
+	pass->ibl.update_brdf = true;
+	pass->ibl.update_irradiance = true;
+	pass->ibl.update_prefilter = true;
+}
+
+void RScene_SetNightTexture(R_Texture* p_tex)
+{
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, p_tex->id);
+	glUseProgram(pass->ibl.equirectangular_to_cubemap_shader);
+	Shader_SetInteger(pass->ibl.equirectangular_to_cubemap_shader, "equirectangularMap", 0);
+	Shader_SetMatrix4(pass->ibl.equirectangular_to_cubemap_shader, "u_proj", pass->ibl.cube_proj);
+	glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 512, 512);
+	glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
+	glViewport(0, 0, 512, 512);
+	//CONVERT PANORAMA TO A CUBEMAP
+	for (int i = 0; i < 6; i++)
+	{
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.nightTexture, 0);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+
+		Shader_SetMatrix4(pass->ibl.equirectangular_to_cubemap_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
+		Render_Cube();
+	}
+
+	RScene_CubemapCompute();
+
 }
 
 ParticleEmitterSettings* Particle_RegisterEmitter()

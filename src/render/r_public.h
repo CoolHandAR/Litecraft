@@ -4,6 +4,7 @@
 
 #include "r_model.h"
 
+typedef int RenderInstanceID;
 typedef unsigned LightID;
 typedef unsigned ModelID;
 typedef unsigned MeshID;
@@ -31,28 +32,41 @@ typedef struct
     float ambient_intensity;
     float specular_intensity;
 
-    float linear;
-    float quadratic;
     float radius;
-    float constant;
+    float attenuation;
 } PointLight2;
 typedef struct
 {
-    vec3 position;
-    vec3 direction;
+    vec4 position;
+    vec4 direction;
 
-    vec3 color;
+    vec4 color;
     float ambient_intensity;
     float specular_intensity;
 
-    float cutOff;
-    float outerCutOff;
-
-    float constant;
-    float linear;
-    float quadratic;
+    float range;
+    float attenuation;
+    float angle;
+    float angle_attenuation;
 } SpotLight;
 
+
+/*
+~~~~~~~~~~~~~~~~~~~
+Materials
+~~~~~~~~~~~~~~~~~~~
+*/
+typedef enum
+{
+    RM__TRANSPARENT,
+    RM__USE_ALPHA_DISCARD,
+
+} RM_Flags;
+
+typedef struct
+{
+    bool flags;
+} RenderMaterial;
 
 /*
 ~~~~~~~~~~~~~~~~~~~
@@ -100,15 +114,24 @@ typedef struct
 void RScene_SetDirLight(DirLight p_dirLight);
 void RScene_SetDirLightDirection(vec3 dir);
 void RScene_SetFog(FogSettings p_fog_settings);
-LightID RScene_RegisterPointLight(PointLight2 p_pointLight);
-LightID RScene_RegisterSpotLight(SpotLight p_spotLight);
-void RSCene_DeletePointLight(LightID p_lightID);
-void RSCene_DeleteSpotLight(LightID p_lightID);
+RenderInstanceID RScene_RegisterPointLight(PointLight2 p_pointLight, bool p_dynamic);
+RenderInstanceID RScene_RegisterSpotLight(SpotLight p_spotLight, bool p_dynamic);
+
+void* RScene_GetRenderInstanceData(RenderInstanceID p_id);
+void RScene_DeleteRenderInstance(RenderInstanceID p_id);
+void RScene_SetRenderInstancePosition(RenderInstanceID p_id, vec3 position);
+
 void RScene_SetSkyboxTexturePanorama(R_Texture* p_tex);
 void RScene_SetSkyboxTextureSingleImage(const char* p_path);
 void RScene_SetSkyboxTextureCubemap(Cubemap_Faces_Paths p_cubemapPaths);
-ModelID RScene_RegisterModel(R_Model* p_model);
 void RScene_SetAmbientLightInfluence(float p_ratio);
+void RScene_SetSkyColor(vec3 color);
+void RScene_SetSkyHorizonColor(vec3 color);
+void RScene_SetGroundHorizonColor(vec3 color);
+void RScene_SetGroundColor(vec3 color);
+void RScene_ForceUpdateIBL();
+void RScene_SetNightTexture(R_Texture* p_tex);
+
 
 /*
 ~~~~~~~~~~~~~~~~~~~
@@ -237,6 +260,8 @@ typedef struct
     float _time;
     float _prev_time;
     float _system_time;
+    float _anim_frame_progress;
+    int _cycle;
 
     float explosiveness;
     float randomness;
@@ -245,8 +270,6 @@ typedef struct
 
     float initial_velocity;
     float anim_speed_scale;
-
-    float anim_frame_progress;
 
     float spread;
     float flatness;
@@ -259,16 +282,9 @@ typedef struct
 
     float scale;
 
-    float ambient_intensity;
-    float diffuse_intensity;
-    float specular_intensity;
-
-    int texture_index;
-
     unsigned emission_shape;
 
     int particle_amount;
-    int _cycle;
 
     int frame;
     int frame_offset;

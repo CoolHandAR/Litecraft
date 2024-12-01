@@ -2,6 +2,8 @@
 out vec2 FragColor;
 in vec2 TexCoords;
 
+uniform int u_sampleCount = 1024;
+
 const float PI = 3.14159265359;
 // ----------------------------------------------------------------------------
 // http://holger.dammertz.org/stuff/notes_HammersleyOnHemisphere.html

@@ -25,6 +25,43 @@ static inline uint32_t Math_rand()
 	return (Math_rng_seed >> 32) & RAND_MAX;
 }
 
+static inline bool Math_AABB_PlanesIntersect(vec3 box[2], vec4* planes, int numPlanes)
+{
+	float* p, dp;
+	int    i;
+
+	for (i = 0; i < numPlanes; i++) 
+	{
+		p = planes[i];
+		dp = p[0] * box[p[0] > 0.0f][0]
+			+ p[1] * box[p[1] > 0.0f][1]
+			+ p[2] * box[p[2] > 0.0f][2];
+
+		if (dp < -p[3])
+			return false;
+	}
+
+	return true;
+}
+static inline bool Math_AABB_PlanesFullyContain(vec3 box[2], vec4* planes, int numPlanes)
+{
+	float* p, dp;
+	int    i;
+
+	for (i = 0; i < numPlanes; i++) 
+	{
+		p = planes[i];
+		dp = p[0] * box[p[0] < 0.0f][0]
+			+ p[1] * box[p[1] < 0.0f][1]
+			+ p[2] * box[p[2] < 0.0f][2];
+
+		if (dp < -p[3])
+			return false;
+	}
+
+	return true;
+}
+
 static inline float Math_randf()
 {
 	return (float)Math_rand() / (float)RAND_MAX;

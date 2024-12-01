@@ -133,3 +133,16 @@ uint32_t Hash_id(uint32_t x)
 	x = (x >> (uint32_t)(16)) ^ x;
 	return x;
 }
+
+uint32_t Hash_uint64(uint64_t x)
+{
+	uint64_t v = x;
+	v = (~v) + (v << 18); // v = (v << 18) - v - 1;
+	v = v ^ (v >> 31);
+	v = v * 21; // v = (v + (v << 2)) + (v << 4);
+	v = v ^ (v >> 11);
+	v = v + (v << 6);
+	v = v ^ (v >> 22);
+
+	return v;
+}
