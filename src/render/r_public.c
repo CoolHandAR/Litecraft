@@ -341,23 +341,17 @@ void RScene_SetDirLightDirection(vec3 dir)
 void RScene_SetFog(FogSettings p_fog_settings)
 {
 	glm_vec3_copy(p_fog_settings.fog_color, scene.scene_data.fogColor);
-	scene.scene_data.fogDensity = p_fog_settings.density;
-	scene.scene_data.heightFogMin = p_fog_settings.heightFogMin;
-	scene.scene_data.heightFogMax = p_fog_settings.heightFogMax;
-	scene.scene_data.heightFogCurve = p_fog_settings.heightFogCurve;
-	scene.scene_data.depthFogBegin = p_fog_settings.depthFogBegin;
-	scene.scene_data.depthFogEnd = p_fog_settings.depthFogEnd;
-	scene.scene_data.depthFogCurve = p_fog_settings.depthFogCurve;
+
 }
 
-RenderInstanceID RScene_RegisterPointLight(PointLight2 p_pointLight, bool p_dynamic)
+RenderInstanceID RScene_RegisterPointLight(PointLight p_pointLight, bool p_dynamic)
 {
 	RenderInstance* render_instance = RScene_RegisterInstance(INST__POINT_LIGHT, p_dynamic);
 
 	LightID light_id = Object_Pool_Request(storage.point_lights_pool);
 
-	PointLight2* ptr = dA_at(storage.point_lights_pool->pool, light_id);
-	memcpy(ptr, &p_pointLight, sizeof(PointLight2));
+	PointLight* ptr = dA_at(storage.point_lights_pool->pool, light_id);
+	memcpy(ptr, &p_pointLight, sizeof(PointLight));
 
 	render_instance->data_index = light_id;
 
@@ -370,7 +364,6 @@ RenderInstanceID RScene_RegisterPointLight(PointLight2 p_pointLight, bool p_dyna
 	render_instance->box[1][0] = size;
 	render_instance->box[1][1] = size;
 	render_instance->box[1][2] = size;
-
 
 	RScene_InstanceSetBVH(render_instance, p_pointLight.position);
 
@@ -460,7 +453,7 @@ void RScene_SetRenderInstancePosition(RenderInstanceID p_id, vec3 position)
 
 	if (instance->type == INST__POINT_LIGHT)
 	{
-		PointLight2* point_light = dA_at(storage.point_lights_pool->pool, instance->data_index);
+		PointLight* point_light = dA_at(storage.point_lights_pool->pool, instance->data_index);
 
 		if (glm_vec3_eqv(point_light->position, position))
 		{
@@ -625,22 +618,22 @@ void RScene_SetAmbientLightInfluence(float p_ratio)
 
 void RScene_SetSkyColor(vec3 color)
 {
-	glm_vec3_copy(color, scene.scene_environment.sky_color);
+	glm_vec3_copy(color, scene.environment.sky_color);
 }
 
 void RScene_SetSkyHorizonColor(vec3 color)
 {
-	glm_vec3_copy(color, scene.scene_environment.sky_horizon_color);
+	glm_vec3_copy(color, scene.environment.sky_horizon_color);
 }
 
 void RScene_SetGroundHorizonColor(vec3 color)
 {
-	glm_vec3_copy(color, scene.scene_environment.ground_horizon_color);
+	glm_vec3_copy(color, scene.environment.ground_horizon_color);
 }
 
 void RScene_SetGroundColor(vec3 color)
 {
-	glm_vec3_copy(color, scene.scene_environment.ground_bottom_color);
+	glm_vec3_copy(color, scene.environment.ground_bottom_color);
 }
 
 void RScene_ForceUpdateIBL()

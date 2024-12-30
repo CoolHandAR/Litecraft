@@ -29,16 +29,6 @@ struct SceneData
 	uint numPointLights;
 	uint numSpotLights;
     
-    float fogDensity;
-
-	float depthFogCurve;
-	float depthFogBegin;
-	float depthFogEnd;
-
-	float heightFogCurve;
-	float heightFogMin;
-	float heightFogMax;
-
     vec4 shadow_splits;
     vec4 shadow_bias;
 	vec4 shadow_normal_bias;

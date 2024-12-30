@@ -2,7 +2,6 @@
 
 #include <cglm/cglm.h>
 #include <stdint.h>
-#include "render/r_renderer.h"
 
 #define LC_CHUNK_WIDTH 16
 #define LC_CHUNK_HEIGHT 16

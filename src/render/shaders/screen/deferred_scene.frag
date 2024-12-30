@@ -275,7 +275,7 @@ vec3 F0calc(float metallic, float specular, vec3 albedo)
     return mix(vec3(dielectric), albedo, vec3(metallic));
 }
 
-vec3 IBL_Calc(float metallic, float roughness, vec3 normal, vec3 view_dir, vec3 albedo, vec3 F0)
+vec3 IBL_Calc(float metallic, float roughness, vec3 normal, vec3 view_dir, vec3 albedo, vec3 F0, inout vec3 outDiff, inout vec3 outSpec)
 {
     vec3 kS = fresnelSchlickRougness(max(dot(normal, view_dir), 0.0), F0, roughness);
     vec3 kD = 1.0 - kS;
@@ -291,10 +291,25 @@ vec3 IBL_Calc(float metallic, float roughness, vec3 normal, vec3 view_dir, vec3 
     vec3 specular = prefilteredColor * (kS * brdf.x + brdf.y);
 
     vec3 ambient = (kD * diffuse + specular);
+  // vec3 ambient = (kD * diffuse);
+
+   outDiff += kD * diffuse;
+   outSpec += specular;
 
     return ambient;
 }
-vec3 calculate_light(vec3 light_color, vec3 light_dir, vec3 normal, vec3 view_dir, vec3 albedo, float attenuation, float specular_intensity, float roughness, float metallic, vec3 F0)
+
+float calc_light_attenuation(float distance, float inv_range, float decay) 
+{
+	float nd = distance * inv_range;
+	nd *= nd;
+	nd *= nd; // nd^4
+	nd = max(1.0 - nd, 0.0);
+	nd *= nd; // nd^2
+	return nd * pow(max(distance, 0.0001), -decay);
+}
+
+vec3 calculate_light(vec3 light_color, vec3 light_dir, vec3 normal, vec3 view_dir, vec3 albedo, float attenuation, float specular_intensity, float roughness, float metallic, vec3 F0, inout vec3 outDiff, inout vec3 outSpec)
 {   
     vec3 halfway_dir = normalize(view_dir + light_dir);
     float NdotV = max(dot(normal, view_dir), 0.000);
@@ -315,6 +330,9 @@ vec3 calculate_light(vec3 light_color, vec3 light_dir, vec3 normal, vec3 view_di
     kD *= 1.0 - metallic;	  
 
     vec3 value = (kD * albedo / PI + specular) * radiance * NdotL;
+
+    outSpec += specular * radiance * NdotL;
+    outDiff += (kD * albedo / PI) * radiance * NdotL;
 
     return value;
 }
@@ -355,7 +373,7 @@ uint calculate_cluster_index(vec3 coords)
 const float specular = 0.5;
 void main()
 {
-    float depth = textureLod(depth_texture, TexCoords, 0).r;
+    float depth = texture(depth_texture, TexCoords).r;
 
     //Discard if depth is 1.0
     //Fixes shading the sky and skip unneeded shading
@@ -371,13 +389,13 @@ void main()
     //COMMONS 
     vec3 ViewPos = depthToViewPosDirect(depth, cam.invProj, TexCoords);
     vec3 WorldPos = (cam.invView * vec4(ViewPos, 1.0)).xyz;
-    vec3 Normal = NormalMetal.rgb * 2.0 - 1.0; //convert to [-1, 1] range
+    vec3 Normal = normalize(NormalMetal.rgb * 2.0 - 1.0); //convert to [-1, 1] range
     vec3 Albedo = ColorRough.rgb;
     float Metallic = NormalMetal.a;
     float Roughness = ColorRough.a;
 
     float AO = 1.0;
-
+ 
 #ifdef USE_SSAO
     AO = texture(SSAO_texture, TexCoords).r;
 #endif
@@ -392,8 +410,13 @@ void main()
 #endif
 
     vec3 Lighting = vec3(0.0);
+    vec3 diffuse = vec3(0.0);
+    vec3 specular = vec3(0.0);
+
     //CALCULATE DIR LIGHT
-    Lighting = shadow * calculate_light(scene.dirLightColor.rgb * scene.dirLightAmbientIntensity, normalize(scene.dirLightDirection.xyz), Normal, ViewDir, Albedo, 1.0, scene.dirLightSpecularIntensity, Roughness, Metallic, F0);
+    Lighting = shadow * calculate_light(scene.dirLightColor.rgb * scene.dirLightAmbientIntensity, normalize(scene.dirLightDirection.xyz), Normal, ViewDir, Albedo, 1.0, scene.dirLightSpecularIntensity, Roughness, Metallic, F0, diffuse, specular);
+    
+    //Lighting = vec3(0.0);
 
    // uint cluster_index = calculate_cluster_index(vec3(ViewPos.xyz));
    // uint light_count = clusters.data[cluster_index].count;
@@ -415,25 +438,58 @@ void main()
        //}
 #define pLight pLights.data[light_index]
 
+        float inv_radius = 1.0 / pLight.radius;
         vec3 LW = pLight.position.xyz - WorldPos.xyz;
         float dist = length(LW);
+        float normalized_dist = dist * inv_radius;
 
-        if(dist < pLight.radius)
-        {
-            float attenuation = 1.0 / (pLight.constant + pLight.linear * dist + pLight.quadratic * (dist * dist));
+        float attenuation = calc_light_attenuation(dist, 1.0 / pLight.radius, pLight.attenuation);
+            
+        if(normalized_dist < 1.0)
+        {       
             Lighting += calculate_light(pLight.color.rgb * pLight.ambient_intensity, normalize(LW), Normal, ViewDir, Albedo, attenuation, pLight.specular_intensity, Roughness,
-            Metallic, F0);
+                Metallic, F0, diffuse, specular);   
         }
     }
+    //CALCULATE SPOT LIGHTS
+    for(int i = 0; i < scene.numSpotLights; i++)
+    {
+#define sLight sLights.data[i]
 
-    float ambient_intensity = 1;
+        float inv_radius = 1.0 / sLight.range;
+        vec3 LW = sLight.position.xyz - WorldPos.xyz;
+        vec3 LDIR = normalize(LW);
+        float dist = length(LW);
+        float normalized_dist = dist * inv_radius;
+
+        if(normalized_dist < 1.0)
+        {
+            float spot_cuffoff = cos(radians(sLight.angle));
+            float scos = max(dot(-LDIR, sLight.direction.xyz), spot_cuffoff);
+      
+            float spot_attenuation = calc_light_attenuation(dist, inv_radius, sLight.attenuation);
+        
+            float spot_rim = max(0.0001, (1.0 - scos) / (1.0 - spot_cuffoff));
+            spot_attenuation *= 1.0 - pow(spot_rim, sLight.angle_attenuation);
+
+            Lighting += calculate_light(sLight.color.rgb * sLight.ambient_intensity, LDIR, Normal, ViewDir, Albedo, spot_attenuation, sLight.specular_intensity, Roughness,
+             Metallic, F0, diffuse, specular);
+        }               
+    }
+//
+    //diffuse *= 1.0 - Metallic;
+    
+    float ambient_intensity = 0.6;
 
     //CALCULATE AMBIENT LIGHT
-    vec3 Ambient = IBL_Calc(Metallic, Roughness, Normal, ViewDir, Albedo, F0) * ambient_intensity;
+    vec3 ambient = IBL_Calc(Metallic, Roughness, Normal, ViewDir, Albedo, F0, diffuse, specular) * 0.5;
+
 
     //CALCULATE FINAL COLOR
-    Lighting = (Ambient + Lighting) * AO;
+    Lighting = (ambient + Lighting) * AO;
 
     //FINAL COLOR
     FragColor = vec4(Lighting, 1.0);
+
+    
 }

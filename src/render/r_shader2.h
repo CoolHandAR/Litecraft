@@ -1,3 +1,5 @@
+#ifndef RSHADER_H
+#define RSHADER_H
 #pragma once
 
 #include <stdint.h>
@@ -85,3 +87,5 @@ inline void Shader_ResetDefines(RShader* const shader)
 {
 	shader->new_variant_key = 0;
 }
+
+#endif

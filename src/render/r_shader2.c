@@ -1,8 +1,9 @@
 #include "r_shader2.h"
 
 #include <string.h>
-#include "utility/u_utility.h"
 #include <glad/glad.h>
+
+#include "utility/u_utility.h"
 
 static RShader* s_currentActiveShader = NULL;
 static uint64_t s_currentVariantKey = 0;

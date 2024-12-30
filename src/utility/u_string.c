@@ -1,9 +1,10 @@
 #include "u_utility.h"
+
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
 
-const char* const empty_string = "";
+static const char* const empty_string = "";
 
 bool String_StartsWith(const char* p_str, const char* p_starts, bool p_caseSensitive)
 {

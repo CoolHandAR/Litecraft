@@ -164,8 +164,10 @@ def write_dir_gl_headers():
     write_gl_header(file, ["screen/deferred_scene.frag"])
     write_gl_header(file, ["screen/ssao.comp"])
     write_gl_header(file, ["screen/dof.comp"])
+   # write_gl_header(file, ["screen/sample.comp"])
     write_gl_header(file, ["screen/copy.comp"])
     write_gl_header(file, ["screen/brdf.frag"])
+    write_gl_header(file, ["screen/godray.comp"])
 
     file.write("\n#endif")
 

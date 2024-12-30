@@ -1,22 +1,12 @@
-#include <stdbool.h>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
-#include "lc_core.h"
+
+#include "lc/lc_core.h"
 #include "utility/u_math.h"
-
 #include "cvar.h"
-
-#include "render/r_renderer.h"
-
-#include <threads.h>
-
-#include <windows.h>
-
 #include "input.h"
-
 #include "lc/lc_world.h"
-
-extern GLFWwindow* glfw_window;
+#include "core/core_common.h"
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -26,7 +16,6 @@ CORE ENGINE FUNCTIONS
 #define NUKLEAR_MAX_VERTEX_BUFFER 512 * 1024
 #define NUKLEAR_MAX_ELEMENT_BUFFER 128 * 1024
 
-#include "core/core_common.h"
 #define NK_INCLUDE_DEFAULT_FONT
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -34,13 +23,11 @@ CORE ENGINE FUNCTIONS
 #define NK_INCLUDE_DEFAULT_ALLOCATOR
 #define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
 #define NK_INCLUDE_FONT_BAKING
-#define NK_INCLUDE_DEFAULT_FONT
 #define NK_KEYSTATE_BASED_INPUT
 #define NK_GLFW_GL3_IMPLEMENTATION
 #define NK_IMPLEMENTATION
 #include <nuklear/nuklear.h>
 #include <nuklear/nuklear_glfw_gl3.h>
-
 
 #define CONTROL_STEPS 12
 
@@ -304,10 +291,13 @@ static void Core_Loop()
 	*	MAIN LOOP
 	* ~~~~~~~~~~~~~~~~~~
 	*/
-	while (!glfwWindowShouldClose(glfw_window))
+
+	GLFWwindow* window = Window_getPtr();
+
+	while (!glfwWindowShouldClose(window))
 	{
-		if (glfwGetKey(glfw_window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-			glfwSetWindowShouldClose(glfw_window, true);
+		if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+			glfwSetWindowShouldClose(window, true);
 		
 		
 		s_blockedInput = false;
@@ -386,8 +376,13 @@ static void Core_Loop()
 		RCore_End();
 
 		if (nk.enabled) nk_glfw3_render(&nk.glfw, NK_ANTI_ALIASING_ON, NUKLEAR_MAX_VERTEX_BUFFER, NUKLEAR_MAX_ELEMENT_BUFFER);
-		glfwSwapBuffers(glfw_window);
+		glfwSwapBuffers(window);
 
+		/*
+		* ~~~~~~~~~~~~~~~~~~
+		* END TICK
+		* ~~~~~~~~~~~~~~~~~~
+		*/
 		LC_World_EndFrame();
 		ThreadCore_ShutdownInactiveThreads();
 		s_engineTiming.ticks++;
@@ -403,6 +398,7 @@ int Core_entry()
 {
 	if (!Core_init()) return -1;
 	LC_Init();
+
 	memset(&s_engineTiming, 0, sizeof(Core_EngineTiming));
 	
 	nk.enabled = true;
@@ -419,7 +415,6 @@ int Core_entry()
 	//CLEAN UP
 	Core_Exit();
 	LC_Cleanup();
-
 
 	return 0;
 }

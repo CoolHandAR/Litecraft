@@ -4,8 +4,8 @@ INIT GAME RESOURCES, GAME WORLD, PHYSICS WORLD, ETC...
 ~~~~~~~~~~~~~~~~~~
 */
 
-#include "input.h"
-#include "sound/sound.h"
+#include "core/input.h"
+#include "core/sound.h"
 #include "core/resource_manager.h"
 #include "lc_core.h"
 #include "render/r_public.h"
@@ -14,11 +14,6 @@ INIT GAME RESOURCES, GAME WORLD, PHYSICS WORLD, ETC...
 LC_ResourceList lc_resources;
 LC_SoundGroups lc_sound_groups;
 LC_Emitters lc_emitters;
-
-static void Init_Player()
-{
-
-}
 
 static int Init_loadResources()
 {
@@ -152,9 +147,8 @@ static void Process_ParticleCollideWithWorld(ParticleCpu* const particle, Partic
 
 void Init_Emitters()
 {
+	//hardcoded particle emitters, fine for now(not many different emitters), might make a serialization format later
 	memset(&lc_emitters, 0, sizeof(lc_emitters));
-
-
 	for (int i = 0; i < 5; i++)
 	{
 		lc_emitters.block_dig[i] = Particle_RegisterEmitter();
@@ -170,35 +164,23 @@ void Init_Emitters()
 		lc_emitters.block_dig[i]->spread = 45;
 		lc_emitters.block_dig[i]->explosiveness = 1;
 		lc_emitters.block_dig[i]->randomness = 1.0;
-		lc_emitters.block_dig[i]->frame_count = 0;
-		lc_emitters.block_dig[i]->frame = 4;
 		lc_emitters.block_dig[i]->scale = 0.1;
 		lc_emitters.block_dig[i]->life_time = 2.4;
-		lc_emitters.block_dig[i]->anim_speed_scale = 0;
 		lc_emitters.block_dig[i]->h_frames = 25;
 		lc_emitters.block_dig[i]->v_frames = -25;
 		lc_emitters.block_dig[i]->friction = 3.0;
-		lc_emitters.block_dig[i]->ambient_intensity = 0.0;
-		lc_emitters.block_dig[i]->diffuse_intensity = 0.1;
-		lc_emitters.block_dig[i]->specular_intensity = 0.3;
-
-		lc_emitters.block_dig[i]->xform[3][0] -= 32;
-		lc_emitters.block_dig[i]->xform[3][1] += 0;
-		lc_emitters.block_dig[i]->xform[3][2] += 0;
 					
 		lc_emitters.block_dig[i]->emission_shape = EES__BOX;
-		lc_emitters.block_dig[i]->emission_size[0] = 0.3;
-		lc_emitters.block_dig[i]->emission_size[1] = 0.3;
-		lc_emitters.block_dig[i]->emission_size[2] = 0.3;
-		lc_emitters.block_dig[i]->one_shot = true;
-
-		lc_emitters.block_dig[i]->emitting = false;
+		lc_emitters.block_dig[i]->emission_size[0] = 0.2;
+		lc_emitters.block_dig[i]->emission_size[1] = 0.2;
+		lc_emitters.block_dig[i]->emission_size[2] = 0.2;
 		lc_emitters.block_dig[i]->aabb[0][0] = -5;
 		lc_emitters.block_dig[i]->aabb[0][1] = -5;
 		lc_emitters.block_dig[i]->aabb[0][2] = -5;
 		lc_emitters.block_dig[i]->aabb[1][0] = 5;
 		lc_emitters.block_dig[i]->aabb[1][1] = 5;
 		lc_emitters.block_dig[i]->aabb[1][2] = 5;
+
 		lc_emitters.block_dig[i]->color[0] = 1;
 		lc_emitters.block_dig[i]->color[1] = 1;
 		lc_emitters.block_dig[i]->color[2] = 1;
@@ -209,12 +191,9 @@ void Init_Emitters()
 		lc_emitters.block_dig[i]->end_color[2] = 1;
 		lc_emitters.block_dig[i]->end_color[3] =1;
 
+		lc_emitters.block_dig[i]->one_shot = true;
+
 		lc_emitters.block_dig[i]->collision_function = Process_ParticleCollideWithWorld;
-
-		//glm_mat4_mulv3(lc_emitters.block_dig[i]->settings.xform, lc_emitters.block_dig[i]->aabb[0], 1.0, lc_emitters.block_dig[i]->settings.aabb[0]);
-		//glm_mat4_mulv3(lc_emitters.block_dig[i]->settings.xform, lc_emitters.block_dig[i]->aabb[1], 1.0, lc_emitters.block_dig[i]->settings.aabb[1]);
-
-		//Particle_MarkUpdate(lc_emitters.block_dig[i]);
 	}
 	
 }

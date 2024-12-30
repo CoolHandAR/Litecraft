@@ -2,7 +2,6 @@
 
 #include "render/r_model.h"
 
-#include "render/r_renderer.h"
 
 #include <glad/glad.h>
 
@@ -16,19 +15,18 @@
 #include "render/r_camera.h"
 
 
-#include "physics/p_aabb_tree.h"
+
 #include "physics/p_physics_defs.h"
-#include "physics/p_physics_world.h"
-
-#include "lc_player.h"
+#include "physics/physics_world.h"
 
 
-#include "sound/sound.h"
 
-#include <threads.h>
+
+#include "core/sound.h"
+
 
 #include "core/cvar.h"
-#include "input.h"
+#include "core/input.h"
 #include "core/core_common.h"
 #include "render/r_public.h"
 
@@ -70,7 +68,7 @@ Cvar* cam_fov;
 char input_buffer[256];
 char scrollback_buffer[1024];
 
-#include "utility/Circle_buffer.h"
+
 
 #define USE_NEW_RENDERER
 
@@ -89,6 +87,8 @@ typedef struct
 #include <Windows.h>
 
 #include "lc/lc_world.h"
+#include "render/r_shader2.h"
+#include "render/shaders/shader_info.h"
 
 extern void PL_initPlayer(vec3 p_spawnPos);
 
@@ -121,13 +121,7 @@ void LC_Init()
 
 	LC_Init2();
 
-	Circle_Buffer buf = CircleBuf_Init(sizeof(int), 5);
 
-	int write_to = 69;
-	int read_back = 0;
-
-	CircleBuf_Write(&buf, &write_to, 1);
-	CircleBuf_Read(&buf, &read_back, 1, true);
 
 	//ParticleDemo_Init();
 
@@ -147,12 +141,43 @@ void LC_Init()
 	memset(input_buffer, 0, sizeof(input_buffer));
 	memset(scrollback_buffer, 0, sizeof(scrollback_buffer));
 
-	LC_World_Create(8, 8, 8);
-	//LC_World_Create(1, 1, 1);
+	//LC_World_Create(8, 8, 8);
+	LC_World_Create(32,16, 16);
 
-
-
+	//Compile shader
+	const char* SHADER_DEFINES[6] =
+	{
+		"TEXCOORD_ATTRIB",
+		"INSTANCE_MAT3",
+		"INSTANCE_UV",
+		"INSTANCE_COLOR",
+		"INSTANCE_CUSTOM",
+		"USE_TEXTURE_ARR"
+	};
 	
+	typedef enum
+	{
+		TEXCOORD_ATTRIB,
+		INSTANCE_MAT3,
+		INSTANCE_UV,
+		INSTANCE_COLOR,
+		INSTANCE_CUSTOM,
+		USE_TEXTURE_ARR,
+		SHADER_MAX
+	} SHADER_ENUMS;
+
+	bool result = 0;
+	//RShader test_shader = Shader_ComputeCreate("src/render/shaders/screen/dof.comp", DOF_DEFINE_MAX, DOF_UNIFORM_MAX, 3, DOF_DEFINES_STR, DOF_UNIFORMS_STR, DOF_TEXTURES_STR, &result);
+
+
+
+	//Shader_SetDefine(&test_shader, DOF_DEFINE_COC_PASS, true);
+	//Shader_Use(&test_shader);
+
+	//Shader_SetFloat2(&test_shader, DOF_UNIFORM_FAREND, 2, 5);
+	//Shader_SetDefine(&test_shader, DOF_DEFINE__COMPOSITE, false);
+
+	//Shader_Use(&test_shader);
 
 	int xs = 25;
 	int ys = 8;
@@ -350,8 +375,8 @@ void LC_Loop(float delta)
 	Window_getSize(window_size);
 
 
-	if(!Con_isOpened())
-		Camera_UpdateMatrices(&s_gameData.camera, window_size[0], window_size[1]);
+	//if(!Con_isOpened())
+		//Camera_UpdateMatrices(&s_gameData.camera, window_size[0], window_size[1]);
 
 	vec3 pos;
 	LC_Player_getPosition(pos);
@@ -366,7 +391,7 @@ void LC_Loop(float delta)
 }
 void LC_PhysLoop(float delta)
 {
-	PhysWorld_Step(LC_World_GetPhysWorld(), delta);
+	PhysicsWorld_Step(LC_World_GetPhysWorld(), delta);
 
 }
 void LC_Cleanup()
@@ -392,7 +417,7 @@ void LC_Draw()
 
 	Draw_LCWorld();
 	PL_IssueDrawCmds();
-	LC_World_Draw();
+
 
 	//Draw_AABB(aabb, NULL);
 

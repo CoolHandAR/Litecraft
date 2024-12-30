@@ -7,6 +7,7 @@
 */
 
 #include "r_core.h"
+
 #include "r_public.h"
 #include "utility/u_math.h"
 #include "core/core_common.h"
@@ -841,104 +842,6 @@ static void Process_LCWorld(RDraw_LCWorldData* const p_lcWorldData)
     drawData->lc_world.world_render_data = LC_World_getRenderData();
 }
 
-
-static void GetLineIntersectionToZPlane(vec3 A, vec3 B, float zDist, vec3 dest)
-{
-    vec3 normal = { 0, 0, -1 };
-
-    vec3 ab;
-    glm_vec3_sub(B, A, ab);
-
-    float t = (zDist - glm_vec3_dot(normal, A)) / glm_vec3_dot(normal, ab);
-
-    dest[0] = A[0] + t * ab[0];
-    dest[1] = A[1] + t * ab[1];
-    dest[2] = A[2] + t * ab[2];
-}
-static void Process_BuildClusters()
-{
-    vec3 eyePos;
-    glm_vec3_zero(eyePos);
-    
-    vec3 minMax[2];
-    glm_vec3_broadcast(FLT_MAX, minMax[0]);
-    glm_vec3_broadcast(-FLT_MIN, minMax[1]);
-
-    float tileSizePx = backend_data->screenSize[0] / (float)CLUSTERS_X;
-    float tileSizePy = backend_data->screenSize[1] / (float)CLUSTERS_Y;
-    float scale = 24.0 / log2(500.0 / 0.1);
-    float bias = 24.0 * log2(0.1) / log2(500.0 / 0.1);
-    for (int x = 0; x < CLUSTERS_X; x++)
-    {
-        for (int y = 0; y < CLUSTERS_Y; y++)
-        {
-            for (int z = 0; z < CLUSTERS_Z; z++)
-            {
-                int flat_index = x + (y * CLUSTERS_X) +
-                    (z * CLUSTERS_X * CLUSTERS_Y);
-
-                vec3 box_screen_space[2];
-                box_screen_space[0][0] = (float)x * tileSizePx;
-                box_screen_space[0][1] = (float)y * tileSizePy;
-                box_screen_space[0][2] = -1.0;
-
-                box_screen_space[1][0] = (float)(x + 1) * tileSizePx;
-                box_screen_space[1][1] = (float)(y + 1) * tileSizePy;
-                box_screen_space[1][2] = -1.0;
-
-
-                vec4 box_view_space[2];
-                box_view_space[0][0] = (box_screen_space[0][0] / backend_data->screenSize[0]) * 2.0 - 1.0;
-                box_view_space[0][1] = (box_screen_space[0][1] / backend_data->screenSize[1]) * 2.0 - 1.0;
-                box_view_space[0][2] = -1;
-                box_view_space[0][3] = 1;
-
-                box_view_space[1][0] = (box_screen_space[1][0] / backend_data->screenSize[0]) * 2.0 - 1.0;
-                box_view_space[1][1] = (box_screen_space[1][1] / backend_data->screenSize[1]) * 2.0 - 1.0;
-                box_view_space[1][2] = -1;
-                box_view_space[1][3] = 1;
-
-                glm_mat4_mulv(scene.camera.invProj, box_view_space[0], box_view_space[0]);
-                glm_mat4_mulv(scene.camera.invProj, box_view_space[1], box_view_space[1]);
-
-                for (int j = 0; j < 3; j++)
-                {
-                    box_view_space[0][j] /= box_view_space[0][3];
-                    box_view_space[1][j] /= box_view_space[1][3];
-                }
-
-                float clusterNear = scene.camera.z_near * pow(500 / max(scene.camera.z_near, 0.00001), (float)z / (float)CLUSTERS_Z);
-                float clusterFar = scene.camera.z_near * pow(500 / max(scene.camera.z_near, 0.00001), (float)(z + 1) / (float)CLUSTERS_Z);
-
-                vec3 minPointNear, minPointFar;
-                vec3 maxPointNear, maxPointFar;
-
-                GetLineIntersectionToZPlane(eyePos, box_view_space[0], clusterNear, minPointNear);
-                GetLineIntersectionToZPlane(eyePos, box_view_space[0], clusterFar, minPointFar);
-
-                GetLineIntersectionToZPlane(eyePos, box_view_space[1], clusterNear, maxPointNear);
-                GetLineIntersectionToZPlane(eyePos, box_view_space[1], clusterFar, maxPointFar);
-
-                vec3 box[2];
-                for (int j = 0; j < 3; j++)
-                {
-                    box[0][j] = min(min(minPointNear[j], minPointFar[j]), min(maxPointNear[j], maxPointFar[j]));
-                    box[1][j] = max(max(minPointNear[j], minPointFar[j]), max(maxPointNear[j], maxPointFar[j]));
-
-                    minMax[0][j] = min(minMax[0][j], box[0][j]);
-                    minMax[1][j] = max(minMax[1][j], box[1][j]);
-                }
-
-                glm_vec3_copy(box[0], scene.clusters_data.cluster_bounding_boxes[flat_index]);
-                glm_vec3_copy(box[1], scene.clusters_data.cluster_bounding_boxes[flat_index]);
-            
-            }
-        }
-    }
-
-    glm_vec3_copy(minMax[0], scene.clusters_data.min_max[0]);
-    glm_vec3_copy(minMax[1], scene.clusters_data.min_max[1]);
-}
 static void Process_CameraUpdate()
 {
     R_Camera* cam = Camera_getCurrent();
@@ -962,9 +865,6 @@ static void Process_CameraUpdate()
         //zNEAR, zFar
         scene.camera.z_near = cam->config.zNear;
         scene.camera.z_far = cam->config.zFar;
-
-        //Build clusters
-        Process_BuildClusters();
 
         scene.dirty_cam = false;
     }
@@ -1057,7 +957,12 @@ static void Process_CalcShadowMatrixes()
     int splits = r_cvars.r_shadowSplits->int_value;
 
     vec4 splits2;
-    Process_CalcShadowSplits(splits2, scene.camera.z_near, 150, 0.80, splits);
+    Process_CalcShadowSplits(splits2, scene.camera.z_near, scene.camera.z_far, 0.80, splits);
+
+    splits2[0] = pass->shadow.cascade_levels[0];
+    splits2[1] = pass->shadow.cascade_levels[1];
+    splits2[2] = pass->shadow.cascade_levels[2];
+    splits2[3] = pass->shadow.cascade_levels[3];
 
     scene.scene_data.shadow_splits[0] = splits2[0];
     scene.scene_data.shadow_splits[1] = splits2[1];
@@ -1089,12 +994,9 @@ static void Process_CalcShadowMatrixes()
     negative_look_at[1] = -light_dir[1];
     negative_look_at[2] = -light_dir[2];
 
-    vec3 up;
-    glm_vec3_zero(up);
-    up[1] = 1;
-
-    vec3 zero;
-    glm_vec3_zero(zero);
+    static const vec3 up = { 0, 1, 0 };
+    
+    static const vec3 zero = { 0, 0, 0 };
 
     mat4 base_look_at;
     glm_lookat(zero, negative_look_at, up, base_look_at);
@@ -1227,11 +1129,117 @@ static void Process_CalcShadowMatrixes()
 
 }
 
-static void Process_CullRegisterHit(const void* _data, BVH_ID _index)
+static int HIT_COUNT = 0;
+static int ACTIVE_SPLIT = 0;
+
+void Process_CullRegisterHit(const void* _data, BVH_ID _index)
 {
     scene.cull_data.static_cull_instance_result[scene.cull_data.static_cull_instances_count] = _data;
 
     scene.cull_data.static_cull_instances_count++;
+}
+
+void Process_CullRegisterHitLCWorld(const void* _data, BVH_ID _index)
+{
+    LCTreeData* tree_data = _data;
+
+    int node_index = tree_data->chunk_data_index;
+
+    int query_index = node_index / 32;
+
+    int* r = &scene.cull_data.lc_world.frustrum_query_buffer[query_index];
+
+    int local_index = node_index % 32;
+
+    *r |= 1 << local_index;
+
+    scene.cull_data.lc_world.frustrum_sorted_query_buffer[HIT_COUNT] = tree_data->chunk_data_index;
+
+    HIT_COUNT++;
+
+    if (tree_data->opaque_index >= 0)
+    {
+        scene.cull_data.lc_world.opaque_in_frustrum++;
+    }
+    if (tree_data->transparent_index >= 0)
+    {
+        scene.cull_data.lc_world.transparent_in_frustrum++;
+    }
+    if (tree_data->water_index >= 0)
+    {
+        scene.cull_data.lc_world.water_in_frustrum++;
+    }
+}
+
+void Process_CullRegisterHitLCWorldShadow(const void* _data, BVH_ID _index)
+{
+    LCTreeData* tree_data = _data;
+
+    if (tree_data->opaque_index >= 0)
+    {
+        DRB_Item opaque_item = DRB_GetItem(&drawData->lc_world.world_render_data->vertex_buffer, tree_data->opaque_index);
+
+        int* first = dA_emplaceBack(drawData->lc_world.shadow_firsts[ACTIVE_SPLIT]);
+        int* count = dA_emplaceBack(drawData->lc_world.shadow_counts[ACTIVE_SPLIT]);
+
+        *first = opaque_item.offset / sizeof(ChunkVertex);
+        *count = opaque_item.count / sizeof(ChunkVertex);
+
+        int* chunk_index = dA_emplaceBack(drawData->lc_world.shadow_sorted_chunk_indexes);
+
+        *chunk_index = tree_data->chunk_data_index;
+        scene.cull_data.lc_world.shadow_cull_count[ACTIVE_SPLIT]++;
+    }
+    if (tree_data->transparent_index >= 0)
+    {
+        DRB_Item transparent_item = DRB_GetItem(&drawData->lc_world.world_render_data->transparents_vertex_buffer, tree_data->transparent_index);
+
+        int* first = dA_emplaceBack(drawData->lc_world.shadow_firsts_transparent[ACTIVE_SPLIT]);
+        int* count = dA_emplaceBack(drawData->lc_world.shadow_counts_transparent[ACTIVE_SPLIT]);
+
+        *first = transparent_item.offset / sizeof(ChunkVertex);
+        *count = transparent_item.count / sizeof(ChunkVertex);
+
+        int* chunk_index = dA_emplaceBack(drawData->lc_world.shadow_sorted_chunk_transparent_indexes);
+
+        *chunk_index = tree_data->chunk_data_index;
+        scene.cull_data.lc_world.shadow_cull_transparent_count[ACTIVE_SPLIT]++;
+    }
+}
+void Process_CullRegisterHitLCWorldReflection(const void* _data, BVH_ID _index)
+{
+    LCTreeData* tree_data = _data;
+
+    if (tree_data->opaque_index >= 0)
+    {
+        DRB_Item opaque_item = DRB_GetItem(&drawData->lc_world.world_render_data->vertex_buffer, tree_data->opaque_index);
+
+        int* first = dA_emplaceBack(drawData->lc_world.reflection_pass_opaque_firsts);
+        int* count = dA_emplaceBack(drawData->lc_world.reflection_pass_opaque_counts);
+
+        *first = opaque_item.offset / sizeof(ChunkVertex);
+        *count = opaque_item.count / sizeof(ChunkVertex);
+
+        int* chunk_index = dA_emplaceBack(drawData->lc_world.reflection_pass_chunk_indexes);
+        *chunk_index = tree_data->chunk_data_index;
+
+        scene.cull_data.lc_world.reflection_opaque_count++;
+    }
+    if (tree_data->transparent_index >= 0)
+    {
+        DRB_Item transparent_item = DRB_GetItem(&drawData->lc_world.world_render_data->transparents_vertex_buffer, tree_data->transparent_index);
+
+        int* first = dA_emplaceBack(drawData->lc_world.reflection_pass_transparent_firsts);
+        int* count = dA_emplaceBack(drawData->lc_world.reflection_pass_transparent_counts);
+
+        *first = transparent_item.offset / sizeof(ChunkVertex);
+        *count = transparent_item.count / sizeof(ChunkVertex);
+
+        int* chunk_index = dA_emplaceBack(drawData->lc_world.reflection_pass_transparent_chunk_indexes);
+        *chunk_index = tree_data->chunk_data_index;
+
+        scene.cull_data.lc_world.reflection_transparent_count++;
+    }
 }
 
 //#define CULL_SHADOWS_PLANES
@@ -1241,16 +1249,13 @@ static void Process_CullScene()
     scene.scene_data.numPointLights = 0;
     scene.scene_data.numSpotLights = 0;
 
+    HIT_COUNT = 0;
+
     dA_clear(storage.point_lights_backbuffer);
     dA_clear(storage.spot_lights_backbuffer);
 
     //Cull scene
     int static_cull_count = BVH_Tree_Cull_Planes(&scene.cull_data.static_partition_tree, scene.camera.frustrum_planes, 6, 1000, Process_CullRegisterHit);
-
-    //printf("%i \n", static_cull_count);
-
-   // static_cull_count = 0;
-
 
     for (int i = 0; i < static_cull_count; i++)
     {
@@ -1260,7 +1265,7 @@ static void Process_CullScene()
 
         if (instance->type == INST__POINT_LIGHT)
         {
-            PointLight2* point_light = dA_at(storage.point_lights_pool->pool, instance->data_index);
+            PointLight* point_light = dA_at(storage.point_lights_pool->pool, instance->data_index);
 
             scene.scene_data.numPointLights++;
 
@@ -1280,22 +1285,37 @@ static void Process_CullScene()
     //Cull lc world chunks
     if (drawData->lc_world.draw && drawData->lc_world.world_render_data)
     {
-        memset(scene.cull_data.lc_world_frustrum_query_buffer, 0, sizeof(scene.cull_data.lc_world_frustrum_query_buffer));
+        memset(scene.cull_data.lc_world.frustrum_query_buffer, 0, sizeof(scene.cull_data.lc_world.frustrum_query_buffer));
+        scene.cull_data.lc_world.opaque_in_frustrum = 0;
+        scene.cull_data.lc_world.transparent_in_frustrum = 0;
+        scene.cull_data.lc_world.water_in_frustrum = 0;
 
-        for (int j = 0; j < 1; j++)
-        {
-            scene.cull_data.lc_world_in_frustrum_count = AABB_Tree_IntersectsFrustrumPlanes(&drawData->lc_world.world_render_data->aabb_tree, scene.camera.frustrum_planes,
-                MAX_CULL_QUERY_BUFFER_ITEMS, scene.cull_data.lc_world_frustrum_query_buffer, scene.cull_data.lc_world_frustrum_sorted_query_buffer, NULL);
-
-            drawData->lc_world.world_render_data->chunks_in_frustrum_count = scene.cull_data.lc_world_in_frustrum_count;
-
-           // scene.cull_data.lc_world_in_frustrum_count = 1000;
-            //drawData->lc_world.world_render_data->chunks_in_frustrum_count = 1000;
-        }
+        scene.cull_data.lc_world.total_in_frustrum_count = BVH_Tree_Cull_Planes(&drawData->lc_world.world_render_data->bvh_tree, scene.camera.frustrum_planes, 6, MAX_CULL_QUERY_BUFFER_ITEMS, Process_CullRegisterHitLCWorld);
         
+        //cull chunks for reflection pass (only if there is a visible water chunk)
+        if (scene.cull_data.lc_world.water_in_frustrum > 0)
+        {
+            dA_clear(drawData->lc_world.reflection_pass_opaque_firsts);
+            dA_clear(drawData->lc_world.reflection_pass_opaque_counts);
+
+            dA_clear(drawData->lc_world.reflection_pass_transparent_firsts);
+            dA_clear(drawData->lc_world.reflection_pass_transparent_counts);
+
+            dA_clear(drawData->lc_world.reflection_pass_chunk_indexes);
+            dA_clear(drawData->lc_world.reflection_pass_transparent_chunk_indexes);
+
+            scene.cull_data.lc_world.reflection_opaque_count = 0;
+            scene.cull_data.lc_world.reflection_transparent_count = 0;
+
+            vec4 frustrum_planes[6];
+            glm_frustum_planes(pass->water.reflection_projView_matrix, frustrum_planes);
+
+            BVH_Tree_Cull_Planes(&drawData->lc_world.world_render_data->bvh_tree, frustrum_planes, 6, MAX_CULL_QUERY_BUFFER_ITEMS, Process_CullRegisterHitLCWorldReflection);
+        }
+
         //cull chunks in shadow
         if (r_cvars.r_useDirShadowMapping->int_value)
-        {
+        {        
             int splits = r_cvars.r_shadowSplits->int_value;
 
             const float SHADOW_MARGIN_MULTIPLIER = 2.0;
@@ -1315,15 +1335,7 @@ static void Process_CullScene()
             for (int i = 0; i < splits; i++)
             {
                 int shadow_count = 0;
-#ifdef CULL_SHADOWS_PLANES
-                vec4 planes[6];
-                // *Exracted planes order : [left, right, bottom, top, near, far]
-                glm_frustum_planes(scene.scene_data.shadow_matrixes[i], planes);
 
-                shadow_count = AABB_Tree_IntersectsFrustrumPlanes(&drawData->lc_world.world_render_data->aabb_tree, planes,
-                    5000, scene.cull_data.lc_world_frustrum_shadow_query_buffer[i], NULL, scene.cull_data.lc_world_frustrum_shadow_sorted_query_buffer[i]);
-#else
-                //Box culling is faster
                 mat4 invMat;
                 glm_mat4_inv(scene.scene_data.shadow_matrixes[i], invMat);
 
@@ -1345,10 +1357,6 @@ static void Process_CullScene()
                     box[1][2] += LC_CHUNK_LENGTH * SHADOW_MARGIN_MULTIPLIER;
                 }
 
-                shadow_count = AABB_Tree_IntersectsFrustrumBox(&drawData->lc_world.world_render_data->aabb_tree, box,
-                    MAX_CULL_LC_SHADOW_QUERY_BUFFER_ITEMS, NULL, NULL, scene.cull_data.lc_world_frustrum_shadow_sorted_query_buffer[i]);
-#endif
-
                 dA_clear(drawData->lc_world.shadow_firsts[i]);
                 dA_clear(drawData->lc_world.shadow_counts[i]);
                 drawData->lc_world.shadow_sorted_chunk_offsets[i] = dA_size(drawData->lc_world.shadow_sorted_chunk_indexes);
@@ -1360,193 +1368,20 @@ static void Process_CullScene()
 
                     drawData->lc_world.shadow_sorted_chunk_transparent_offsets[i] = dA_size(drawData->lc_world.shadow_sorted_chunk_transparent_indexes);
                 }
-                int total_opaque_added = 0;
-                int total_transparent_added = 0;
-                for (int j = 0; j < shadow_count; j++)
-                {
-                    LCTreeData* tree_data = scene.cull_data.lc_world_frustrum_shadow_sorted_query_buffer[i][j].data;
+                scene.cull_data.lc_world.shadow_cull_count[i] = 0;
+                scene.cull_data.lc_world.shadow_cull_transparent_count[i] = 0;
+                ACTIVE_SPLIT = i;
 
-                    if (tree_data->opaque_index >= 0)
-                    {
-                        DRB_Item opaque_item = DRB_GetItem(&drawData->lc_world.world_render_data->vertex_buffer, tree_data->opaque_index);
-
-                        int* first = dA_emplaceBack(drawData->lc_world.shadow_firsts[i]);
-                        int* count = dA_emplaceBack(drawData->lc_world.shadow_counts[i]);
-
-                        *first = opaque_item.offset / sizeof(ChunkVertex);
-                        *count = opaque_item.count / sizeof(ChunkVertex);
-
-                        int* chunk_index = dA_emplaceBack(drawData->lc_world.shadow_sorted_chunk_indexes);
-
-                        *chunk_index = tree_data->chunk_data_index;
-                        
-                        total_opaque_added++;
-                    }
-                    if (allow_transparent_shadows)
-                    {
-                        if (tree_data->transparent_index >= 0)
-                        {
-                            DRB_Item transparent_item = DRB_GetItem(&drawData->lc_world.world_render_data->transparents_vertex_buffer, tree_data->transparent_index);
-
-                            int* first = dA_emplaceBack(drawData->lc_world.shadow_firsts_transparent[i]);
-                            int* count = dA_emplaceBack(drawData->lc_world.shadow_counts_transparent[i]);
-
-                            *first = transparent_item.offset / sizeof(ChunkVertex);
-                            *count = transparent_item.count / sizeof(ChunkVertex);
-
-                            int* chunk_index = dA_emplaceBack(drawData->lc_world.shadow_sorted_chunk_transparent_indexes);
-
-                            *chunk_index = tree_data->chunk_data_index;
-
-                            total_transparent_added++;
-                        }
-                    }
-                }
-
-                scene.cull_data.lc_world_shadow_cull_count[i] = total_opaque_added;
-                scene.cull_data.lc_world_shadow_cull_transparent_count[i] = total_transparent_added;
+                //processed in the provided function
+                shadow_count = BVH_Tree_Cull_Box(&drawData->lc_world.world_render_data->bvh_tree, box, MAX_CULL_LC_SHADOW_QUERY_BUFFER_ITEMS, Process_CullRegisterHitLCWorldShadow);
             }
         }
     }
   
 }
 
-#include <GLFW/glfw3.h>
-static dynamic_array* test_buf;
-static void Process_CullLightsForEachCluster()
+static void Process_CmdBuffer()
 {
-    static bool init = false;
-    if (!init)
-    {
-        test_buf = dA_INIT(PointLight2, 0);
-        init = true;
-    }
-   // double start_Time = glfwGetTime();
-    dA_clear(test_buf);
-    const int NUM_LIGHTS = storage.point_lights_pool->pool->elements_size;
-    float scale = 24.0 / log2(500.0 / 0.1);
-    float tileSizePx = backend_data->screenSize[0] / (float)CLUSTERS_X;
-    float tileSizePy = backend_data->screenSize[1] / (float)CLUSTERS_Y;
-    vec3 scaleVec;
-    scaleVec[0] = scene.cluster_items_ssbo;
-    for (int i = 0; i < NUM_LIGHTS; i++)
-    {
-        PointLight2* light = dA_at(storage.point_lights_pool->pool, i);
-
-        if (light->radius <= 0)
-        {
-           // continue;
-        }
-        vec4 light_vs;
-        light_vs[0] = light->position[0];
-        light_vs[1] = light->position[1];
-        light_vs[2] = light->position[2];
-        light_vs[3] = 1;
-
-        glm_mat4_mulv(scene.camera.view, light_vs, light_vs);
-
-        PointLight2* new_light = dA_emplaceBack(test_buf);
-
-        memcpy(new_light, light, sizeof(PointLight2));
-
-        new_light->position[0] = light_vs[0];
-        new_light->position[1] = light_vs[1];
-        new_light->position[2] = light_vs[2];
-        new_light->position[3] = light->radius;
-        
-       // new_light->position[0] = glm_clamp(new_light->position[0], -15, 15);
-       // new_light->position[1] = glm_clamp(new_light->position[1], -8, 8);
-       // new_light->position[2] = glm_clamp(new_light->position[2], -31, 31);
-
-       // glm_clamp(new_light->position[2], -24, 24);
-    }
-    
-   
-
-    
-    memset(scene.clusters_data.lights, 0, sizeof(scene.clusters_data.lights));
-    memset(scene.clusters_data.light_grid, 0, sizeof(scene.clusters_data.light_grid));
-    memset(scene.clusters_data.light_indexes, 0, sizeof(scene.clusters_data.light_indexes));
-    scene.clusters_data.lights_in_clusters = 0;
-
-    int num_intersections = 0;
-    int offset = 0;
-    for (int x = 0; x < CLUSTERS_X; x++)
-    {
-        for (int y = 0; y < CLUSTERS_Y; y++)
-        {
-            for (int z = 0; z < CLUSTERS_Z; z++)
-            {
-                int flat_index = x + (y * CLUSTERS_X) +
-                    (z * CLUSTERS_X * CLUSTERS_Y);
-
-                vec3 cluster_box[2];
-                glm_vec3_copy(scene.clusters_data.cluster_bounding_boxes[flat_index], cluster_box[0]);
-                glm_vec3_copy(scene.clusters_data.cluster_bounding_boxes[flat_index], cluster_box[1]);
-
-                const int NUM_LIGHTS = test_buf->elements_size;
-     
-                scene.clusters_data.light_grid[flat_index].offset = offset;
-                assert(flat_index < CLUSTERS_X * CLUSTERS_Y * CLUSTERS_Z);
-
-                for (int i = 0; i < NUM_LIGHTS; i++)
-                {
-                    PointLight2* light = dA_at(test_buf, i);
-
-                    
-                
-
-                    if (glm_aabb_sphere(cluster_box, light->position))
-                    {
-                        scene.clusters_data.lights[x][y][z]++;
-                                              
-                       
-                        scene.clusters_data.light_grid[flat_index].light_indices[scene.clusters_data.light_grid[flat_index].count] = i;
-
-                            scene.clusters_data.light_grid[flat_index].count++;
-                        scene.clusters_data.light_indexes[offset] = i;
-                        offset++;
-                       
-
-                        scene.clusters_data.lights_in_clusters++;
-                    }
-
-                   
-                }
-            }
-        }
-    }
-   // double end_time = glfwGetTime();
-
-   // printf("%f \n", end_time - start_Time);
-
-    printf("%i \n", scene.clusters_data.lights_in_clusters);
-
-    float x = 0;
-}
-
-static void Process_CullLightsBVH()
-{
-    memset(scene.clusters_data.frustrum_culled_lights, 0, sizeof(scene.clusters_data.frustrum_culled_lights));
-    int culled_count = AABB_Tree_IntersectsFrustrumPlanesLightsTest(&scene.clusters_data.light_tree, scene.camera.frustrum_planes, 1000, 
-        scene.clusters_data.frustrum_culled_lights);
-
-    if (culled_count > 0)
-    {
-        scene.clusters_data.frustrum_culled_lights[culled_count].next_index = -3;
-    }
-    else
-    {
-        scene.clusters_data.frustrum_culled_lights[culled_count].next_index = -3;
-    }
-
-    scene.clusters_data.culled_light_count = culled_count + 1;
-}
-
-void RCmds_processCommands()
-{
-    drawData->lc_world.draw = false;
-
     void* itr_ptr = cmdBuffer->cmds_data;
     for (int i = 0; i < cmdBuffer->cmds_counter; i++)
     {
@@ -1596,7 +1431,7 @@ void RCmds_processCommands()
             }
             else if (cmd->polygon_mode == R_CMD_PM__FULL)
             {
-               // Process_AABB(cmd->aabb, cmd->color);
+                // Process_AABB(cmd->aabb, cmd->color);
             }
             (char*)itr_ptr += sizeof(R_CMD_DrawCube);
 
@@ -1617,7 +1452,7 @@ void RCmds_processCommands()
             R_CMD_DrawLCWorld* cmd = itr_ptr;
 
             Process_LCWorld(cmd);
-            
+
             (char*)itr_ptr += sizeof(R_CMD_DrawLCWorld);
             break;
         }
@@ -1629,13 +1464,23 @@ void RCmds_processCommands()
     cmdBuffer->cmds_ptr = cmdBuffer->cmds_data;
     cmdBuffer->cmds_counter = 0;
     cmdBuffer->byte_count = 0;
+}
 
-    //Also other commands to process
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   Main function
+   Called in r_core.c
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
+
+void RCmds_processCommands()
+{
+    drawData->lc_world.draw = false;
+
+    
+    Process_CmdBuffer();
     Process_ParticleSystemUpdate();
     Process_CalcShadowMatrixes();
     Process_CameraUpdate();
     Process_CullScene();
-    //Process_CullLights();
-   // Process_CullLightsForEachCluster();
-    //Process_CullLightsBVH();
 }

@@ -1,3 +1,5 @@
+#ifndef UTILITY_H
+#define UTILITY_H
 #pragma once
 
 #include <stdbool.h>
@@ -141,3 +143,5 @@ DRB_Item DRB_GetItem(DynamicRenderBuffer* const drb, unsigned p_drbItemIndex);
 void DRB_Unmap(DynamicRenderBuffer* const drb);
 void DRB_WriteDataToGpu(DynamicRenderBuffer* const drb);
 void DRB_setResizeChunkSize(DynamicRenderBuffer* const drb, size_t p_chunkSize);
+
+#endif

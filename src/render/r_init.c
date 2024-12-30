@@ -5,14 +5,16 @@ textures and etc...
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
 
-
 #include "r_core.h"
-#include "input.h"
-#include "r_public.h"
+
+#include <stb_perlin/stb_perlin.h>
 #include <string.h>
-#include <glad/glad.h>
 #include <assert.h>
 #include <GLFW/glfw3.h>
+#include <glad/glad.h>
+
+#include "core/input.h"
+#include "r_public.h"
 #include "shaders/shader_info.h"
 
 
@@ -29,7 +31,6 @@ extern void r_threadLoop();
 
 static float INIT_WIDTH = 1280;
 static float INIT_HEIGHT = 720;
-
 
 static void CheckBoundFrameBufferStatus(const char* p_fboName)
 {
@@ -67,7 +68,6 @@ static void Init_registerCvars()
     r_cvars.r_useDepthOfField = Cvar_Register("r_useDepthOfField", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_useFxaa = Cvar_Register("r_useFxaa", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_useBloom = Cvar_Register("r_useBloom", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
-    r_cvars.r_useSsr = Cvar_Register("r_useSsr", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_useSsao = Cvar_Register("r_useSsao", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_bloomStrength = Cvar_Register("r_bloomStrength", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_bloomThreshold = Cvar_Register("r_bloomThreshold", "0", NULL, CVAR__SAVE_TO_FILE, 0, 12);
@@ -82,6 +82,7 @@ static void Init_registerCvars()
     r_cvars.r_Contrast = Cvar_Register("r_Contrast", "1", NULL, CVAR__SAVE_TO_FILE, 0.01, 8);
     r_cvars.r_Saturation = Cvar_Register("r_Saturation", "1", NULL, CVAR__SAVE_TO_FILE, 0.01, 8);
     r_cvars.r_TonemapMode = Cvar_Register("r_TonemapMode", "1", NULL, CVAR__SAVE_TO_FILE, 0, 2);
+    r_cvars.r_enableGodrays = Cvar_Register("r_enableGodrays", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
   
     //WINDOW SPECIFIC
     r_cvars.w_width = Cvar_Register("w_width", "1024", "Window width", CVAR__SAVE_TO_FILE, 480, 4048);
@@ -106,6 +107,9 @@ static void Init_registerCvars()
     //DOF SPECIFIC
     r_cvars.r_DepthOfFieldMode = Cvar_Register("r_DepthOfFieldMode", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_DepthOfFieldQuality = Cvar_Register("r_DepthOfFieldQuality", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+
+    //WATER 
+    r_cvars.r_waterReflectionQuality = Cvar_Register("r_waterReflectionQuality", "1", NULL, CVAR__SAVE_TO_FILE, 0, 2);
 
     //DEBUG
     r_cvars.r_drawDebugTexture = Cvar_Register("r_drawDebugTexture", "-1", NULL, CVAR__SAVE_TO_FILE, -1, 6);
@@ -572,14 +576,13 @@ static void Init_GeneralPassData()
     pass->general.upsample_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/upsample.frag", NULL);
     pass->general.copy_shader = ComputeShader_CompileFromFile("src/render/shaders/screen/copy.comp");
 
+    bool result;
+   // pass->general.sample_shader = Shader_ComputeCreate("src/render/shaders/screen/sample.comp", SAMPLE_DEFINE_MAX, SAMPLE_UNIFORM_MAX, 2, SAMPLE_DEFINES_STR, SAMPLE_UNIFORMS_STR, SAMPLE_TEXTURES_STR, &result);
 
     glGenFramebuffers(1, &pass->general.halfsize_fbo);
-    glGenFramebuffers(1, &pass->general.reflection_fbo);
     glGenTextures(1, &pass->general.depth_halfsize_texture);
     glGenTextures(1, &pass->general.normal_halfsize_texture);
    // glGenTextures(1, &pass->general.perlin_noise_texture);
-    glGenTextures(1, &pass->general.reflection_texture);
-    glGenTextures(1, &pass->general.reflection_depth);
 
     glBindTexture(GL_TEXTURE_2D, pass->general.depth_halfsize_texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, INIT_WIDTH / 2, INIT_HEIGHT / 2, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
@@ -589,7 +592,7 @@ static void Init_GeneralPassData()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 
     glBindTexture(GL_TEXTURE_2D, pass->general.normal_halfsize_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, INIT_WIDTH / 2, INIT_HEIGHT / 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, INIT_WIDTH / 2, INIT_HEIGHT / 2, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -600,28 +603,6 @@ static void Init_GeneralPassData()
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, pass->general.depth_halfsize_texture, 0);
 
     CheckBoundFrameBufferStatus("General");
-
-
-    glBindTexture(GL_TEXTURE_2D, pass->general.reflection_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-
-    glBindTexture(GL_TEXTURE_2D, pass->general.reflection_depth);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, INIT_WIDTH, INIT_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, pass->general.reflection_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->general.reflection_texture, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, pass->general.reflection_depth, 0);
-    CheckBoundFrameBufferStatus("Reflection");
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
 
     R_Texture noise = Texture_Load("assets/perlin_noise.png", NULL);
 
@@ -657,6 +638,15 @@ static void Init_LCSpecificData()
     }
     drawData->lc_world.shadow_sorted_chunk_indexes = dA_INIT(int, 0);
     drawData->lc_world.shadow_sorted_chunk_transparent_indexes = dA_INIT(int, 0);
+
+    drawData->lc_world.reflection_pass_opaque_counts = dA_INIT(int, 0);
+    drawData->lc_world.reflection_pass_opaque_firsts = dA_INIT(int, 0);
+
+    drawData->lc_world.reflection_pass_transparent_counts = dA_INIT(int, 0);
+    drawData->lc_world.reflection_pass_transparent_firsts = dA_INIT(int, 0);
+
+    drawData->lc_world.reflection_pass_chunk_indexes = dA_INIT(int, 0);
+    drawData->lc_world.reflection_pass_transparent_chunk_indexes = dA_INIT(int, 0);
 
     const char* define[1] = { "SEMI_TRANSPARENT" };
 
@@ -715,6 +705,10 @@ static void Init_LCSpecificData()
 
     glUseProgram(pass->lc.clip_distance_shader);
     Shader_SetInteger(pass->lc.clip_distance_shader, "texture_atlas", 0);
+    Shader_SetInteger(pass->lc.clip_distance_shader, "texture_atlas_mer", 1);
+    Shader_SetInteger(pass->lc.clip_distance_shader, "irradianceMap", 2);
+    Shader_SetInteger(pass->lc.clip_distance_shader, "preFilterMap", 3);
+    Shader_SetInteger(pass->lc.clip_distance_shader, "brdfLUT", 4);
 }
 
 static void Init_DeferredData()
@@ -805,8 +799,7 @@ static void Init_MainSceneData()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->scene.MainSceneColorBuffer, 0);
-    unsigned int attachments[1] = { GL_COLOR_ATTACHMENT0};
-    glDrawBuffers(1, attachments);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
 
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, pass->deferred.depth_texture, 0);
 
@@ -818,19 +811,12 @@ static void Init_MainSceneData()
 static void Init_AoData()
 {
     //SETUP SHADER
-    //pass->ao.shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/ssao.frag", NULL);
-    pass->ao.shader = ComputeShader_CompileFromFile("src/render/shaders/screen/ssao.comp");
-    assert(pass->ao.shader > 0);
-
-    //SETUP SHADER UNIFORMS
-    glUseProgram(pass->ao.shader);
-    Shader_SetInteger(pass->ao.shader, "depth_texture", 0);
-    Shader_SetInteger(pass->ao.shader, "noise_texture", 1);
-    Shader_SetInteger(pass->ao.shader, "gNormalMetal", 2);
+    bool result;
+    pass->ao.shader = Shader_ComputeCreate("src/render/shaders/screen/ssao.comp", SSAO_DEFINE_MAX, SSAO_UNIFORM_MAX, 7, SSAO_DEFINES_STR, SSAO_UNIFORMS_STR, SSAO_TEXTURES_STR, &result);
 
     //SETUP TEXTURES 
     glGenTextures(1, &pass->ao.ao_texture);
-    glGenTextures(1, &pass->ao.blurred_ao_texture);
+    glGenTextures(1, &pass->ao.back_ao_texture);
     glGenTextures(1, &pass->ao.noise_texture);
    
     glBindTexture(GL_TEXTURE_2D, pass->ao.ao_texture);
@@ -840,7 +826,7 @@ static void Init_AoData()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    glBindTexture(GL_TEXTURE_2D, pass->ao.blurred_ao_texture);
+    glBindTexture(GL_TEXTURE_2D, pass->ao.back_ao_texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, INIT_WIDTH, INIT_HEIGHT, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -862,6 +848,11 @@ static void Init_AoData()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
+    glGenSamplers(1, &pass->ao.linear_sampler);
+    glSamplerParameteri(pass->ao.linear_sampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glSamplerParameteri(pass->ao.linear_sampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glSamplerParameteri(pass->ao.linear_sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glSamplerParameteri(pass->ao.linear_sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
 static void Init_BloomData()
@@ -1088,24 +1079,42 @@ static void Init_ShadowMappingData()
 
 static void Init_WaterData()
 {
+    pass->water.blurring_shader = ComputeShader_CompileFromFile("src/render/shaders/screen/anisotropic_blur.comp");
+
     glGenFramebuffers(1, &pass->water.reflection_fbo);
+    glGenRenderbuffers(1, &pass->water.reflection_rbo);
 
     glGenTextures(1, &pass->water.reflection_texture);
-    glGenRenderbuffers(1, &pass->water.reflection_rbo);
+    glGenTextures(1, &pass->water.reflection_back_texture);
+    glGenTextures(1, &pass->water.refraction_texture);
 
     glBindTexture(GL_TEXTURE_2D, pass->water.reflection_texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    glBindTexture(GL_TEXTURE_2D, pass->water.reflection_back_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    glBindTexture(GL_TEXTURE_2D, pass->water.refraction_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
     glBindRenderbuffer(GL_RENDERBUFFER, pass->water.reflection_rbo);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, INIT_WIDTH, INIT_HEIGHT);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, INIT_WIDTH, INIT_HEIGHT);
     
     glBindFramebuffer(GL_FRAMEBUFFER, pass->water.reflection_fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->water.reflection_texture, 0);
-    
+
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, pass->water.reflection_rbo);
 
     CheckBoundFrameBufferStatus("Reflection");
@@ -1116,16 +1125,61 @@ static void Init_WaterData()
 
 static void Init_GodrayData()
 {
-    pass->godray.shader = ComputeShader_CompileFromFile("src/render/shaders/screen/godray.comp");
+    bool result;
+    pass->godray.shader = Shader_ComputeCreate("src/render/shaders/screen/godray.comp", GODRAY_DEFINE_MAX, GODRAY_UNIFORM_MAX, 4, GODRAY_DEFINES_STR, GODRAY_UNIFORMS_STR, GODRAY_TEXTURES_STR, &result);
 
     glGenTextures(1, &pass->godray.godray_fog_texture);
+    glGenTextures(1, &pass->godray.back_texture);
+    glGenTextures(1, &pass->godray.noise_texture);
 
     glBindTexture(GL_TEXTURE_2D, pass->godray.godray_fog_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, INIT_WIDTH / 2, INIT_HEIGHT / 2, 0, GL_RED, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    glBindTexture(GL_TEXTURE_2D, pass->godray.back_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, INIT_WIDTH / 2, INIT_HEIGHT / 2, 0, GL_RED, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    unsigned char* noise = malloc(sizeof(unsigned char) * 64 * 64 * 64);
+
+    for (int x = 0; x < 64; x++)
+    {
+        for (int y = 0; y < 64; y++)
+        {
+            for (int z = 0; z < 64; z++)
+            {
+                noise[x + y * 64] = (stb_perlin_noise3(x / 8.0, y / 8.0, z / 8.0, 0, 0, 0) + 1) / 2.0 * 256;
+            }
+        }
+    }
+
+    glBindTexture(GL_TEXTURE_3D, pass->godray.noise_texture);
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_R8, 64, 64, 64, 0, GL_RED, GL_UNSIGNED_BYTE, noise);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+
+    free(noise);
+}
+
+static void Init_SSILData()
+{
+    pass->ssil.shader = ComputeShader_CompileFromFile("src/render/shaders/screen/ssil.comp");
+    glGenTextures(1, &pass->ssil.output_texture);
+
+    glBindTexture(GL_TEXTURE_2D, pass->ssil.output_texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 }
 
 static void Init_PassData()
@@ -1142,15 +1196,13 @@ static void Init_PassData()
     Init_ShadowMappingData();
     Init_WaterData();
     Init_GodrayData();
+    Init_SSILData();
 }
 
 static void Init_SceneData()
 {
     glGenBuffers(1, &scene.camera_ubo);
     glGenBuffers(1, &scene.scene_ubo);
-    glGenBuffers(1, &scene.cluster_items_ssbo);
-    glGenBuffers(1, &scene.light_indexes_ssbo);
-    glGenBuffers(1, &scene.light_nodes_ssbo);
 
     glBindBuffer(GL_UNIFORM_BUFFER, scene.camera_ubo);
     glBufferData(GL_UNIFORM_BUFFER, sizeof(RScene_CameraData), NULL, GL_STREAM_DRAW);
@@ -1158,30 +1210,13 @@ static void Init_SceneData()
     glBindBuffer(GL_UNIFORM_BUFFER, scene.scene_ubo);
     glBufferData(GL_UNIFORM_BUFFER, sizeof(RScene_UBOData), NULL, GL_DYNAMIC_DRAW);
 
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.cluster_items_ssbo);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(scene.clusters_data.light_grid), NULL, GL_DYNAMIC_DRAW);
 
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.light_indexes_ssbo);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(scene.clusters_data.light_indexes), NULL, GL_DYNAMIC_DRAW);
-
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.light_nodes_ssbo);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(scene.clusters_data.frustrum_culled_lights), NULL, GL_DYNAMIC_DRAW);
-
-    scene.clusters_data.light_tree = AABB_Tree_Create();
    // scene.cull_data.dynamic_partition_tree = BVH_Tree_Create(0.5);
     scene.cull_data.static_partition_tree = BVH_Tree_Create(0.0);
 
     scene.render_instances_pool = Object_Pool_INIT(RenderInstance, 0);
 
     //Init scene defaults
-    scene.scene_data.heightFogMin = 30;
-    scene.scene_data.heightFogMax = 11;
-    scene.scene_data.heightFogCurve = 1;
-    scene.scene_data.depthFogBegin = 10;
-    scene.scene_data.depthFogEnd = 100;
-    scene.scene_data.depthFogCurve = 0;
-    scene.scene_data.fogDensity = 1;
-
     scene.scene_data.dirLightDirection[0] = 1;
     scene.scene_data.dirLightDirection[1] = 1;
     scene.scene_data.dirLightDirection[2] = 1;
@@ -1195,21 +1230,21 @@ static void Init_SceneData()
 
     scene.scene_data.ambientLightInfluence = 1.0;
 
-    scene.scene_environment.sky_color[0] = 0.0;
-    scene.scene_environment.sky_color[1] = 0.6;
-    scene.scene_environment.sky_color[2] = 1.0;
+    scene.environment.sky_color[0] = 0.0;
+    scene.environment.sky_color[1] = 0.6;
+    scene.environment.sky_color[2] = 1.0;
 
-    scene.scene_environment.sky_horizon_color[0] = 0.6;
-    scene.scene_environment.sky_horizon_color[1] = 0.6;
-    scene.scene_environment.sky_horizon_color[2] = 0.8;
+    scene.environment.sky_horizon_color[0] = 0.6;
+    scene.environment.sky_horizon_color[1] = 0.6;
+    scene.environment.sky_horizon_color[2] = 0.8;
 
-    scene.scene_environment.ground_bottom_color[0] = 0.8;
-    scene.scene_environment.ground_bottom_color[1] = 0.8;
-    scene.scene_environment.ground_bottom_color[2] = 0.8;
+    scene.environment.ground_bottom_color[0] = 0.8;
+    scene.environment.ground_bottom_color[1] = 0.8;
+    scene.environment.ground_bottom_color[2] = 0.8;
 
-    scene.scene_environment.ground_horizon_color[0] = 0.4;
-    scene.scene_environment.ground_horizon_color[1] = 0.4;
-    scene.scene_environment.ground_horizon_color[2] = 0.6;
+    scene.environment.ground_horizon_color[0] = 0.4;
+    scene.environment.ground_horizon_color[1] = 0.4;
+    scene.environment.ground_horizon_color[2] = 0.6;
 
   
     float sky_curve = 0.15;
@@ -1255,13 +1290,13 @@ static void Init_StorageBuffers()
 
     storage.particle_emitter_clients = FL_INIT(ParticleEmitterSettings);
 
-    storage.point_lights_pool = Object_Pool_INIT(PointLight2, 0);
-    storage.point_lights_backbuffer = dA_INIT(PointLight2, 0);
+    storage.point_lights_pool = Object_Pool_INIT(PointLight, 0);
+    storage.point_lights_backbuffer = dA_INIT(PointLight, 0);
     storage.spot_lights_pool = Object_Pool_INIT(SpotLight, 0);
     storage.spot_lights_backbuffer = dA_INIT(SpotLight, 0);
    
     storage.spot_lights = RSB_Create(10000, sizeof(SpotLight), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE);
-    storage.point_lights = RSB_Create(10000, sizeof(PointLight2), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE);
+    storage.point_lights = RSB_Create(10000, sizeof(PointLight), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE);
     storage.texture_handles = RSB_Create(1, sizeof(GLuint64), RSB_FLAG__RESIZABLE | RSB_FLAG__WRITABLE | RSB_FLAG__POOLABLE);
 }
 
@@ -1336,16 +1371,6 @@ void Init_SetupGLBindingPoints()
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, storage.point_lights.buffer);
     //1: SPOT LIGHTS
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, storage.spot_lights.buffer);
-    //2: CLUSTER ITEMS
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, scene.cluster_items_ssbo);
-    //3: LIGHT INDEXES
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, scene.light_indexes_ssbo);
-
-    //4: LIGHT NODES
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, scene.light_nodes_ssbo);
-
-
-
 
 }
 
@@ -1487,12 +1512,19 @@ void Renderer_Exit()
     }
     dA_Destruct(drawData->lc_world.shadow_sorted_chunk_indexes);
     dA_Destruct(drawData->lc_world.shadow_sorted_chunk_transparent_indexes);
+    dA_Destruct(drawData->lc_world.reflection_pass_opaque_firsts);
+    dA_Destruct(drawData->lc_world.reflection_pass_opaque_counts);
+    dA_Destruct(drawData->lc_world.reflection_pass_transparent_firsts);
+    dA_Destruct(drawData->lc_world.reflection_pass_transparent_counts);
+    dA_Destruct(drawData->lc_world.reflection_pass_chunk_indexes);
+    dA_Destruct(drawData->lc_world.reflection_pass_transparent_chunk_indexes);
 
     BVH_Tree_Destruct(&scene.cull_data.static_partition_tree);
 
     //destroy shaders
     Shader_Destruct(&pass->dof.shader);
     Shader_Destruct(&pass->post.post_process_shader);
+    Shader_Destruct(&pass->godray.shader);
 
     //Mem clean up
     free(cmdBuffer->cmds_data);

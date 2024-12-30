@@ -17,7 +17,14 @@
 #include "utility/u_utility.h"
 #include "core/resource_manager.h"
 
-#include "r_renderDefs.h"
+typedef struct 
+{
+	vec3 position;
+	vec2 tex_coords;
+	vec3 tangent;
+	vec3 normal;
+	vec3 bitangent;
+} ModelVertex;
 
 
 static R_Texture* loadMaterialTexture(struct aiMaterial* p_mat, enum aiTextureType p_textureType, const struct aiScene* p_scene, const char* p_directory)

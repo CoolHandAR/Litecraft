@@ -7,7 +7,7 @@
 #include "lc/lc_chunk.h"
 #include "lc_block_defs.h"
 #include "render/r_texture.h"
-#include "sound/sound.h"
+#include "core/sound.h"
 #include "render/r_public.h"
 #include "lc/lc_world.h"
 

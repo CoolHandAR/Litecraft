@@ -3,10 +3,9 @@
 #pragma once
 
 #include <Windows.h>
-#include <assert.h>
-#include <string.h>
 #include <cglm/cglm.h>
 #include <glad/glad.h>
+
 #include "utility/u_math.h"
 #include "utility/u_utility.h"
 #include "r_shader.h"
@@ -275,6 +274,15 @@ typedef struct
 
 	int shadow_sorted_chunk_offsets[4];
 	int shadow_sorted_chunk_transparent_offsets[4];
+
+	dynamic_array* reflection_pass_opaque_firsts;
+	dynamic_array* reflection_pass_opaque_counts;
+
+	dynamic_array* reflection_pass_transparent_firsts;
+	dynamic_array* reflection_pass_transparent_counts;
+
+	dynamic_array* reflection_pass_chunk_indexes;
+	dynamic_array* reflection_pass_transparent_chunk_indexes;
 } RDraw_LCWorldData;
 
 
@@ -354,9 +362,10 @@ typedef struct
 
 typedef struct
 {
-	R_Shader shader;
+	RShader shader;
+	unsigned linear_sampler;
 	unsigned ao_texture;
-	unsigned blurred_ao_texture;
+	unsigned back_ao_texture;
 	unsigned noise_texture;
 } RPass_AO;
 
@@ -402,19 +411,32 @@ typedef struct
 {
 	unsigned reflection_fbo;
 	unsigned reflection_texture;
+	unsigned reflection_back_texture;
 	unsigned reflection_rbo;
+
+	unsigned refraction_texture;
 
 	mat4 reflection_view_matrix;
 	mat4 reflection_projView_matrix;
 
 	vec2 reflection_size;
+
+	R_Shader blurring_shader;
 } RPass_Water;
 
 typedef struct
 {
 	unsigned godray_fog_texture;
-	R_Shader shader;
+	unsigned back_texture;
+	unsigned noise_texture;
+	RShader shader;
 } RPass_Godray;
+
+typedef struct
+{
+	R_Shader shader;
+	unsigned output_texture;
+} RPass_SSIL;
 
 typedef struct
 {
@@ -424,15 +446,12 @@ typedef struct
 	R_Shader downsample_shader;
 	R_Shader depth_downsample_shader;
 
+	RShader sample_shader;
+
 	unsigned halfsize_fbo;
 	unsigned depth_halfsize_texture;
 	unsigned normal_halfsize_texture;
 	unsigned perlin_noise_texture;
-	unsigned reflection_texture;
-	unsigned reflection_depth;
-	unsigned reflection_fbo;
-
-	mat4 reflection_matrix;
 }RPass_General;
 
 typedef struct
@@ -474,6 +493,7 @@ typedef struct
 	RPass_ShadowMappingData shadow;
 	RPass_Water water;
 	RPass_Godray godray;
+	RPass_SSIL ssil;
 } RPass_PassData;
 
 /*
@@ -520,14 +540,12 @@ typedef struct
 	Cvar* r_useDirShadowMapping;
 	Cvar* r_skipOclussionCulling;
 	
-	Cvar* r_useVolumetricLights;
 
 	//SCREEN EFFECTS
 	Cvar* r_useFxaa;
 	Cvar* r_useDepthOfField;
 	Cvar* r_useSsao;
 	Cvar* r_useBloom;
-	Cvar* r_useSsr;
 	Cvar* r_ssaoBias;
 	Cvar* r_ssaoRadius;
 	Cvar* r_ssaoStrength;
@@ -541,6 +559,7 @@ typedef struct
 	Cvar* r_Contrast;
 	Cvar* r_Saturation;
 	Cvar* r_TonemapMode; // 0 = Reinhard, 1 = Uncharted2 tonemapping, 2 = Aces Filmic 
+	Cvar* r_enableGodrays;
 
 	//WINDOW SPECIFIC
 	Cvar* w_width;
@@ -569,6 +588,9 @@ typedef struct
 	Cvar* r_DepthOfFieldQuality;
 	Cvar* r_DepthOfFieldFar;
 	Cvar* r_DepthOfFieldNear;
+
+	//WATER
+	Cvar* r_waterReflectionQuality;
 
 	//DEBUG
 	Cvar* r_drawDebugTexture; //-1 disabled, 0 = Normal, 1 = Albedo, 2 = Depth, 3 = Metal, 4 = Rough, 5 = AO, 6 = BLOOM
@@ -631,16 +653,6 @@ typedef struct
 	unsigned numPointLights;
 	unsigned numSpotLights;
 	
-	float fogDensity;
-
-	float depthFogCurve;
-	float depthFogBegin;
-	float depthFogEnd;
-
-	float heightFogCurve;
-	float heightFogMin;
-	float heightFogMax;
-
 	vec4 shadow_splits;
 	vec4 shadow_bias;
 	vec4 shadow_normal_bias;
@@ -657,6 +669,26 @@ typedef struct
 	vec3 sky_horizon_color;
 	vec3 ground_horizon_color;
 	vec3 ground_bottom_color;
+
+	//FOG
+	float heightFogDensity;
+	float depthFogDensity;
+
+	float depthFogCurve;
+	float depthFogBegin;
+	float depthFogEnd;
+
+	float heightFogCurve;
+	float heightFogMin;
+	float heightFogMax;
+
+	bool heightFogEnabled;
+	bool depthFogEnabled;
+	
+	//GODRAY
+	float godrayScatteringAmount;
+	float godrayFogAmount;
+
 } RScene_Environment;
 
 typedef enum
@@ -682,17 +714,26 @@ typedef struct
 #define MAX_CULL_QUERY_BUFFER_ITEMS 5000
 #define MAX_CULL_LC_SHADOW_QUERY_BUFFER_ITEMS 5000
 #define MAX_CULL_INSTANCES 10000
+
 typedef struct
 {
-	AABB_FrustrumCullQueryResult lc_world_frustrum_query_buffer[MAX_CULL_QUERY_BUFFER_ITEMS];
-	AABB_FrustrumCullQueryResult lc_world_frustrum_sorted_query_buffer[MAX_CULL_QUERY_BUFFER_ITEMS];
+	int shadow_cull_count[4];
+	int shadow_cull_transparent_count[4];
 
-	AABB_FrustrumCullQueryResultTreeData lc_world_frustrum_shadow_sorted_query_buffer[4][MAX_CULL_LC_SHADOW_QUERY_BUFFER_ITEMS];
+	int total_in_frustrum_count;
+	int opaque_in_frustrum;
+	int transparent_in_frustrum;
+	int water_in_frustrum;
+	int reflection_opaque_count;
+	int reflection_transparent_count;
 
-	int lc_world_shadow_cull_count[4];
-	int lc_world_shadow_cull_transparent_count[4];
-
-	int lc_world_in_frustrum_count;
+	int frustrum_query_buffer[MAX_CULL_QUERY_BUFFER_ITEMS];
+	int frustrum_sorted_query_buffer[MAX_CULL_QUERY_BUFFER_ITEMS];
+	int frustrum_shadow_sorted_query_buffer[4][MAX_CULL_LC_SHADOW_QUERY_BUFFER_ITEMS];
+} RScene_LCWorldCullData;
+typedef struct
+{
+	RScene_LCWorldCullData lc_world;
 
 	BVH_Tree static_partition_tree;
 	BVH_Tree dynamic_partition_tree;
@@ -701,30 +742,6 @@ typedef struct
 	int static_cull_instance_result[MAX_CULL_INSTANCES];
 } RScene_CullData;
 
-#define CLUSTERS_X 16
-#define CLUSTERS_Y 9
-#define CLUSTERS_Z 16
-#define MAX_LIGHTS_PER_CLUSTER 50
-typedef struct
-{
-	int count;
-	int offset;
-	int light_indices[50];
-} ClusterItem;
-typedef struct
-{
-	vec3 cluster_bounding_boxes[CLUSTERS_X * CLUSTERS_Y * CLUSTERS_Z][2];
-	vec3 min_max[2];
-	uint32_t lights[CLUSTERS_X][CLUSTERS_Y][CLUSTERS_Z];
-	ClusterItem light_grid[CLUSTERS_X * CLUSTERS_Y * CLUSTERS_Z];
-	uint32_t light_indexes[CLUSTERS_X * CLUSTERS_Y * CLUSTERS_Z * MAX_LIGHTS_PER_CLUSTER];
-	int lights_in_clusters;
-	AABB_Tree light_tree;
-	AABB_LightNodeData frustrum_culled_lights[1000];
-	
-	int culled_light_count;
-} R_ClustersData;
-
 typedef struct
 {
 	RScene_CameraData camera;
@@ -732,18 +749,12 @@ typedef struct
 	RScene_UBOData scene_data;
 	RScene_CullData cull_data;
 
-	RScene_Environment scene_environment;
-
-	R_ClustersData clusters_data;
+	RScene_Environment environment;
 
 	Object_Pool* render_instances_pool;
 
 	unsigned camera_ubo;
 	unsigned scene_ubo;
-	unsigned cluster_items_ssbo;
-	unsigned light_indexes_ssbo;
-	unsigned light_nodes_ssbo;
-
 	bool dirty_cam;
 }R_Scene;
 

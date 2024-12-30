@@ -1,13 +1,11 @@
 #include "resource_manager.h"
 
-
 #include "utility/u_object_pool.h"
 #include "utility/u_utility.h"
 #include "utility/Custom_Hashmap.h"
 #include "render/r_texture.h"
 #include "render/r_model.h"
-#include <assert.h>
-#include "sound/sound.h"
+#include "core/sound.h"
 
 typedef struct
 {

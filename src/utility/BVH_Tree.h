@@ -1,3 +1,5 @@
+#ifndef BVH_TREE_H
+#define BVH_TREE_H
 #pragma once
 
 #include "utility/u_object_pool.h"
@@ -27,3 +29,5 @@ int BVH_Tree_Cull_Box(BVH_Tree* const p_tree, vec3 p_box[2], int p_maxHitCount, 
 int BVH_Tree_Cull_Planes(BVH_Tree* const p_tree, vec4* p_planes, int p_numPlanes, int p_maxHitCount, BVH_RegisterFun p_registerFun);
 int BVH_Tree_Cull_Segment(BVH_Tree* const p_tree, vec3 p_begin, vec3 p_end, int p_maxHitCount, BVH_RegisterFun p_registerFun);
 int BVH_Tree_Cull_Point(BVH_Tree* const p_tree, vec3 p_point, int p_maxHitCount, BVH_RegisterFun p_registerFun);
+
+#endif

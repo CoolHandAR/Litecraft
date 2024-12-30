@@ -2,37 +2,50 @@
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(r32f, binding = 0) writeonly restrict uniform image2D outputImage;
+layout(rgba16f, binding = 0) writeonly restrict uniform image2D outputImage;
 
-uniform sampler2DArray source_texture;
+uniform sampler2D source_texture;
 
 uniform vec2 u_viewportSize;
-uniform int u_layer;
 
 void main()
 {
 	ivec2 iCoords = ivec2(gl_GlobalInvocationID.xy);
 
+	 vec2 texSize = textureSize(source_texture, 0);
     //Make sure we are not processing more than we need to
-    if (any(greaterThanEqual(iCoords, u_viewportSize))) 
+    if (any(greaterThanEqual(iCoords, texSize))) 
     { 
 		return;
 	}
 
-	vec2 coords = (vec2(iCoords + 0.5) / u_viewportSize);
-	vec2 texSize = (1.0 / textureSize(source_texture, 0).xy) * 2.0;
+	vec2 coords = (vec2(iCoords + 0.5) / texSize);
+	vec2 pixelSize = (1.0 / texSize);
 
-	//coords *= 2.0;
+	// Source: http://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare
+	vec4 A = texture(source_texture, coords + pixelSize * vec2(-1.0, -1.0));
+	vec4 B = texture(source_texture, coords + pixelSize * vec2(0.0, -1.0));
+	vec4 C = texture(source_texture, coords + pixelSize * vec2(1.0, -1.0));
+	vec4 D = texture(source_texture, coords + pixelSize * vec2(-0.5, -0.5));
+	vec4 E = texture(source_texture, coords + pixelSize * vec2(0.5, -0.5));
+	vec4 F = texture(source_texture, coords + pixelSize * vec2(-1.0, 0.0));
+	vec4 G = texture(source_texture, coords);
+	vec4 H = texture(source_texture, coords + pixelSize * vec2(1.0, 0.0));
+	vec4 I = texture(source_texture, coords + pixelSize * vec2(-0.5, 0.5));
+	vec4 J = texture(source_texture, coords + pixelSize * vec2(0.5, 0.5));
+	vec4 K = texture(source_texture, coords + pixelSize * vec2(-1.0, 1.0));
+	vec4 L = texture(source_texture, coords + pixelSize * vec2(0.0, 1.0));
+	vec4 M = texture(source_texture, coords + pixelSize * vec2(1.0, 1.0));
+
+	float base_weight = 0.5 / 4.0;
+	float lesser_weight = 0.125 / 4.0;
 
 	vec4 Color = vec4(0.0);
-
-	Color += texture(source_texture, vec3(coords + (vec2(-3.0) * texSize.xy), u_layer)) * (1.0/64.0);
-	Color += texture(source_texture, vec3(coords + (vec2(-2.0) * texSize.xy), u_layer)) * (6.0/64.0);
-	Color += texture(source_texture, vec3(coords + (vec2(-1.0) * texSize.xy), u_layer)) * (15.0/64.0);
-	Color += texture(source_texture, vec3(coords + (vec2(0.0) * texSize.xy), u_layer)) * (20.0/64.0);
-	Color += texture(source_texture, vec3(coords + (vec2(1.0) * texSize.xy), u_layer)) * (15.0/64.0);
-	Color += texture(source_texture, vec3(coords + (vec2(2.0) * texSize.xy), u_layer)) * (6.0/64.0);
-	Color += texture(source_texture, vec3(coords + (vec2(3.0) * texSize.xy), u_layer)) * (1.0/64.0);
+	Color = (D + E + I + J) * base_weight;
+	Color += (A + B + G + F) * lesser_weight;
+	Color += (B + C + H + G) * lesser_weight;
+	Color += (F + G + L + K) * lesser_weight;
+	Color += (G + H + M + L) * lesser_weight;
 
 	imageStore(outputImage, ivec2(gl_GlobalInvocationID.xy), vec4(Color));
 }

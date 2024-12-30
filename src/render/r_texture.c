@@ -2,8 +2,6 @@
 
 #include <glad/glad.h>
 
-#include <string.h>
-
 #define STBI_FAILURE_USERMSG
 #include <stb_image/stb_image.h>
 

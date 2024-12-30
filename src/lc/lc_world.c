@@ -1,46 +1,17 @@
 #include "lc_world.h"
-#include <LC_Block_defs.h>
+#include "LC_Block_defs.h"
 #include "utility/u_utility.h"
 #include "render/r_core.h"
 #include <glad/glad.h>
 #include "core/core_common.h"
-#include "render/r_renderer.h"
 #include <time.h>
 #include "lc/lc_chunk.h"
 #include "render/r_public.h"
-#include "lc/lc_player.h"
 #include "core/resource_manager.h"
 
 #include "lc/lc_core.h"
 
-typedef enum
-{
-	LC_TASK_TYPE__NONE,
-	LC_TASK_TYPE__CHUNK_VERTEX_GENERATE,
-	LC_TASK_TYPE__CHUNK_GENERATE_BLOCKS,
-	LC_TASK_TYPE__CHUNK_GENERATE_BLOCKS_AND_GENERATE_VERTICES,
-	LC_TASK_TYPE__MAX
-} LCTaskType;
-
-typedef struct
-{
-	WorkHandleID handle;
-	LCTaskType type;
-	LC_Chunk* chunk;
-
-	size_t prev_vertex_count;
-	size_t prev_transparent_vertex_count;
-	size_t prev_water_vertex_count;
-} LCWorldTask;
-
-#define MAX_ACTIVE_TASKS 100
-//#define LC_ASYNC
-typedef struct
-{
-	LCWorldTask tasks[MAX_ACTIVE_TASKS];
-	int task_pos;
-	int tasks_in_queue;
-} LCTaskQueue;
+#define MAX_CHUNK_LIMIT 4000
 
 typedef struct
 {
@@ -49,12 +20,10 @@ typedef struct
 	int prev_block_hp;
 } PrevMinedBlock;
 
+
 static LC_World lc_world;
-static WorkHandleID work_tast_id;
-static LC_Chunk* work_chunk;
 static bool chunk_updated_this_frame;
 static PrevMinedBlock prev_mined_block;
-static LCTaskQueue task_queue;
 
 static LC_Block_LightingData LC_getLightingData(uint8_t block_type)
 {
@@ -75,98 +44,17 @@ static LC_Block_LightingData LC_getLightingData(uint8_t block_type)
 	return data;
 }
 
-void LC_World_GenerateBlocksWrapper(LC_Chunk* const p_chunk)
-{
-	LC_Chunk_GenerateBlocks(p_chunk, 2);
-}
-
-GeneratedChunkVerticesResult* LC_World_GenerateBlocksWrapperAndGenVerticesWrapper(LC_Chunk* const p_chunk)
-{
-	LC_Chunk_GenerateBlocks(p_chunk, 2);
-	
-	GeneratedChunkVerticesResult* result = NULL;
-
-	if (p_chunk->alive_blocks > 0)
-	{
-		result = LC_Chunk_GenerateVerticesTest(p_chunk);
-	}
-
-	return result;
-}
-
-static bool LC_World_InsertToTaskQueue(LC_Chunk* const p_chunk, LCTaskType p_taskType)
-{
-	LCWorldTask* task = NULL;
-	for (int i = 0; i < MAX_ACTIVE_TASKS; i++)
-	{
-		if (task_queue.tasks[task_queue.task_pos].type == LC_TASK_TYPE__NONE)
-		{
-			task = &task_queue.tasks[task_queue.task_pos];
-			break;
-		}
-		task_queue.task_pos = (task_queue.task_pos + 1) % MAX_ACTIVE_TASKS;
-	}
-
-	if (task && task->type == LC_TASK_TYPE__NONE)
-	{
-		WorkHandleID handle = -1;
-
-		if (p_taskType == LC_TASK_TYPE__CHUNK_VERTEX_GENERATE)
-		{
-			handle = Thread_AssignTaskIntType(LC_Chunk_GenerateVerticesTest, p_chunk, 0);
-		}
-		else if (p_taskType == LC_TASK_TYPE__CHUNK_GENERATE_BLOCKS)
-		{
-			//handle = Thread_AssignTaskIntType(LC_World_GenerateBlocksWrapper, p_chunk, 0);
-		}
-		else if (p_taskType == LC_TASK_TYPE__CHUNK_GENERATE_BLOCKS_AND_GENERATE_VERTICES)
-		{
-			handle = Thread_AssignTaskIntType(LC_World_GenerateBlocksWrapperAndGenVerticesWrapper, p_chunk, 0);
-		}
-		
-		if (handle == -1)
-		{
-			return false;
-		}
-
-		task->type = p_taskType;
-		task->chunk = p_chunk;
-		task->prev_vertex_count = p_chunk->vertex_count;
-		task->prev_transparent_vertex_count = p_chunk->transparent_vertex_count;
-		task->prev_water_vertex_count = p_chunk->water_vertex_count;
-		task->handle = handle;
-
-		task_queue.tasks_in_queue++;
-
-		return true;
-	}
-
-	return false;
-}
-
-
-static void _getNormalizedChunkPosition(float p_gx, float p_gy, float p_gz, ivec3 dest)
+static void LC_World_getNormalizedChunkPosition(float p_gx, float p_gy, float p_gz, ivec3 dest)
 {
 	dest[0] = floorf((p_gx / LC_CHUNK_WIDTH));
 	dest[1] = floorf((p_gy / LC_CHUNK_HEIGHT));
 	dest[2] = floorf((p_gz / LC_CHUNK_LENGTH));
 }
-static LC_Chunk* LC_World_InsertToChunkCache(LC_Chunk* const p_chunk)
-{
-	ivec3 chunk_key;
-	_getNormalizedChunkPosition(p_chunk->global_position[0], p_chunk->global_position[1], p_chunk->global_position[2], chunk_key);
-
-	//insert to the hash map
-	LC_Chunk* chunk = CHMap_Insert(&lc_world.chunk_cache_map, chunk_key, p_chunk);
-
-	return chunk;
-}
-
 
 static void LC_World_getNeighbours(LC_Chunk* const p_chunk, LC_Chunk* r_neighbours[6])
 {
 	ivec3 normalized_chunk_pos;
-	_getNormalizedChunkPosition(p_chunk->global_position[0], p_chunk->global_position[1], p_chunk->global_position[2], normalized_chunk_pos);
+	LC_World_getNormalizedChunkPosition(p_chunk->global_position[0], p_chunk->global_position[1], p_chunk->global_position[2], normalized_chunk_pos);
 
 	ivec3 back, front, left, right, bottom, top;
 	glm_ivec3_copy(normalized_chunk_pos, back);
@@ -191,37 +79,62 @@ static void LC_World_getNeighbours(LC_Chunk* const p_chunk, LC_Chunk* r_neighbou
 	r_neighbours[5] = CHMap_Find(&lc_world.chunk_map, top);
 }
 
-static void LC_World_UnloadChunkVertexData(LC_Chunk* p_chunk)
+static void LC_World_getNeighbourChunk(LC_Chunk* const p_chunk, int p_side, LC_Chunk** r_neighbour)
 {
-	if (p_chunk->opaque_index >= 0)
+	ivec3 normalized_chunk_pos;
+	LC_World_getNormalizedChunkPosition(p_chunk->global_position[0], p_chunk->global_position[1], p_chunk->global_position[2], normalized_chunk_pos);
+
+	ivec3 chunk_pos;
+	glm_ivec3_copy(normalized_chunk_pos, chunk_pos);
+	switch (p_side)
 	{
-		DRB_ChangeData(&lc_world.render_data.vertex_buffer, 0, NULL, p_chunk->opaque_index);
-		p_chunk->vertex_count = 0;
-		p_chunk->vertex_loaded = false;
+	case 0:
+	{
+		chunk_pos[2]--;
+		break;
 	}
-	if (p_chunk->transparent_index >= 0)
+	case 1:
 	{
-		DRB_ChangeData(&lc_world.render_data.transparents_vertex_buffer, 0, NULL, p_chunk->transparent_index);
-		p_chunk->transparent_vertex_count = 0;
+		chunk_pos[2]++;
+		break;
+	}
+	case 3:
+	{
+		chunk_pos[0]--;
+		break;
+	}
+	case 4:
+	{
+		chunk_pos[0]++;
+		break;
+	}
+	case 5:
+	{
+		chunk_pos[1]--;
+		break;
+	}
+	case 6:
+	{
+		chunk_pos[1]++;
+		break;
+	}
+	default:
+		break;
 	}
 
-	lc_world.chunks_vertex_loaded--;
+	*r_neighbour = CHMap_Find(&lc_world.chunk_map, chunk_pos);
 }
 
-static void LC_World_UpdateDrawCommands(size_t p_opaqueOffset, size_t p_transparentOffset, size_t p_waterOffset)
+static void LC_World_UpdateDrawCommandsBuffer()
 {
-
-	double start_Time = glfwGetTime();
-
 	if (lc_world.render_data.draw_cmds_buffer.used_size > 0)
 	{	
-		dA_clear(lc_world.draw_cmds_backbuffer);
 		if (dA_capacity(lc_world.draw_cmds_backbuffer) <= lc_world.render_data.draw_cmds_buffer.used_size)
 		{
-			//dA_reserve(lc_world.draw_cmds_backbuffer, lc_world.render_data.draw_cmds_buffer.used_size - dA_capacity(lc_world.draw_cmds_backbuffer));
 			dA_resize(lc_world.draw_cmds_backbuffer, lc_world.render_data.draw_cmds_buffer.used_size);
 			memset(lc_world.draw_cmds_backbuffer->data, 0, sizeof(CombinedChunkDrawCmdData) * lc_world.draw_cmds_backbuffer->elements_size);
 		}
+
 		for (int i = 0; i < lc_world.chunk_map.item_data->elements_size; i++)
 		{
 			LC_Chunk* chunk = dA_at(lc_world.chunk_map.item_data, i);
@@ -263,14 +176,7 @@ static void LC_World_UpdateDrawCommands(size_t p_opaqueOffset, size_t p_transpar
 		lc_world.render_data.ubo_data.skip_opaque_owner = -1;
 		lc_world.render_data.ubo_data.skip_transparent_owner = -1;
 		lc_world.render_data.ubo_data.skip_water_owner = -1;
-
-		glNamedBufferSubData(lc_world.render_data.draw_cmds_buffer.buffer, 0, 
-			lc_world.render_data.draw_cmds_buffer.used_size * sizeof(CombinedChunkDrawCmdData), dA_getFront(lc_world.draw_cmds_backbuffer));
 	}
-
-	double end_time = glfwGetTime();
-
-	printf("%f draw cmd update \n", end_time - start_Time);
 }
 
 static void LC_World_DeleteChunk(LC_Chunk* const p_chunk, bool p_cpuMassDelete)
@@ -287,15 +193,12 @@ static void LC_World_DeleteChunk(LC_Chunk* const p_chunk, bool p_cpuMassDelete)
 
 		DRB_RemoveItem(&lc_world.render_data.vertex_buffer, p_chunk->opaque_index);
 
-		//free the vertices buffer
 		int64_t to_move_by = prev_item.count / sizeof(ChunkVertex);
 
 		to_move_by = -to_move_by;
 
 		lc_world.render_data.ubo_data.opaque_update_offset = prev_item.offset / sizeof(ChunkVertex);
 		lc_world.render_data.ubo_data.opaque_update_move_by = to_move_by;
-
-		lc_world.chunks_vertex_loaded--;
 
 		p_chunk->opaque_index = -1;
 	}
@@ -312,8 +215,6 @@ static void LC_World_DeleteChunk(LC_Chunk* const p_chunk, bool p_cpuMassDelete)
 		lc_world.render_data.ubo_data.transparent_update_offset = prev_item.offset / sizeof(ChunkVertex);
 		lc_world.render_data.ubo_data.transparent_update_move_by = to_move_by;
 
-		lc_world.chunks_vertex_loaded--;
-
 		p_chunk->transparent_index = -1;
 	}
 	if (p_chunk->water_index != -1)
@@ -328,8 +229,6 @@ static void LC_World_DeleteChunk(LC_Chunk* const p_chunk, bool p_cpuMassDelete)
 
 		lc_world.render_data.ubo_data.water_update_offset = prev_item.offset / sizeof(ChunkWaterVertex);
 		lc_world.render_data.ubo_data.water_update_move_by = to_move_by;
-
-		lc_world.chunks_vertex_loaded--;
 
 		p_chunk->water_index = -1;
 	}
@@ -358,18 +257,18 @@ static void LC_World_DeleteChunk(LC_Chunk* const p_chunk, bool p_cpuMassDelete)
 	}
 	if (p_chunk->aabb_tree_index > -1)
 	{
-		LCTreeData* tree_data = AABB_Tree_GetIndexData(&lc_world.render_data.aabb_tree, p_chunk->aabb_tree_index);
+		LCTreeData* tree_data = BVH_Tree_GetData(&lc_world.render_data.bvh_tree, p_chunk->aabb_tree_index);
 
 		if (tree_data)
 		{
 			free(tree_data);
 		}
-		tree_data = NULL;
 
-		AABB_Tree_Remove(&lc_world.render_data.aabb_tree, p_chunk->aabb_tree_index);
+		BVH_Tree_Remove(&lc_world.render_data.bvh_tree, p_chunk->aabb_tree_index);
 
 		p_chunk->aabb_tree_index = -1;
 	}
+	//remove any light blcoks
 	if (p_chunk->light_blocks > 0)
 	{
 		for (int x = 0; x < LC_CHUNK_WIDTH; x++)
@@ -393,10 +292,9 @@ static void LC_World_DeleteChunk(LC_Chunk* const p_chunk, bool p_cpuMassDelete)
 						//remove from the light hash map
 						if (light_index)
 						{
-							RSCene_DeletePointLight(*light_index);
+							RScene_DeleteRenderInstance(*light_index);
 							CHMap_Erase(&lc_world.light_hash_map, blockpos);
 						}
-
 						if (p_chunk->light_blocks > 0)
 						{
 							p_chunk->light_blocks--;
@@ -420,7 +318,7 @@ static void LC_World_DeleteChunk(LC_Chunk* const p_chunk, bool p_cpuMassDelete)
 	p_chunk->is_deleted = true;
 
 	ivec3 hash_key;
-	_getNormalizedChunkPosition(p_chunk->global_position[0], p_chunk->global_position[1], p_chunk->global_position[2], hash_key);
+	LC_World_getNormalizedChunkPosition(p_chunk->global_position[0], p_chunk->global_position[1], p_chunk->global_position[2], hash_key);
 
 	//remove from hashmap
 	CHMap_Erase(&lc_world.chunk_map, hash_key);
@@ -441,7 +339,7 @@ static void LC_World_UpdateChunkVertices(LC_Chunk* const p_chunk, GeneratedChunk
 	bool update_drawcmds_cpu = false;
 
 	CombinedChunkDrawCmdData cmd;
-	memset(&cmd, 0, sizeof(cmd), 0);
+	memset(&cmd, 0, sizeof(cmd));
 
 	if (p_chunk->opaque_blocks > 0 || (p_oldVertexCount > 0 && p_chunk->opaque_blocks <= 0))
 	{
@@ -588,6 +486,7 @@ static void LC_World_UpdateChunkIndexes(LC_Chunk* const p_chunk)
 	if (p_chunk->water_blocks > 0 && p_chunk->water_index == -1)
 	{
 		p_chunk->water_index = DRB_EmplaceItem(&lc_world.render_data.water_vertex_buffer, 0, NULL);
+		data_changed = true;
 	}
 	if (p_chunk->draw_cmd_index == -1)
 	{
@@ -629,18 +528,30 @@ static void LC_World_UpdateChunkIndexes(LC_Chunk* const p_chunk)
 			tree_data->chunk_data_index = p_chunk->chunk_data_index;
 			tree_data->opaque_index = p_chunk->opaque_index;
 			tree_data->transparent_index = p_chunk->transparent_index;
-			p_chunk->aabb_tree_index = AABB_Tree_Insert(&lc_world.render_data.aabb_tree, &aabb, tree_data);
+			tree_data->water_index = p_chunk->water_index;
+
+			vec3 box[2];
+			box[0][0] = (float)p_chunk->global_position[0] - 0.5;
+			box[0][1] = (float)p_chunk->global_position[1] - 0.5;
+			box[0][2] = (float)p_chunk->global_position[2] - 0.5;
+
+			box[1][0] = (float)p_chunk->global_position[0] + LC_CHUNK_WIDTH;
+			box[1][1] = (float)p_chunk->global_position[1] + LC_CHUNK_HEIGHT;
+			box[1][2] = (float)p_chunk->global_position[2] + LC_CHUNK_LENGTH;
+
+			p_chunk->aabb_tree_index = BVH_Tree_Insert(&lc_world.render_data.bvh_tree, box, tree_data);
 		}
 	}
 	else if (p_chunk->aabb_tree_index >= 0 && data_changed)
 	{
-		LCTreeData* tree_data = AABB_Tree_GetIndexData(&lc_world.render_data.aabb_tree, p_chunk->aabb_tree_index);
+		LCTreeData* tree_data = BVH_Tree_GetData(&lc_world.render_data.bvh_tree, p_chunk->aabb_tree_index);
 
 		assert(tree_data);
 
 		tree_data->chunk_data_index = p_chunk->chunk_data_index;
 		tree_data->opaque_index = p_chunk->opaque_index;
 		tree_data->transparent_index = p_chunk->transparent_index;
+		tree_data->water_index = p_chunk->water_index;
 	}
 
 	//sanity check. These should always match
@@ -668,13 +579,14 @@ static void LC_World_GenVerticesAndUpdateChunk(LC_Chunk* const p_chunk)
 
 	chunk_updated_this_frame = true;
 }
+
 static void LC_World_FloodWater(LC_Chunk* const p_chunk)
 {
 	if (p_chunk->water_blocks <= 0)
 	{
 		return;
 	}
-
+	//return;
 	int num_none_blocks = (LC_CHUNK_WIDTH * LC_CHUNK_HEIGHT * LC_CHUNK_LENGTH) - p_chunk->alive_blocks;
 
 	if (num_none_blocks <= 0)
@@ -682,9 +594,9 @@ static void LC_World_FloodWater(LC_Chunk* const p_chunk)
 		return;
 	}
 
-	int minWaterX = 32;
-	int minWaterY = 32;
-	int minWaterZ = 32;
+	int minWaterX = 16;
+	int minWaterY = 16;
+	int minWaterZ = 16;
 
 	int maxWaterX = 0;
 	int maxWaterY = 0;
@@ -724,52 +636,109 @@ static void LC_World_FloodWater(LC_Chunk* const p_chunk)
 							}
 						}
 					}
-					for (int x2 = x; x2 < LC_CHUNK_WIDTH; x2++)
-					{
-						for (int z2 = z; z2 < LC_CHUNK_LENGTH; z2++)
-						{
-							if (p_chunk->blocks[x2][y][z2].type == LC_BT__NONE)
-							{
-								minWaterX = min(minWaterX, x2);
-								minWaterY = min(minWaterY, y);
-								minWaterZ = min(minWaterZ, z2);
-
-								maxWaterX = max(maxWaterX, x2);
-								maxWaterY = max(maxWaterY, y);
-								maxWaterZ = max(maxWaterZ, z2);
-
-
-								LC_Chunk_SetBlock(p_chunk, x2, y, z2, LC_BT__WATER);
-							}
-						}
-					}
 				}
 			}
 		}
 	}
+	
+	//back
+	if (minWaterZ == 0)
+	{
+		LC_Chunk* neigbour = NULL;
+		LC_World_getNeighbourChunk(p_chunk, 0, &neigbour);
 
-	if (minWaterX == 0 || minWaterZ == 0 || minWaterY == 0)
-	{
-		LC_Chunk* chunk = NULL;
-		LC_Block* block = LC_World_GetBlock(p_chunk->global_position[0] - 1, p_chunk->global_position[1] + minWaterY,
-			p_chunk->global_position[2] -1, NULL, &chunk);
-		if (block && block->type == LC_BT__NONE)
-		{
-			LC_World_setBlock(chunk, p_chunk->global_position[0] - 1, p_chunk->global_position[1] + minWaterY,
-				p_chunk->global_position[2] - 1, LC_BT__WATER);
+		if (neigbour)
+		{	
+			for (int x = minWaterX; x < maxWaterX; x++)
+			{
+				if (LC_Chunk_getType(neigbour, x, maxWaterY, 15) == LC_BT__NONE)
+				{
+					//LC_Chunk_SetBlock(neigbour, x, maxWaterY, 15, LC_BT__WATER);
+					//LC_World_FloodWater(neigbour);
+					//LC_World_GenVerticesAndUpdateChunk(neigbour);
+					break;
+				}
+			}
+			
 		}
 	}
-	else if (maxWaterX == LC_CHUNK_WIDTH - 1 || maxWaterY == LC_CHUNK_HEIGHT - 1 || maxWaterZ == LC_CHUNK_LENGTH - 1)
+	/*
+	//front
+	if (maxWaterZ == 0)
 	{
-		LC_Chunk* chunk = NULL;
-		LC_Block* block = LC_World_GetBlock(p_chunk->global_position[0] + maxWaterX + 1, p_chunk->global_position[1] + maxWaterY,
-			p_chunk->global_position[2] + 1, NULL, &chunk);
-		if (block && block->type == LC_BT__NONE)
+		LC_Chunk* neigbour = NULL;
+		LC_World_getNeighbourChunk(p_chunk, 1, &neigbour);
+
+		if (neigbour)
 		{
-			LC_World_setBlock(chunk, p_chunk->global_position[0]  + 1, p_chunk->global_position[1] + maxWaterY,
-				p_chunk->global_position[2] + 1, LC_BT__WATER);
+			if (LC_World_SetWaterBlockIfNone(neigbour, minWaterY, maxWaterY, 0, 0))
+			{
+				LC_World_FloodWater(neigbour);
+				//LC_World_GenVerticesAndUpdateChunk(neigbour);
+			}
 		}
 	}
+	//left 
+	if (minWaterX == 0)
+	{
+		LC_Chunk* neigbour = NULL;
+		LC_World_getNeighbourChunk(p_chunk, 2, &neigbour);
+
+		if (neigbour)
+		{
+			if (LC_World_SetWaterBlockIfNone(neigbour, minWaterY, maxWaterY, LC_CHUNK_WIDTH - 1, 0))
+			{
+				LC_World_FloodWater(neigbour);
+				//LC_World_GenVerticesAndUpdateChunk(neigbour);
+			}
+		}
+	}
+	//right
+	if (maxWaterX == 0)
+	{
+		LC_Chunk* neigbour = NULL;
+		LC_World_getNeighbourChunk(p_chunk, 3, &neigbour);
+
+		if (neigbour)
+		{
+			if (LC_World_SetWaterBlockIfNone(neigbour, minWaterY, maxWaterY, 0, 0))
+			{
+				LC_World_FloodWater(neigbour);
+				//LC_World_GenVerticesAndUpdateChunk(neigbour);
+			}
+		}
+	}
+	//bottom
+	if (minWaterY == 0)
+	{
+		LC_Chunk* neigbour = NULL;
+		LC_World_getNeighbourChunk(p_chunk, 4, &neigbour);
+
+		if (neigbour)
+		{
+			bool block_set = false;
+			for (int x = minWaterX; x <= maxWaterX; x++)
+			{
+				for (int z = minWaterZ; z <= maxWaterZ; z++)
+				{
+					if (LC_Chunk_getType(neigbour, x, LC_CHUNK_HEIGHT - 1, z) == LC_BT__NONE)
+					{
+						LC_Chunk_SetBlock(neigbour, x, LC_CHUNK_HEIGHT - 1, z, LC_BT__WATER);
+
+						block_set = true;
+					}
+				}
+			}
+			if (block_set)
+			{
+				LC_World_FloodWater(neigbour);
+				//LC_World_GenVerticesAndUpdateChunk(neigbour);
+			}
+		}
+	
+	
+	}
+	*/
 }
 static void LC_World_UpdateChunk(LC_Chunk* const p_chunk, bool p_async)
 {
@@ -786,9 +755,6 @@ static void LC_World_UpdateChunk(LC_Chunk* const p_chunk, bool p_async)
 	{
 		LC_World_FloodWater(p_chunk);
 	}
-
-	LC_Chunk* neighbours[6];
-	//LC_World_getNeighbours(p_chunk, neighbours);
 
 #ifdef LC_ASYNC
 	if (p_async)
@@ -811,11 +777,16 @@ static void LC_World_UpdateChunk(LC_Chunk* const p_chunk, bool p_async)
 #endif
 }
 
-
 static LC_Chunk* LC_World_InsertChunk(LC_Chunk* const p_chunk, int p_x, int p_y, int p_z)
 {
+	if (lc_world.chunk_map.num_items >= MAX_CHUNK_LIMIT)
+	{
+		printf("MAX CHUNK LIMIT REACHED \N");
+		return NULL;
+	}
+
 	ivec3 chunk_key;
-	_getNormalizedChunkPosition(p_x, p_y, p_z, chunk_key);
+	LC_World_getNormalizedChunkPosition(p_x, p_y, p_z, chunk_key);
 
 	//insert to the hash map
 	LC_Chunk* chunk = CHMap_Insert(&lc_world.chunk_map, chunk_key, p_chunk);
@@ -837,12 +808,6 @@ static LC_Chunk* LC_World_InsertChunk(LC_Chunk* const p_chunk, int p_x, int p_y,
 
 	lc_world.chunk_count++;
 	
-	for (int i = 0; i < 3; i++)
-	{
-		lc_world.chunks_bounds_normalized[0][i] = min(chunk_key[i], lc_world.chunks_bounds_normalized[0][i]);
-		lc_world.chunks_bounds_normalized[1][i] = max(chunk_key[i], lc_world.chunks_bounds_normalized[1][i]);
-	}
-
 	return chunk;
 }
 
@@ -850,7 +815,7 @@ static LC_Chunk* LC_World_InsertChunk(LC_Chunk* const p_chunk, int p_x, int p_y,
 LC_Chunk* LC_World_GetChunk(float p_x, float p_y, float p_z)
 {
 	ivec3 chunk_key;
-	_getNormalizedChunkPosition(p_x, p_y, p_z, chunk_key);
+	LC_World_getNormalizedChunkPosition(p_x, p_y, p_z, chunk_key);
 
 	return CHMap_Find(&lc_world.chunk_map, chunk_key);
 }
@@ -916,7 +881,6 @@ LC_Block* LC_World_GetBlock(float p_x, float p_y, float p_z, ivec3 r_relativePos
 	return block;
 }
 
-
 LC_Block* LC_World_getBlockByRay(vec3 from, vec3 dir, int p_maxSteps, ivec3 r_pos, ivec3 r_face, LC_Chunk** r_chunk)
 {
 	// "A Fast Voxel Traversal Algorithm for Ray Tracing" by John Amanatides, Andrew Woo */
@@ -974,7 +938,7 @@ LC_Block* LC_World_getBlockByRay(vec3 from, vec3 dir, int p_maxSteps, ivec3 r_po
 	return NULL;
 }
 
-static bool LC_World_addBlockInternal(int p_gX, int p_gY, int p_gZ, int p_cX, int p_cY, int p_cZ, LC_BlockType p_bType)
+static bool LC_World_addBlockInternal(int p_gX, int p_gY, int p_gZ, int p_cX, int p_cY, int p_cZ, int p_fX, int p_fY, int p_fZ, LC_BlockType p_bType)
 {
 	LC_Chunk* chunk = LC_World_GetChunk(p_cX, p_cY, p_cZ);
 	LC_Block* block2 = LC_World_GetBlock(p_gX, p_gY, p_gZ, NULL, &chunk);
@@ -1009,31 +973,29 @@ static bool LC_World_addBlockInternal(int p_gX, int p_gY, int p_gZ, int p_cX, in
 
 	LC_Block* block = &chunk->blocks[r_blockPosX][r_blockPosY][r_blockPosZ];
 
-	//block->hp = LC_BLOCK_STARTING_HP;
 	block->type = p_bType;
 
 	if (LC_isblockEmittingLight(block->type))
 	{
 		LC_Block_LightingData data = LC_getLightingData(block->type);
 
-		PointLight2 pl;
+		PointLight pl;
 		memset(&pl, 0, sizeof(pl));
-		pl.position[0] = p_gX;
-		pl.position[1] = p_gY;
-		pl.position[2] = p_gZ;
+		pl.position[0] = p_gX + p_fX;
+		pl.position[1] = p_gY + p_fY;
+		pl.position[2] = p_gZ + p_fZ;
 
 		pl.ambient_intensity = data.ambient_intensity;
 	
-		pl.constant = data.constant;
-		pl.linear = data.linear;
 		pl.color[0] = data.color[0];
 		pl.color[1] = data.color[1];
 		pl.color[2] = data.color[2];
 
-		pl.quadratic = data.quadratic;
+		pl.radius = 5;
+		pl.attenuation = 0.00;
 		pl.specular_intensity = data.specular_intensity;
 		
-		LightID index = RScene_RegisterPointLight(pl);
+		LightID index = RScene_RegisterPointLight(pl, false);
 
 		ivec3 block_pos;
 		block_pos[0] = p_gX;
@@ -1078,8 +1040,8 @@ bool LC_World_addBlock(int p_gX, int p_gY, int p_gZ, ivec3 p_addFace, int p_bTyp
 	if (!block)
 		return false;
 
-	//we can't stack props vertically
-	if (p_addFace[1] > 0 && LC_isBlockProp(block->type))
+	//we can't add to props
+	if (LC_isBlockProp(block->type))
 	{
 		return false;
 	}
@@ -1109,7 +1071,8 @@ bool LC_World_addBlock(int p_gX, int p_gY, int p_gZ, ivec3 p_addFace, int p_bTyp
 	new_block_pos[1] += p_addFace[1];
 	new_block_pos[2] += p_addFace[2];
 
-	return LC_World_addBlockInternal(new_block_pos[0], new_block_pos[1], new_block_pos[2], next_chunk_pos[0], next_chunk_pos[1], next_chunk_pos[2], p_bType);
+	return LC_World_addBlockInternal(new_block_pos[0], new_block_pos[1], new_block_pos[2], next_chunk_pos[0], next_chunk_pos[1], next_chunk_pos[2], p_addFace[0], p_addFace[1], p_addFace[2],
+		p_bType);
 }
 
 bool LC_World_mineBlock(int p_gX, int p_gY, int p_gZ)
@@ -1131,7 +1094,6 @@ bool LC_World_mineBlock(int p_gX, int p_gY, int p_gZ)
 	{
 		prev_mined_block.prev_block_hp = 0;
 	}
-	//prev_mined_block.prev_block_hp = 0;
 
 	if (prev_mined_block.block)
 	{
@@ -1174,8 +1136,7 @@ bool LC_World_mineBlock(int p_gX, int p_gY, int p_gZ)
 			//remove from the light hash map
 			if (light_index)
 			{
-				//r_removeLightSource(*light_index);
-				RSCene_DeletePointLight(*light_index);
+				RScene_DeleteRenderInstance(*light_index);
 				CHMap_Erase(&lc_world.light_hash_map, blockpos);
 			}
 
@@ -1278,7 +1239,7 @@ int LC_World_calcWaterLevelFromPoint(float p_x, float p_y, float p_z)
 			break;
 		}
 		ivec3 norm_position;
-		_getNormalizedChunkPosition(p_x, p_y, p_z, norm_position);
+		LC_World_getNormalizedChunkPosition(p_x, p_y, p_z, norm_position);
 		int x = norm_position[0] - above_chunk->global_position[0];
 		int z = norm_position[2] - above_chunk->global_position[2];
 
@@ -1310,23 +1271,18 @@ size_t LC_World_GetDrawCmdAmount()
 	return lc_world.render_data.draw_cmds_buffer.used_size;
 }
 
-P_PhysWorld* LC_World_GetPhysWorld()
+PhysicsWorld* LC_World_GetPhysWorld()
 {
 	return lc_world.phys_world;
 }
 
-void LC_World_getSunDirection(vec3 v)
-{
-	glm_vec3_copy(lc_world.sun.direction_to_world_center, v);
-	glm_normalize(v);
-}
 
 int LC_World_getPrevMinedBlockHP()
 {
 	return prev_mined_block.prev_block_hp;
 }
 
-static float sunAngle(long time)
+static float LC_World_CalculateSunAngle(long time)
 {
 	int i = (int)(time % 24000L);
 	float f = ((float)i + 1) / 24000.0F - 0.25F;
@@ -1345,16 +1301,16 @@ static float sunAngle(long time)
 	return f;
 }
 
-static void sunColor(float sun_angle, vec3 dest, float* r_ambientIntensity)
+static void LC_World_CalcSunColor(float sun_angle, vec3 dest, float* r_ambientIntensity)
 {
 	float abs_angle = fabsf(sun_angle);
-	//printf("%f angle \n", sun_angle);
 
 	float r = 1;
 	float g = 1;
 	float b = 0;
 	if (sun_angle > 0)
 	{
+		//r = glm_lerp(0.0, 1.0, abs_angle);
 		g = glm_lerp(0.0, 1.0, abs_angle);
 		b = glm_lerp(0.0, 0.5, abs_angle);
 	}
@@ -1365,122 +1321,89 @@ static void sunColor(float sun_angle, vec3 dest, float* r_ambientIntensity)
 		b = 0;
 	}
 
-
 	dest[0] = r;
 	dest[1] = g;
 	dest[2] = b;
 
 	*r_ambientIntensity = glm_lerp(0.0, 10, abs_angle);
+
+	//its night
+	if (sun_angle < 0)
+	{
+		*r_ambientIntensity = 0;
+	}
 }
 
-
-void LC_World_Draw()
-{	
-	//return;
-	vec3 box[2];
-	box[0][0] = 0;
-	box[0][1] = 516;
-	box[0][2] = 0;
-	box[1][0] = 16;
-	box[1][1] = 532;
-	box[1][2] = 16;
-
-	vec3 axis;
-	axis[0] = 1;
-	axis[1] = 1;
-	axis[2] = 1;
-	static float prev_angle = 0;
-
-	float angle = sunAngle(glfwGetTime() * 12);
-	
-	glm_vec3_rotate(box[0], angle * 360, axis);
-	glm_vec3_rotate(box[1], angle * 360, axis);
-	
-
-	
-	
-
-	vec3 dir;
-	dir[0] = box[0][0];
-	dir[1] = box[0][1];
-	dir[2] = box[0][2];
-	glm_normalize(dir);
-
-	float ambient_intensity = 1;
-
-	vec3 sun_color;
-	sunColor(dir[1], sun_color, &ambient_intensity);
-
-	DirLight light;
-	glm_vec3_copy(dir, light.direction);
-
-	if (dir[1] < 0 && prev_angle > 0)
-	{
-		//RScene_SetSkyboxTexturePanorama(Resource_get("assets/cubemaps/hdr/night_sky.hdr", RESOURCE__TEXTURE_HDR));
-		printf("set to night \n");
-	}
-	else if (dir[1] > 0 && prev_angle < 0)
-	{
-		//RScene_SetSkyboxTexturePanorama(Resource_get("assets/cubemaps/hdr/industrial.hdr", RESOURCE__TEXTURE_HDR));
-		printf("set to day \n");
-	}
-
-	prev_angle = dir[1];
-
-	glm_vec3_copy(sun_color, light.color);
-
-	light.ambient_intensity = ambient_intensity;
-	light.specular_intensity = 0;
-
-	RScene_SetDirLight(light);
-	//RScene_SetDirLightDirection(dir);
-
-
-	Draw_TexturedCube(box, Resource_get("assets/cube_textures/sun.png", RESOURCE__TEXTURE), NULL);
-}
-
-static void LC_World_TaskQueueProcess()
+static void LC_World_CalculateEnvColor(float sun_angle, vec3 sky, vec3 sky_horizon, vec3 ground_horizon, vec3 ground)
 {
-	printf("%i tasks in queue\n", task_queue.tasks_in_queue);
+	float abs_angle = fabsf(sun_angle);
 
-	for (int i = 0; i < MAX_ACTIVE_TASKS; i++)
+	//daytime 
+	if (sun_angle > 0)
 	{
-		if (task_queue.tasks_in_queue <= 0)
-		{
-			return;
-		}
-		LCWorldTask* task = &task_queue.tasks[i];
-		if ((task->type == LC_TASK_TYPE__CHUNK_VERTEX_GENERATE || task->type == LC_TASK_TYPE__CHUNK_GENERATE_BLOCKS_AND_GENERATE_VERTICES) && !chunk_updated_this_frame)
-		{
-			if (Thread_IsCompleted(task->handle))
-			{
-				GeneratedChunkVerticesResult* result = Thread_WaitForResult(task->handle, 0).mem_value;
+		float sky_energy = glm_lerp(0.3, 1, abs_angle);
+		sky[0] = glm_lerp(2.0, 0.0, abs_angle) * sky_energy;
+		sky[1] = glm_lerp(1.3, 0.0, abs_angle) * sky_energy;
+		sky[2] = glm_lerp(1.5, 0.3, abs_angle) * sky_energy;
 
-				if (result)
-				{
-					LC_World_FinishChunkUpdate(task->chunk, result, task->prev_vertex_count, task->prev_transparent_vertex_count, task->prev_water_vertex_count);
-					chunk_updated_this_frame = true;
-				}
+		sky_horizon[0] = glm_lerp(3.0, 1.0, abs_angle) * sky_energy;
+		sky_horizon[1] = glm_lerp(2.0, 1.0, abs_angle) * sky_energy;
+		sky_horizon[2] = glm_lerp(0.0, 1.7, abs_angle) * sky_energy;
 
-				task->type = LC_TASK_TYPE__NONE;
+		ground_horizon[0] = glm_lerp(3.0, 1.0, abs_angle) * sky_energy;
+		ground_horizon[1] = glm_lerp(2.0, 1.0, abs_angle) * sky_energy;
+		ground_horizon[2] = glm_lerp(0.0, 1.7, abs_angle) * sky_energy;
 
-				task_queue.tasks_in_queue--;
-			}
-		}
-		else if (task->type == LC_TASK_TYPE__CHUNK_GENERATE_BLOCKS)
-		{
-			if (Thread_IsCompleted(task->handle))
-			{
-				Thread_WaitForResult(task->handle, 0);
-
-				task->chunk->is_generated = true;
-
-				task->type = LC_TASK_TYPE__NONE;
-				task_queue.tasks_in_queue--;
-			}
-		}
+		ground[0] = 1;
+		ground[1] = 1;
+		ground[2] = 1;
+	}
+	else
+	{
+		glm_vec3_zero(sky);
+		glm_vec3_zero(sky_horizon);
+		glm_vec3_zero(ground_horizon);
+		glm_vec3_zero(ground);
 	}
 }
+
+static void LC_World_UpdateWorldEnviroment()
+{
+	static const vec3 axis = { 1, 1, 1 };
+
+	//Calculate sun angle
+	float sun_angle = LC_World_CalculateSunAngle(glfwGetTime());
+
+	//Convert to a vector
+	vec3 sun_dir = { 0, 1, 0 };
+
+	//Rotate
+	glm_vec3_rotate(sun_dir, sun_angle * 360.0, axis);
+	glm_normalize(sun_dir);
+	
+	//Set up sun light
+	DirLight dir_light;
+
+	dir_light.direction[0] = sun_dir[0];
+	dir_light.direction[1] = sun_dir[1];
+	dir_light.direction[2] = sun_dir[2];
+
+	LC_World_CalcSunColor(sun_dir[1], dir_light.color, &dir_light.ambient_intensity);
+	dir_light.specular_intensity = 2;
+
+	RScene_SetDirLight(dir_light);
+	
+	//Calculate enviroment color
+	vec3 sky, sky_horizon, ground_horizon, ground;
+	LC_World_CalculateEnvColor(sun_dir[1], sky, sky_horizon, ground_horizon, ground);
+
+	RScene_SetSkyColor(sky);
+	RScene_SetSkyHorizonColor(sky_horizon);
+	RScene_SetGroundHorizonColor(ground_horizon);
+	RScene_SetGroundColor(ground);
+}
+
+
 
 static void LC_World_SetupGLBindingPoints()
 {
@@ -1509,18 +1432,25 @@ bool ivec3Compare(ivec3 v1, ivec3 v2)
 void LC_World_Create(int p_initWidth, int p_initHeight, int p_initLength)
 {
 	memset(&lc_world, 0, sizeof(LC_World));
-	work_tast_id = -1;
 
-	//Generate seed
+	//Generate the seed
 	Math_srand(time(NULL));
+
+	RScene_SetNightTexture(Resource_get("assets/cubemaps/hdr/night_sky.hdr", RESOURCE__TEXTURE_HDR));
 
 	//Load the textures
 	lc_world.render_data.texture_atlas = Resource_get("assets/cube_textures/simple_block_atlas.png", RESOURCE__TEXTURE);
 	lc_world.render_data.texture_atlas_normals =  Resource_get("assets/cube_textures/simple_block_atlas_normal.png", RESOURCE__TEXTURE);
 	lc_world.render_data.texture_atlas_mer = Resource_get("assets/cube_textures/simple_block_atlas_mer.png", RESOURCE__TEXTURE);
+	lc_world.render_data.texture_atlas_height = Resource_get("assets/cube_textures/simple_block_atlas_heightmap.png", RESOURCE__TEXTURE);
 	
 	lc_world.render_data.texture_dudv = Resource_get("assets/water/waterDUDV.png", RESOURCE__TEXTURE);
 	lc_world.render_data.water_normal_map = Resource_get("assets/water/normal_map.png", RESOURCE__TEXTURE);
+	//lc_world.render_data.water_displacement_texture = Resource_get("assets/water/water_displacement.png", RESOURCE__TEXTURE);
+	//lc_world.render_data.water_noise_texture_1 = Resource_get("assets/water/noise_1.png", RESOURCE__TEXTURE);
+	//lc_world.render_data.water_noise_texture_2 = Resource_get("assets/water/noise_2.png", RESOURCE__TEXTURE);
+	lc_world.render_data.gradient_map = Resource_get("assets/water/gradient_map.png", RESOURCE__TEXTURE);
+	//lc_world.render_data.foam_map = Resource_get("assets/water/normal_map.png", RESOURCE__TEXTURE);
 
 	//setup mipmaps for the textures
 	glBindTexture(GL_TEXTURE_2D, lc_world.render_data.texture_atlas->id);
@@ -1542,17 +1472,15 @@ void LC_World_Create(int p_initWidth, int p_initHeight, int p_initLength)
 	size_t aprrox_chunk_vertex_count = approx_init_chunk_amount * 36;
 
 	//init the phys world
-	lc_world.phys_world = PhysWorld_Create(1.1);
+	lc_world.phys_world = PhysicsWorld_Create(1.1);
 
 	//Init the aabb tree
-	lc_world.render_data.aabb_tree = AABB_Tree_Create();
+	lc_world.render_data.bvh_tree = BVH_Tree_Create(0.0);
 
 	//init the chunk hash map
-	lc_world.chunk_map = CHMAP_INIT_POOLED(Hash_ivec3, ivec3Compare, ivec3, LC_Chunk, 100000);
+	lc_world.chunk_map = CHMAP_INIT_POOLED(Hash_ivec3, NULL, ivec3, LC_Chunk, approx_init_chunk_amount);
 
-	//lc_world.chunk_cache_map = CHMAP_INIT_POOLED(Hash_ivec3, ivec3Compare, ivec3, LC_Chunk, 100000);
-
-	lc_world.light_hash_map = CHMAP_INIT(Hash_ivec3, NULL, ivec3, unsigned, 100000);
+	lc_world.light_hash_map = CHMAP_INIT(Hash_ivec3, NULL, ivec3, unsigned, approx_init_chunk_amount);
 
 	lc_world.draw_cmds_backbuffer = dA_INIT(CombinedChunkDrawCmdData, 0);
 
@@ -1561,24 +1489,25 @@ void LC_World_Create(int p_initWidth, int p_initHeight, int p_initLength)
 
 	lc_world.render_data.transparents_vertex_buffer = DRB_Create(sizeof(ChunkVertex) * aprrox_chunk_vertex_count, approx_init_chunk_amount, DRB_FLAG__WRITABLE | DRB_FLAG__RESIZABLE | DRB_FLAG__USE_CPU_BACK_BUFFER | DRB_FLAG__POOLABLE);
 
-	lc_world.render_data.water_vertex_buffer = DRB_Create(sizeof(ChunkWaterVertex) * aprrox_chunk_vertex_count, approx_init_chunk_amount, DRB_FLAG__WRITABLE | DRB_FLAG__RESIZABLE | DRB_FLAG__USE_CPU_BACK_BUFFER | DRB_FLAG__POOLABLE);
+	lc_world.render_data.water_vertex_buffer = DRB_Create(sizeof(ChunkWaterVertex) * 100000, approx_init_chunk_amount, DRB_FLAG__WRITABLE | DRB_FLAG__RESIZABLE | DRB_FLAG__USE_CPU_BACK_BUFFER | DRB_FLAG__POOLABLE);
 
-	lc_world.render_data.chunk_data = RSB_Create(100000, sizeof(ChunkData), RSB_FLAG__POOLABLE | RSB_FLAG__WRITABLE | RSB_FLAG__READABLE | RSB_FLAG__PERSISTENT);
+	lc_world.render_data.chunk_data = RSB_Create(MAX_CHUNK_LIMIT, sizeof(ChunkData), RSB_FLAG__POOLABLE | RSB_FLAG__WRITABLE | RSB_FLAG__READABLE | RSB_FLAG__RESIZABLE);
 	
-	lc_world.render_data.draw_cmds_buffer = RSB_Create(100000, sizeof(CombinedChunkDrawCmdData), RSB_FLAG__POOLABLE | RSB_FLAG__WRITABLE);
+	lc_world.render_data.draw_cmds_buffer = RSB_Create(approx_init_chunk_amount, sizeof(CombinedChunkDrawCmdData), RSB_FLAG__POOLABLE | RSB_FLAG__WRITABLE | RSB_FLAG__RESIZABLE);
 
-	lc_world.render_data.sorted_draw_cmds_buffer = RSB_Create(100000, sizeof(DrawArraysIndirectCommand), RSB_FLAG__WRITABLE);
+	lc_world.render_data.sorted_draw_cmds_buffer = RSB_Create(1000000, sizeof(DrawArraysIndirectCommand), RSB_FLAG__WRITABLE);
 
-	DRB_setResizeChunkSize(&lc_world.render_data.vertex_buffer, sizeof(ChunkVertex) * 10000);
-	DRB_setResizeChunkSize(&lc_world.render_data.transparents_vertex_buffer, sizeof(ChunkVertex) * 10000);
+	DRB_setResizeChunkSize(&lc_world.render_data.vertex_buffer, sizeof(ChunkVertex) * 5000);
+	DRB_setResizeChunkSize(&lc_world.render_data.transparents_vertex_buffer, sizeof(ChunkVertex) * 5000);
+	DRB_setResizeChunkSize(&lc_world.render_data.water_vertex_buffer, sizeof(ChunkWaterVertex) * 5000);
 
 	glGenBuffers(1, &lc_world.render_data.visibles_sorted_ssbo);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lc_world.render_data.visibles_sorted_ssbo);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned) * 50000, NULL, GL_STREAM_DRAW);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned) * MAX_CHUNK_LIMIT, NULL, GL_STREAM_DRAW);
 
-	glGenBuffers(1, &lc_world.render_data.visibles_ssbo);;
+	glGenBuffers(1, &lc_world.render_data.visibles_ssbo);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lc_world.render_data.visibles_ssbo);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned) * 5000, NULL, GL_STREAM_DRAW);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned) * (MAX_CHUNK_LIMIT), NULL, GL_STREAM_DRAW);
 
 	glGenBuffers(1, &lc_world.render_data.ubo_id);
 	glBindBuffer(GL_UNIFORM_BUFFER, lc_world.render_data.ubo_id);
@@ -1586,7 +1515,7 @@ void LC_World_Create(int p_initWidth, int p_initHeight, int p_initLength)
 
 	glGenBuffers(1, &lc_world.render_data.shadow_chunk_indexes_ssbo);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lc_world.render_data.shadow_chunk_indexes_ssbo);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned) * 50000, NULL, GL_STREAM_DRAW);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned) * MAX_CHUNK_LIMIT * 7, NULL, GL_STREAM_DRAW);
 
 	for (int i = 0; i < 3; i++)
 	{
@@ -1595,15 +1524,9 @@ void LC_World_Create(int p_initWidth, int p_initHeight, int p_initLength)
 		glBufferData(GL_ATOMIC_COUNTER_BUFFER, sizeof(unsigned), NULL, GL_STATIC_DRAW);
 	}
 	
-
 	lc_world.render_data.block_data_buffer = LC_generateBlockInfoGLBuffer();
 
 	LC_World_SetupGLBindingPoints();
-
-	
-	ChunkData* m = glMapNamedBufferRange(lc_world.render_data.chunk_data.buffer, 0, sizeof(ChunkData) * 10000, GL_MAP_WRITE_BIT);
-	memset(m, -1, sizeof(ChunkData) * 10000);
-	glUnmapNamedBuffer(lc_world.render_data.chunk_data.buffer);
 
 	//setup vao and buffer attrib pointers
 	glGenVertexArrays(1, &lc_world.render_data.vao);
@@ -1626,12 +1549,12 @@ void LC_World_Create(int p_initWidth, int p_initHeight, int p_initLength)
 	
 	glGenVertexArrays(1, &lc_world.render_data.water_vao);
 	glBindVertexArray(lc_world.render_data.water_vao);
-	glBindBuffer(GL_ARRAY_BUFFER, lc_world.render_data.water_vao);
 	glBindVertexBuffer(0, lc_world.render_data.water_vertex_buffer.buffer, 0, sizeof(ChunkWaterVertex));
 
 	glVertexAttribIFormat(0, 3, GL_BYTE, (void*)(offsetof(ChunkWaterVertex, position)));
 	glEnableVertexAttribArray(0);
 	glVertexAttribBinding(0, 0);
+
 
 	int x_offset = 0;
 	int y_offset = 0;
@@ -1671,56 +1594,13 @@ void LC_World_Create(int p_initWidth, int p_initHeight, int p_initLength)
 	DRB_WriteDataToGpu(&lc_world.render_data.water_vertex_buffer);
 }
 
-static void LC_Chunk_GenerateAndInsertToCache(int p_normX, int p_normY, int p_normZ)
-{
-	LC_Chunk stack_chunk = LC_Chunk_Create(p_normX * LC_CHUNK_WIDTH, p_normY * LC_CHUNK_HEIGHT, p_normZ * LC_CHUNK_LENGTH);
-	//Generate the chunk
-#ifdef LC_ASYNC
-	LC_Chunk* chunk_ptr = LC_World_InsertToChunkCache(&stack_chunk);
-
-	if (!LC_World_InsertToTaskQueue(chunk_ptr, LC_TASK_TYPE__CHUNK_GENERATE_BLOCKS))
-	{
-		LC_Chunk_GenerateBlocks(chunk_ptr, 2);
-		chunk_ptr->is_generated = true;
-	}
-#else
-	LC_Chunk_GenerateBlocks(&stack_chunk, 2);
-	LC_World_InsertToChunkCache(&stack_chunk);
-#endif // LC_ASYNC
-}
-
-static bool LC_Chunk_InsertChunkIfInChunkCache(int p_normX, int p_normY, int p_normZ)
-{
-	ivec3 chunk_key;
-	chunk_key[0] = p_normX;
-	chunk_key[1] = p_normY;
-	chunk_key[2] = p_normZ;
-
-	//look in visible chunk map
-	LC_Chunk* vis_chunk = CHMap_Find(&lc_world.chunk_map, chunk_key);
-
-	if (vis_chunk)
-	{
-		return false;
-	}
-
-	LC_Chunk* chunk = CHMap_Find(&lc_world.chunk_cache_map, chunk_key);
-	if (!chunk)
-	{
-		return false;
-	}
-	if (!chunk->is_generated)
-	{
-		return false;
-	}
-
-	LC_World_InsertChunk(chunk, chunk->global_position[0], chunk->global_position[1], chunk->global_position[2]);
-
-	return true;
-}
-
 static bool LC_Chunk_GenerateAndInsertChunk(int p_normX, int p_normY, int p_normZ)
-{
+{	
+	if (lc_world.chunk_map.num_items >= MAX_CHUNK_LIMIT)
+	{
+		return false;
+	}
+
 	ivec3 chunk_key;
 	chunk_key[0] = p_normX;
 	chunk_key[1] = p_normY;
@@ -1747,56 +1627,49 @@ static bool LC_Chunk_GenerateAndInsertChunk(int p_normX, int p_normY, int p_norm
 	return true;
 }
 
-static void LC_World_ChunkLiveGenerate()
+static void LC_World_ActivelyGenerateChunks()
 {
 	vec3 player_position;
 	LC_Player_getPosition(player_position);
 
 	ivec3 normalized_player_position;
-	_getNormalizedChunkPosition(player_position[0], player_position[1], player_position[2], normalized_player_position);
+	LC_World_getNormalizedChunkPosition(player_position[0], player_position[1], player_position[2], normalized_player_position);
 
-	static int prev_visited_index = 0;
-
-	const int MAX_ITR = lc_world.chunk_map.item_data->elements_size;;
+	const int MAX_ITR = lc_world.chunk_map.item_data->elements_size;
 
 	bool max_chunk_threshold_reached = (LC_World_GetChunkAmount() > 1000);
 
-	max_chunk_threshold_reached = false;
 	int render_distance_chunks = 8;
 
-	int minX2 = normalized_player_position[0] - render_distance_chunks;
-	int minY2 = normalized_player_position[1] - 4;
-	int minZ2 = normalized_player_position[2] - render_distance_chunks;
+	int minX = normalized_player_position[0] - render_distance_chunks;
+	int minY = normalized_player_position[1] - 4;
+	int minZ = normalized_player_position[2] - render_distance_chunks;
 
-	int maxX2 = normalized_player_position[0] + render_distance_chunks;
-	int maxY2 = normalized_player_position[1] + 2;
-	int maxZ2 = normalized_player_position[2] + render_distance_chunks;
+	int maxX = normalized_player_position[0] + render_distance_chunks;
+	int maxY = normalized_player_position[1] + 2;
+	int maxZ = normalized_player_position[2] + render_distance_chunks;
 
 
-
-	if (task_queue.tasks_in_queue == 0)
+	for (int x = minX; x < maxX; x++)
 	{
-		//Add chunks to chunk cache
-		for (int x = minX2; x < maxX2; x++)
+		for (int y = minY; y < maxY; y++)
 		{
-			for (int y = minY2; y < maxY2; y++)
+			for (int z = minZ; z < maxZ; z++)
 			{
-				for (int z = minZ2; z < maxZ2; z++)
+				if (chunk_updated_this_frame)
 				{
-					if (chunk_updated_this_frame)
-					{
-						break;
-					}
+					break;
+				}
 
-					if (LC_Chunk_GenerateAndInsertChunk(x, y, z))
-					{
+				if (LC_Chunk_GenerateAndInsertChunk(x, y, z))
+				{
 						
-					}
 				}
 			}
 		}
 	}
 
+	max_chunk_threshold_reached = false;
 
 	for (int i = 0; i < lc_world.chunk_map.item_data->elements_size; i++)
 	{
@@ -1813,51 +1686,32 @@ static void LC_World_ChunkLiveGenerate()
 				continue;
 			}
 		}
-		else if (chunk_updated_this_frame)
-		{
-			break;
-		}
-		
-		
-
 		ivec3 normalized_chunk_pos;
-		_getNormalizedChunkPosition(chunk->global_position[0], chunk->global_position[1], chunk->global_position[2], normalized_chunk_pos);
+		LC_World_getNormalizedChunkPosition(chunk->global_position[0], chunk->global_position[1], chunk->global_position[2], normalized_chunk_pos);
 
 		//Delete chunk if it falls outside the min and max
-		if (normalized_chunk_pos[0] < minX2 || normalized_chunk_pos[0] > maxX2 || normalized_chunk_pos[1] < minY2 || normalized_chunk_pos[1] > maxY2
-			|| normalized_chunk_pos[2] < minZ2 || normalized_chunk_pos[2] > maxZ2)
+		if (normalized_chunk_pos[0] < minX || normalized_chunk_pos[0] > maxX || normalized_chunk_pos[1] < minY || normalized_chunk_pos[1] > maxY
+			|| normalized_chunk_pos[2] < minZ || normalized_chunk_pos[2] > maxZ)
 		{
-			//printf(" chunk deleted \n");
-			bool break_out_of_this = (chunk->alive_blocks > 0);
-			if (max_chunk_threshold_reached)
-			{
-				break_out_of_this = false;
-			}
-
 			LC_World_DeleteChunk(chunk, max_chunk_threshold_reached);
-			if (break_out_of_this)
-			{
-				prev_visited_index = i;
-				break;
-			}
 		}
-
-		prev_visited_index = 0;
 	}
+
 	if (max_chunk_threshold_reached)
 	{
-		LC_World_UpdateDrawCommands(0, 0, 0);
+		//LC_World_UpdateDrawCommandsBuffer();
 	}
-
 }
+
+
 
 
 void LC_World_StartFrame()
 {
+	LC_World_UpdateWorldEnviroment();
+
 	LC_Draw_WorldInfo(&lc_world, 3);
 
-	lc_world.sun.position[1] = -10000;
-	lc_world.sun.position[0] += Core_getDeltaTime() * 0.1;
 	prev_mined_block.time_since_prev_mine += Core_getDeltaTime();
 
 	if (prev_mined_block.time_since_prev_mine > 0.3)
@@ -1865,55 +1719,9 @@ void LC_World_StartFrame()
 		prev_mined_block.prev_block_hp = 7;
 	}
 	
-	vec3 world_center;
-	memset(world_center, 0, sizeof(vec3));
+	//LC_World_ActivelyGenerateChunks();
 
-	float sun_angle = sunAngle(glfwGetTime() * 1000);
-
-	vec3 dir;
-	memset(dir, 0, sizeof(vec3));
-	dir[0] = 0.5;
-	dir[1] = 1;
-	//Math_vec3_dir_to(lc_world.sun.position, world_center, lc_world.sun.direction_to_world_center);
-	vec3 axis;
-	axis[0] = 0;
-	axis[1] = -1;
-	axis[2] = 0;
-	glm_vec3_rotate(dir, sun_angle, axis);
-
-	//RScene_SetDirLightDirection(dir);
-	
-
-	vec3 player_position;
-	LC_Player_getPosition(player_position);
-
-	static bool block_new = false;
-
-	bool allow_flyby_generation = false;
-
-	R_Camera* cam = Camera_getCurrent();
-
-	vec3 signed_camera_dir;
-	
-	if (cam)
-	{
-		glm_vec3_sign(cam->data.camera_front, signed_camera_dir);
-	}
-
-	static int prev_index = 0;
-
-	if (chunk_updated_this_frame)
-	{
-		//return;
-	}
-	//LC_World_ChunkLiveGenerate();
-
-#ifdef LC_ASYNC
-	LC_World_TaskQueueProcess();
-#endif // LC_ASYNC
-
-	
-
+	//LC_World_UpdateDrawCommandsBuffer();
 }
 
 void LC_World_EndFrame()
@@ -1936,12 +1744,19 @@ void LC_World_EndFrame()
 	lc_world.render_data.ubo_data.water_update_move_by = 0;
 	lc_world.render_data.ubo_data.skip_water_owner = -1;
 
+	if (dA_size(lc_world.draw_cmds_backbuffer) > 0)
+	{
+		//glNamedBufferSubData(lc_world.render_data.draw_cmds_buffer.buffer, 0,
+		//	dA_size(lc_world.draw_cmds_backbuffer) * sizeof(CombinedChunkDrawCmdData), dA_getFront(lc_world.draw_cmds_backbuffer));
+		//dA_clear(lc_world.draw_cmds_backbuffer);
+	}
+
 	chunk_updated_this_frame = false;
 }
 
 void LC_World_Destruct()
 {
-	PhysWorld_Destruct(lc_world.phys_world);
+	PhysicsWorld_Destruct(lc_world.phys_world);
 
 	//destruct the chunk hash map
 	CHMap_Destruct(&lc_world.chunk_map);
@@ -1954,14 +1769,15 @@ void LC_World_Destruct()
 	//destruct the GL Buffers
 	DRB_Destruct(&lc_world.render_data.vertex_buffer);
 	DRB_Destruct(&lc_world.render_data.transparents_vertex_buffer);
+	DRB_Destruct(&lc_world.render_data.water_vertex_buffer);
 	RSB_Destruct(&lc_world.render_data.draw_cmds_buffer);
 	RSB_Destruct(&lc_world.render_data.chunk_data);
+	RSB_Destruct(&lc_world.render_data.sorted_draw_cmds_buffer);
 
 	glDeleteVertexArrays(1, lc_world.render_data.vao);
+	glDeleteVertexArrays(1, lc_world.render_data.water_vao);
 
 	glDeleteBuffers(1, lc_world.render_data.block_data_buffer);
-
-
 }
 
 

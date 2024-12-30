@@ -34,7 +34,7 @@ typedef struct
 
     float radius;
     float attenuation;
-} PointLight2;
+} PointLight;
 typedef struct
 {
     vec4 position;
@@ -95,7 +95,8 @@ SCENE
 
 typedef struct
 {
-    float density;
+    float depthFogDensity;
+    float heightFogDensity;
 
     float depthFogCurve;
     float depthFogBegin;
@@ -114,7 +115,7 @@ typedef struct
 void RScene_SetDirLight(DirLight p_dirLight);
 void RScene_SetDirLightDirection(vec3 dir);
 void RScene_SetFog(FogSettings p_fog_settings);
-RenderInstanceID RScene_RegisterPointLight(PointLight2 p_pointLight, bool p_dynamic);
+RenderInstanceID RScene_RegisterPointLight(PointLight p_pointLight, bool p_dynamic);
 RenderInstanceID RScene_RegisterSpotLight(SpotLight p_spotLight, bool p_dynamic);
 
 void* RScene_GetRenderInstanceData(RenderInstanceID p_id);

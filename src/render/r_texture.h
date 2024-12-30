@@ -1,4 +1,7 @@
+#ifndef TEXTURE_H
+#define TEXTURE_H
 #pragma once
+
 #include <cglm/cglm.h>
 
 #include "utility/u_math.h"
@@ -37,3 +40,5 @@ typedef struct Cubemap_Faces_Paths
 } Cubemap_Faces_Paths;
 
 R_Texture CubemapTexture_Load(Cubemap_Faces_Paths p_facesPathsData);
+
+#endif

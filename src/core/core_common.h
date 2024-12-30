@@ -1,20 +1,20 @@
+#ifndef CORE_COMMON_H
+#define CORE_COMMON_H
 #pragma once
 
-#include <stdlib.h>
-#define NK_INCLUDE_DEFAULT_FONT
-#define NK_INCLUDE_FIXED_TYPES
+#include <stdbool.h>
+#include <cglm/cglm.h>
+
 #define NK_INCLUDE_STANDARD_IO
 #define NK_INCLUDE_STANDARD_VARARGS
 #define NK_INCLUDE_DEFAULT_ALLOCATOR
 #define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
 #define NK_INCLUDE_FONT_BAKING
 #define NK_INCLUDE_DEFAULT_FONT
-#define NK_KEYSTATE_BASED_INPUT
+
 #include <nuklear/nuklear.h>
 #include <nuklear/nuklear_glfw_gl3.h>
-#include <cglm/cglm.h>
 
-#include <stdbool.h>
 
 typedef struct
 {
@@ -77,6 +77,7 @@ bool Window_isCursorEnabled();
 GLFWwindow* Window_getPtr();
 void Window_EnableCursor();
 void Window_DisableCursor();
+void Window_SetVsync(bool enabled);
 
 /*
 ~~~~~~~~~~~~~~~~~
@@ -113,3 +114,4 @@ WorkHandleID __Internal_Thread_AssignTaskArgCopy(ThreadTask_fun p_taskFun, void*
 bool Thread_IsCompleted(WorkHandleID p_workHandleID);
 void Thread_ReleaseWorkHandle(WorkHandleID p_workHandleID);
 ReturnResult Thread_WaitForResult(WorkHandleID p_workHandleID, size_t p_waitTime);
+#endif

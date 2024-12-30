@@ -1,10 +1,10 @@
 #include "r_core.h"
 
+#include "core/core_common.h"
+
 extern RPass_PassData* pass;
 extern R_Cvars r_cvars;
 extern R_Scene scene;
-
-#include "core/core_common.h"
 
 extern void Render_Cube();
 
@@ -120,8 +120,8 @@ void RInternal_GetShadowQualityData(int p_qualityLevel, int p_blurLevel, float* 
 
 void RInternal_ProcessIBLCubemap(bool p_fast, bool p_irradiance, bool p_prefilter, bool p_brdf)
 {
-    float irradiance_sample_delta = (p_fast) ? (0.025 * 10.0) : (0.025);
-    int prefilter_brdf_sample_count = (p_fast) ? (32) : (1024);
+    float irradiance_sample_delta = (p_fast) ? (0.025 * 24.0) : (0.025);
+    int prefilter_brdf_sample_count = (p_fast) ? (12) : (1024);
 
     glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
     glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);

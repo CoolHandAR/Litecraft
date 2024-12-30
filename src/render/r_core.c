@@ -6,8 +6,8 @@ Start and ends the frame
 */
 
 #include "r_core.h"
-#include "core/core_common.h"
-#include "input.h"
+
+#include "core/input.h"
 #include "r_public.h"
 
 R_CMD_Buffer* cmdBuffer;
@@ -26,7 +26,7 @@ extern void Compute_DispatchAll();
 extern void Compute_Sync();
 extern void	RPanel_Main();
 extern void RPanel_Metrics();
-extern GLFWwindow* glfw_window;
+
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Updates metrics and sets if we should skip this frame (if fps limit is on)
@@ -73,7 +73,6 @@ Called on any window resize event. Updates textures sizes, etc...
 */
 void RCore_onWindowResize(int width, int height)
 {
-	
 	//DEFERRED PASS
 	glBindFramebuffer(GL_FRAMEBUFFER, pass->deferred.FBO);
 	//Update textures
@@ -108,16 +107,16 @@ void RCore_onWindowResize(int width, int height)
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
 	glClearTexImage(pass->ao.ao_texture, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, NULL);
 
-	glBindTexture(GL_TEXTURE_2D, pass->ao.blurred_ao_texture);
+	glBindTexture(GL_TEXTURE_2D, pass->ao.back_ao_texture);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
-	glClearTexImage(pass->ao.blurred_ao_texture, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, NULL);
+	glClearTexImage(pass->ao.back_ao_texture, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, NULL);
 
 	unsigned char* red_buffer = malloc(width * height);
 	if (red_buffer)
 	{
 		memset(red_buffer, 1, width * height);
 		glClearTexImage(pass->ao.ao_texture, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, red_buffer);
-		glClearTexImage(pass->ao.blurred_ao_texture, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, red_buffer);
+		glClearTexImage(pass->ao.back_ao_texture, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, red_buffer);
 
 		free(red_buffer);
 	}
@@ -151,12 +150,53 @@ void RCore_onWindowResize(int width, int height)
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
 	}
 
+	//GODRAYS
+	glBindTexture(GL_TEXTURE_2D, pass->godray.godray_fog_texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, width / 2, height / 2, 0, GL_RED, GL_HALF_FLOAT, NULL);
+
+	glBindTexture(GL_TEXTURE_2D, pass->godray.back_texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, width / 2, height / 2, 0, GL_RED, GL_HALF_FLOAT, NULL);
+
+	//WATER REFLECTION
+	int reflection_width = width;
+	int reflection_height = height;
+
+	if (r_cvars.r_waterReflectionQuality->int_value < 2)
+	{
+		if (r_cvars.r_waterReflectionQuality->int_value == 1)
+		{
+			//half size
+			reflection_width /= 2;
+			reflection_height /= 2;
+		}
+		else
+		{
+			//quarter size
+			reflection_width /= 4;
+			reflection_height /= 4;
+		}
+	}
+	glBindTexture(GL_TEXTURE_2D, pass->water.reflection_texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, reflection_width, reflection_height, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+
+	glBindTexture(GL_TEXTURE_2D, pass->water.reflection_back_texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, reflection_width, reflection_height, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+
+	glBindRenderbuffer(GL_RENDERBUFFER, pass->water.reflection_rbo);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, reflection_width, reflection_height);
+
+	pass->water.reflection_size[0] = reflection_width;
+	pass->water.reflection_size[1] = reflection_height;
+
+	glBindTexture(GL_TEXTURE_2D, pass->water.refraction_texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+
 	//General
 	glBindTexture(GL_TEXTURE_2D, pass->general.depth_halfsize_texture);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width/ 2, height / 2, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
 	
 	glBindTexture(GL_TEXTURE_2D, pass->general.normal_halfsize_texture);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width / 2, height / 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width / 2, height / 2, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
 
 	glBindFramebuffer(GL_FRAMEBUFFER, pass->general.halfsize_fbo);
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->general.normal_halfsize_texture, 0);
@@ -212,17 +252,6 @@ static void RCore_checkForModifiedCvars()
 
 		r_cvars.r_useSsao->modified = false;
 		r_cvars.r_ssaoHalfSize->modified = false;
-	}
-	if (r_cvars.r_ssaoBias->modified || r_cvars.r_ssaoRadius->modified || r_cvars.r_ssaoStrength->modified)
-	{
-		glUseProgram(pass->ao.shader);
-		Shader_SetFloat(pass->ao.shader, "u_bias", r_cvars.r_ssaoBias->float_value);
-		Shader_SetFloat(pass->ao.shader, "u_radius", r_cvars.r_ssaoRadius->float_value);
-		Shader_SetFloat(pass->ao.shader, "u_strength", r_cvars.r_ssaoStrength->float_value);
-
-		r_cvars.r_ssaoBias->modified = false;
-		r_cvars.r_ssaoRadius->modified = false;
-		r_cvars.r_ssaoStrength->modified = false;
 	}
 	if (r_cvars.r_useBloom->modified)
 	{
@@ -288,6 +317,11 @@ static void RCore_checkForModifiedCvars()
 		r_cvars.r_bloomSoftThreshold->modified = false;
 		r_cvars.r_bloomThreshold->modified = false;
 	}
+	if (r_cvars.r_waterReflectionQuality->modified)
+	{
+		RCore_onWindowResize(backend_data->screenSize[0], backend_data->screenSize[1]);
+		r_cvars.r_waterReflectionQuality->modified = false;
+	}
 }
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -350,9 +384,9 @@ static void RCore_UploadGpuData()
 	//Scene data
 	if (drawData->lc_world.draw)
 	{
-		if (scene.cull_data.lc_world_in_frustrum_count > 0)
+		if (scene.cull_data.lc_world.total_in_frustrum_count > 0)
 		{
-			glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_ssbo, 0, sizeof(int) * scene.cull_data.lc_world_in_frustrum_count, scene.cull_data.lc_world_frustrum_sorted_query_buffer);
+			glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_ssbo, 0, sizeof(int) * scene.cull_data.lc_world.total_in_frustrum_count, scene.cull_data.lc_world.frustrum_sorted_query_buffer);
 		}
 		glNamedBufferSubData(drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo, 0, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_indexes->elements_size,
 			drawData->lc_world.shadow_sorted_chunk_indexes->data);
@@ -361,7 +395,7 @@ static void RCore_UploadGpuData()
 			drawData->lc_world.shadow_sorted_chunk_transparent_indexes->data);
 
 
-		glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_ssbo, 0, sizeof(int) * 500, scene.cull_data.lc_world_frustrum_query_buffer);
+		glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_ssbo, 0, sizeof(int) * 500, scene.cull_data.lc_world.frustrum_query_buffer);
 	}
 
 	//Camera update
@@ -372,25 +406,10 @@ static void RCore_UploadGpuData()
 	glBindBuffer(GL_UNIFORM_BUFFER, scene.scene_ubo);
 	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(RScene_UBOData), &scene.scene_data);
 
-	//Clusters update
-	glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.cluster_items_ssbo);
-	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(scene.clusters_data.light_grid), scene.clusters_data.light_grid);
-
-	if (scene.clusters_data.lights_in_clusters > 0)
-	{
-		glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.light_indexes_ssbo);
-		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(uint32_t) * scene.clusters_data.lights_in_clusters, scene.clusters_data.light_indexes);
-	}
-
-	if (scene.clusters_data.culled_light_count > 0)
-	{
-		glBindBuffer(GL_SHADER_STORAGE_BUFFER, scene.light_nodes_ssbo);
-		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(AABB_LightNodeData) * scene.clusters_data.culled_light_count, scene.clusters_data.frustrum_culled_lights);
-	}
 	if (scene.scene_data.numPointLights > 0)
 	{
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, storage.point_lights.buffer);
-		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(PointLight2) * scene.scene_data.numPointLights, storage.point_lights_backbuffer->data);
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(PointLight) * scene.scene_data.numPointLights, storage.point_lights_backbuffer->data);
 	}
 	if (scene.scene_data.numSpotLights > 0)
 	{
@@ -489,7 +508,6 @@ void RCore_Start()
 	RCore_DrawUI();
 
 	////Dispatch computes
-	//Compute_Sync();
 	Compute_DispatchAll();
 
 	//Process various renderer tasks
@@ -513,7 +531,6 @@ void RCore_End()
 	//Sync the render process thread and dispatched gl computes
 	//and upload data to gpu
 	Compute_Sync();
-	//Compute_DispatchAll();
 	//CPU SYNC
 
 	//Upload data to gpu

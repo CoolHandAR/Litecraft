@@ -242,7 +242,7 @@ void main()
             draw_cmd.baseInstance = index;
           
             uint counter = atomicAdd(atomic_counter_water, 1);
-            chunk_draw_cmds_sorted[counter + 4000] =  draw_cmd;
+            chunk_draw_cmds_sorted[counter + 4000] = draw_cmd;
         }
     }
     

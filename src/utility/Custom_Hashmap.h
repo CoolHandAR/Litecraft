@@ -304,73 +304,22 @@ void _CHMap_hashTableReserve(CHMap* const chmap, size_t p_toReserve)
 	size_t old_hash_table_capacity = chmap->hash_table->capacity;
 	size_t new_hash_table_capacity = chmap->hash_table->capacity + p_toReserve;
 	
-	dA_reserve(chmap, p_toReserve);
-
-	dynamic_array* unresolved_hash_list = NULL;
+	dA_reserve(chmap->hash_table, p_toReserve);
+	memset(chmap->hash_table->data, 0, chmap->hash_table->alloc_size * chmap->hash_table->capacity);
 
 	_CHMap_item** hash_array = chmap->hash_table->data;
+
+	//Rehash all items
 	_CHMap_item* item = NULL;
 	for (item = chmap->_next; item; item = item->next)
 	{
 		uint32_t item_hash = CHMap_Hash(chmap, item->key);
 
-		uint32_t old_hash_index = item_hash & (old_hash_table_capacity - 1);
-		uint32_t new_hash_index = item_hash & (new_hash_table_capacity - 1);
+		uint32_t index = item_hash & (chmap->hash_table->capacity - 1);
 
-		if (hash_array[new_hash_index])
-		{
-			if (!unresolved_hash_list)
-			{
-				unresolved_hash_list = dA_INIT(uint32_t, 0);
-			}
-			uint32_t* ptr = dA_emplaceBack(unresolved_hash_list);
-			*ptr = item_hash;
-			continue;
-		}
-
-		//Nullify the old hash index
-		hash_array[old_hash_index] = NULL;
-
-		//Emplace the item to the new hash index
-		hash_array[new_hash_index] = item;
+		item->hash_next = hash_array[index];
+		hash_array[index] = item;
 	}
-
-	if (unresolved_hash_list)
-	{
-		for (int i = 0; i < unresolved_hash_list->elements_size; i++)
-		{
-			uint32_t item_hash = *(uint32_t*)dA_at(unresolved_hash_list, i);
-			uint32_t old_hash_index = item_hash & (old_hash_table_capacity - 1);
-			uint32_t new_hash_index = item_hash & (new_hash_table_capacity - 1);
-
-			_CHMap_item* old_item = hash_array[old_hash_index];
-			_CHMap_item* collided_item = hash_array[new_hash_index];
-
-			//collision solved?
-			if (!collided_item)
-			{
-				//Nullify the old hash index
-				hash_array[old_hash_index] = NULL;
-
-				//Emplace the item to the new hash index
-				hash_array[new_hash_index] = old_item;
-
-				continue;
-			}
-			
-			//we need to fix this 
-			assert(false);
-
-			//iterrate till we find the last and solve the collisions bottom to top
-			//for (;;)
-			//{
-				
-			//}
-		}
-
-		dA_Destruct(unresolved_hash_list);
-	}
-	
 }
 
 void* CHMap_Find(CHMap* const chmap, const void* p_key)

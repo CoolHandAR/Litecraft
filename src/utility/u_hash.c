@@ -60,8 +60,6 @@ uint32_t Hash_string2(const char* p_str)
 	return hash;
 }
 
-
-
 //src https://github.com/godotengine/godot/blob/master/core/templates/hashfuncs.h
 static uint32_t hash_fmix32(uint32_t h)
 {

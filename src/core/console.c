@@ -1,24 +1,18 @@
+#include "core/core_common.h"
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+
+#define NK_INCLUDE_FONT_BAKING
+#define NK_INCLUDE_DEFAULT_FONT
+#include <nuklear/nuklear.h>
+#include <nuklear/nuklear_glfw_gl3.h>
+
 #include "cvar.h"
 #include "utility/u_utility.h"
 #include "utility/u_math.h"
-
-#define NK_INCLUDE_DEFAULT_FONT
-#define NK_INCLUDE_FIXED_TYPES
-#define NK_INCLUDE_STANDARD_IO
-#define NK_INCLUDE_STANDARD_VARARGS
-#define NK_INCLUDE_DEFAULT_ALLOCATOR
-#define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
-#define NK_INCLUDE_FONT_BAKING
-#define NK_INCLUDE_DEFAULT_FONT
-#define NK_KEYSTATE_BASED_INPUT
-#include <nuklear/nuklear.h>
-#include <nuklear/nuklear_glfw_gl3.h>
-#include "core/core_common.h"
 
 typedef struct
 {

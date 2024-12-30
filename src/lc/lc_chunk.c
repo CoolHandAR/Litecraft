@@ -2,12 +2,13 @@
 #include "lc/lc_chunk.h"
 #include "lc/lc_block_defs.h"
 #include <string.h>
-#include "render/r_renderer.h"
+#include <assert.h>
+#include "utility/u_math.h"
 
 #define STB_PERLIN_IMPLEMENTATION
 #include <stb_perlin/stb_perlin.h>
 #include <glad/glad.h>
-#include "../thirdparty/perlin_noise/noise1234.h"
+
 
 
 #define VERTICES_PER_CUBE 36
@@ -412,187 +413,13 @@ static unsigned clearBits(uint32_t n, int num, int offset)
 
 	return n;
 }
-#include "utility/Custom_Hashmap.h"
-#include "utility/u_utility.h"
 
 
-static unsigned checked(unsigned height)
+static void meshTest(LC_Chunk* const chunk, ChunkVertex* vertices, size_t* index)
 {
-	unsigned test_value = 0;
-
-	for (int i = 0; i < height; i++)
-	{
-		test_value |= 1 << i;
-	}
-
-	return test_value;
-}
-
-typedef struct
-{
-	float x;
-	float y;
-	float w;
-	float h;
-} quad;
-
-static void greedyMeshPlane(int x_blocks[16])
-{
-	dynamic_array* quads = dA_INIT(quad, 1);
-
-	for(int i = 0; i < 16; i++)
-	{
-		int y = 0;
-
-		y += numTrailingZeroes((x_blocks[i] >> y), 0);
-
-		unsigned h = numTrailingOnes((x_blocks[i] >> y), 0);
-
-		unsigned h_as_mask = checked(h);
-
-		unsigned mask = h_as_mask << y;
-
-		int w = 1;
-
-		int next_row_h = (x_blocks[i + w] >> y) & h_as_mask;
-
-		if (next_row_h != h_as_mask)
-		{
-			break;
-		}
-
-		x_blocks[i + w] = x_blocks[i + w] & ~mask;
-
-		w += 1;
-
-		quad quadie;
-
-		quadie.x = i;
-		quadie.y = y;
-		quadie.w = w;
-		quadie.h = h;
-	}
-}
-
-
-static void meshTestRust(LC_Chunk* const chunk)
-{
-#define CHUNK_SIZE_PADDED 16 + 2
-
-	uint32_t axis_cols[3][CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED];
-	uint32_t col_face_masks[6][CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED];
-	memset(axis_cols, 0, sizeof(axis_cols));
-	memset(col_face_masks, 0, sizeof(col_face_masks));
-
-	typedef struct
-	{
-		int x_blocs[16];
-	} MapItem;
-
-	typedef struct
-	{
-		int axis;
-		int block_hash;
-		int y;
-	} MapKey;
-
-	CHMap data_map = CHMAP_INIT(NULL, NULL, MapKey, MapItem, 1);
-
-	for (int x = 0; x < LC_CHUNK_WIDTH; x++)
-	{
-		for (int y = 0; y < LC_CHUNK_HEIGHT; y++)
-		{
-			for (int z = 0; z < LC_CHUNK_LENGTH; z++)
-			{
-				if (chunk->blocks[x][y][z].type != LC_BT__NONE)
-				{
-					axis_cols[0][z + 1][x + 1] |= 1 << y + 1;
-
-					axis_cols[1][y + 1][z + 1] |= 1 << x + 1;
-
-					axis_cols[2][y + 1][x + 1] |= 1 << z + 1;
-				}
-			}
-		}
-	}
-
-	for (int axis = 0; axis < 3; axis++)
-	{
-		for (int z = 0; z < CHUNK_SIZE_PADDED; z++)
-		{
-			for (int x = 0; x < CHUNK_SIZE_PADDED; x++)
-			{
-				uint32_t col = axis_cols[axis][z][x];
-
-				col_face_masks[2 * axis + 0][z][x] = col & ~(col << 1);
-
-				col_face_masks[2 * axis + 1][z][x] = col & ~(col >> 1);
-			}
-		}
-	}
-
-	for (int axis = 0; axis < 6; axis++)
-	{
-		for (int z = 0; z < LC_CHUNK_LENGTH; z++)
-		{
-			for (int x = 0; x < LC_CHUNK_WIDTH; x++)
-			{
-				uint32_t col = col_face_masks[axis][z + 1][x + 1];
-
-				col >>= 1;
-
-				col &= ~(1 << 16);
-
-				while (col != 0)
-				{
-					int y = numTrailingZeroes(col, 0);
-
-					col &= col - 1;
-
-					uint32_t block_hash = chunk->blocks[x][y][z].type;
-
-					MapKey key;
-					key.axis = axis;
-					key.y = y;
-					key.block_hash = block_hash;
-
-					MapItem item;
-					memset(&item, 0, sizeof(item));
-	
-					MapItem* ptr_item = CHMap_Insert(&data_map, &key, &item);
-
-					ptr_item->x_blocs[x] |= 1 << z;
-
-				}
-			}
-		}
-	}
-
-	for (int i = 0; i < data_map.item_data->elements_size; i++)
-	{
-		MapItem* item = dA_at(data_map.item_data, i);
-		
-		greedyMeshPlane(item->x_blocs);
-	}
-
-
-
-	CHMap_Destruct(&data_map);
-}
-
-static void meshTest(LC_Chunk* const chunk)
-{
-	meshTestRust(chunk);
-
 	uint32_t masks[16][16];
 	memset(masks, 0, sizeof(masks));
 	
-	uint64_t masks_basic[3][16][16];
-	uint64_t masks_culled[6][16][16];
-
-	memset(masks_basic, 0, sizeof(masks_basic));
-	memset(masks_culled, 0, sizeof(masks_culled));
-
 	for (int x = 0; x < LC_CHUNK_WIDTH; x++)
 	{
 		for (int y = 0; y < LC_CHUNK_HEIGHT; y++)
@@ -601,115 +428,50 @@ static void meshTest(LC_Chunk* const chunk)
 			{
 				if (chunk->blocks[x][y][z].type != LC_BT__NONE)
 				{
-					masks[x][y] |= (1 << z);
-				}
-			}
-		}
-	}
-
-	for (int x = 0; x < LC_CHUNK_WIDTH; x++)
-	{
-		for (int y = 0; y < LC_CHUNK_HEIGHT; y++)
-		{
-			for (int z = 0; z < LC_CHUNK_LENGTH; z++)
-			{
-				if (chunk->blocks[x][y][z].type)
-				{
-					masks_basic[0][z][x] |= (uint64_t)1 << y;
-					masks_basic[1][y][z] |= (uint64_t)1 << x;
-					masks_basic[2][y][x] |= (uint64_t)1 << z;
+					masks[x][y] |= 1 << z;
 				}
 			}
 		}
 	}
 	
-	for (int axis = 0; axis < 3; axis++)
-	{
-		for (int z = 0; z < LC_CHUNK_LENGTH; z++)
-		{
-			for (int x = 0; x < LC_CHUNK_WIDTH; x++)
-			{
-				uint64_t col = masks_basic[axis][z][x];
-
-				masks_culled[2 * axis + 0][z][x] = col & ~(uint64_t)(col << 1);
-				masks_culled[2 * axis + 1][z][x] = col & ~(uint64_t)(col >> 1);
-			}
-		}
-	}
-	unsigned data[4000];
-	memset(data, 0, sizeof(data));
-	for (int axis = 0; axis < 6; axis++)
-	{
-		for (int z = 0; z < LC_CHUNK_LENGTH; z++)
-		{
-			for (int x = 0; x < LC_CHUNK_WIDTH; x++)
-			{
-				uint64_t col = masks_culled[axis][z + 1][x + 1];
-
-				col >> 1;
-
-				col &= ~((uint64_t)1 << 16);
-
-				while (col != 0)
-				{
-					unsigned y = numTrailingZeroes(col, 0);
-
-					col &= col - 1;
-
-					data[x] |= 1 << z;
-
-				}
-			}
-		}
-	}
-
-
 	for (int x = 0; x < LC_CHUNK_WIDTH; x++)
 	{
-		for (int y = 0; y < LC_CHUNK_HEIGHT; y++)
+		if (x > 0)
 		{
-			unsigned inverted = 227 ^ 0xffffffff;
-
-			int num_trailing_zeroes = numTrailingZeroes(inverted, 0);
-
-			unsigned new_mask = newMaskTest(num_trailing_zeroes, 0);
-
-			//mesh
-			float w = 0;
-
-			int next_zeroes_offset = findNextZeroes(inverted, num_trailing_zeroes);
-			
-			int next_trailling_zeroes = numTrailingZeroes(inverted, next_zeroes_offset);
-			
-			unsigned next_mask = newMaskTest(next_trailling_zeroes, next_zeroes_offset);
-
-			//mesh again
+			break;
 		}
-	}
-	for (int x = 0; x < LC_CHUNK_WIDTH; x++)
-	{
+		vec3 quad[2];
+		memset(quad, 0, sizeof(quad));
 		for (int y = 0; y < LC_CHUNK_HEIGHT; y++)
 		{
+			if (masks[x][y] == 0)
+			{
+				continue;
+			}
+			if (x == LC_CHUNK_WIDTH - 1 || y == -LC_CHUNK_HEIGHT - 1)
+			{
+				continue;
+			}
+			uint32_t inverted = masks[x][y] ^ UINT32_MAX;
+			
+			quad[0][0] = x;
+			quad[0][1] = y;
+			quad[0][2] = 0;
+
+			int original_y = 0;
 			int z = 0;
 			while (z < LC_CHUNK_LENGTH)
 			{
-				if (masks[x][y] == 0)
-				{
-					z++;
-					continue;
-				}
-
-				unsigned inverted = masks[x][y] ^ 0xffffffff;
-
-				int num_trailing_zeroes = numTrailingZeroes(inverted, z);
+				uint32_t num_trailing_zeroes = numTrailingZeroes(inverted, z);
 
 				if (num_trailing_zeroes == 0)
-				{
+				{	
 					z++;
+					quad[0][2] = z;
 					continue;
 				}
 
-				unsigned new_mask = newMaskTest(num_trailing_zeroes, z);
+				uint32_t new_mask = newMaskTest(num_trailing_zeroes, z);
 
 				int nextY = -1;
 
@@ -720,39 +482,80 @@ static void meshTest(LC_Chunk* const chunk)
 					//it contains us
 					if (andMask == new_mask)
 					{
-						masks[x][iy] = clearBits(masks[x][iy], num_trailing_zeroes, 0);
+						quad[1][1] = iy;
+						masks[x][iy] = clearBits(masks[x][iy], num_trailing_zeroes, z);
 
 						if (masks[x][iy] == 0)
 						{
 							nextY = iy;
 						}
 					}
-					//break
 					else
 					{
 						break;
 					}
 				}
 
-				masks[x][y] = clearBits(masks[x][y], num_trailing_zeroes, z);
+				//masks[x][y] = clearBits(masks[x][y], num_trailing_zeroes, z);
 				z += num_trailing_zeroes;
-				
+				quad[1][2] = num_trailing_zeroes;
+
 				if (nextY != -1)
 				{
 					y = nextY;
 				}
 			}
+			if (masks[x][original_y] > 0)
+			{
+				vertices[*index].position[0] = x;
+				vertices[*index].position[1] = quad[0][1];
+				vertices[*index].position[2] = quad[0][2];
+				vertices[*index].block_type = LC_BT__STONE;
+				*index = *index + 1;
+
+				vertices[*index].position[0] = x;
+				vertices[*index].position[1] = quad[0][1];
+				vertices[*index].position[2] = quad[1][2];
+				vertices[*index].block_type = LC_BT__STONE;
+				*index = *index + 1;
+
+				vertices[*index].position[0] = x;
+				vertices[*index].position[1] = quad[1][1];
+				vertices[*index].position[2] = quad[1][2];
+				vertices[*index].block_type = LC_BT__STONE;
+				*index = *index + 1;
+
+				vertices[*index].position[0] = x;
+				vertices[*index].position[1] = quad[0][1];
+				vertices[*index].position[2] = quad[0][2];
+				vertices[*index].block_type = LC_BT__STONE;
+				*index = *index + 1;
+
+				vertices[*index].position[0] = x;
+				vertices[*index].position[1] = quad[1][1];
+				vertices[*index].position[2] = quad[0][2];
+				vertices[*index].block_type = LC_BT__STONE;
+				*index = *index + 1;
+
+				vertices[*index].position[0] = x;
+				vertices[*index].position[1] = quad[1][1];
+				vertices[*index].position[2] = quad[1][2];
+				vertices[*index].block_type = LC_BT__STONE;
+				*index = *index + 1;
+			}
+		
+			
 		}
 	}
 
-	float xs = 0;
+
 }
 
 
 
 GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chunk)
 {
-	//meshTest(chunk);
+	
 
 	float start_time = glfwGetTime();
 
@@ -791,17 +594,11 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 		}
 	}
 
-	if (chunk->water_blocks > 0)
-	{
-		water_vertices = calloc(chunk->water_blocks * 6, sizeof(ChunkWaterVertex));
 
-		if (!water_vertices)
-		{
-			printf("Failed to malloc cube vertices\n");
-			return NULL;
-		}
-	}
 
+	float end_time = glfwGetTime();
+
+	printf("%f \n", end_time - start_time);
 	//[0] BACK, [1] FRONT, [2] LEFT, [3] RIGHT, [4] BOTTOM, [5] TOP
 	bool drawn_faces[LC_CHUNK_WIDTH][LC_CHUNK_HEIGHT][LC_CHUNK_LENGTH][6];
 	memset(&drawn_faces, 0, sizeof(drawn_faces));
@@ -812,6 +609,8 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 	size_t vert_index = 0;
 	size_t transparent_index = 0;
 	size_t water_index = 0;
+	
+	//meshTest(chunk, vertices, &vert_index);
 
 	for (int x = 0; x < LC_CHUNK_WIDTH; x++)
 	{
@@ -834,7 +633,7 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 				{
 					continue;
 				}
-
+				//continue;
 				LC_Block_Texture_Offset_Data tex_offset_data = LC_BLOCK_TEX_OFFSET_DATA[chunk->blocks[x][y][z].type];
 
 				bool skip_back = (z > 0 && skipCheck(chunk->blocks[x][y][z], chunk->blocks[x][y][z - 1])) || drawn_faces[x][y][z][0] == true;
@@ -1349,49 +1148,75 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 	{
 		ivec3 water_bounds[2];
 		LC_Chunk_CalculateWaterBounds(chunk, water_bounds);
-
-		water_bounds[1][0] -= water_bounds[0][0] - 1;
-		water_bounds[1][2] -= water_bounds[0][2] - 1;
-
+	
+		int total = 0;
 		index = &water_index;
 
-		int8_t norm = 1;
+		int minX = water_bounds[0][0];
+		int minZ = water_bounds[0][2];
 
-		water_vertices[*index].position[0] = water_bounds[0][0];
-		water_vertices[*index].position[1] = water_bounds[1][1];
-		water_vertices[*index].position[2] = water_bounds[0][2];
-		*index = *index + 1;
+		int maxX = water_bounds[1][0] + 2;
+		int maxZ = water_bounds[1][2] + 2;
 
-		water_vertices[*index].position[0] = water_bounds[0][0] + water_bounds[1][0];
-		water_vertices[*index].position[1] = water_bounds[1][1];
-		water_vertices[*index].position[2] = water_bounds[0][2];
-		*index = *index + 1;
+		size_t total_vertices = (maxX - minX) * (maxZ - minZ) * 6;
+		water_vertices = calloc(total_vertices, sizeof(ChunkWaterVertex));
 
-		water_vertices[*index].position[0] = water_bounds[0][0] + water_bounds[1][0];
-		water_vertices[*index].position[1] = water_bounds[1][1];
-		water_vertices[*index].position[2] = water_bounds[0][2] + water_bounds[1][2];
-		*index = *index + 1;
+		if (!water_vertices)
+		{
+			printf("Failed to malloc cube vertices\n");
+			return NULL;
+		}
 
-		water_vertices[*index].position[0] = water_bounds[0][0];
-		water_vertices[*index].position[1] = water_bounds[1][1];
-		water_vertices[*index].position[2] = water_bounds[0][2];
-		*index = *index + 1;
+		for (int x = minX; x < maxX; x++)
+		{
+			for (int z = minZ; z < maxZ; z++)
+			{
+				total += 6;
+				//FIRST TRIANGLE
+				water_vertices[*index].position[0] = x;
+				water_vertices[*index].position[1] = water_bounds[1][1];
+				water_vertices[*index].position[2] = z;
 
-		water_vertices[*index].position[0] = water_bounds[0][0];
-		water_vertices[*index].position[1] = water_bounds[1][1];
-		water_vertices[*index].position[2] = water_bounds[0][2] + water_bounds[1][2];
-		*index = *index + 1;
+				*index = *index + 1;
 
-		water_vertices[*index].position[0] = water_bounds[0][0] + water_bounds[1][0];
-		water_vertices[*index].position[1] = water_bounds[1][1];
-		water_vertices[*index].position[2] = water_bounds[0][2] + water_bounds[1][2];
-		*index = *index + 1;
+				water_vertices[*index].position[0] = x + 1;
+				water_vertices[*index].position[1] = water_bounds[1][1];
+				water_vertices[*index].position[2] = z;
+
+				*index = *index + 1;
+
+				water_vertices[*index].position[0] = x + 1;
+				water_vertices[*index].position[1] = water_bounds[1][1];
+				water_vertices[*index].position[2] = z + 1;
+
+				*index = *index + 1;
+
+				//SECOND TRIANGLE
+				water_vertices[*index].position[0] = x;
+				water_vertices[*index].position[1] = water_bounds[1][1];
+				water_vertices[*index].position[2] = z;
+
+				*index = *index + 1;
+
+				water_vertices[*index].position[0] = x;
+				water_vertices[*index].position[1] = water_bounds[1][1];
+				water_vertices[*index].position[2] = z + 1;
+
+				*index = *index + 1;
+
+				water_vertices[*index].position[0] = x + 1;
+				water_vertices[*index].position[1] = water_bounds[1][1];
+				water_vertices[*index].position[2] = z + 1;
+
+				*index = *index + 1;
+			}
+		}
+
+		float fs = 0;
 	}
+	
 
-
-	float end_time = glfwGetTime();
-
-	printf("%f \n", end_time - start_time);
+	
 
 	chunk->vertex_count = vert_index;
 	chunk->transparent_vertex_count = transparent_index;
@@ -1407,7 +1232,7 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 }
 LC_BiomeType LC_getBiomeType(float p_x, float p_z)
 {
-	float noise = noise2(p_x / 4096.0, p_z / 4096.0);
+	float noise = stb_perlin_noise3(p_x / 256.0, 0.1, p_z / 256.0, 0, 0, 0);
 
 	float abs_noise = fabsf(noise);
 	//Positive noise
@@ -1441,7 +1266,7 @@ static void LC_getBiomeNoiseData(LC_BiomeType p_biome, float p_x, float p_y, flo
 	{
 	case LC_Biome_SnowyMountains:
 	{
-		float surface_height_multiplier = fabsf(noise2(p_x / 256.0, p_z / 256.0) * 500);
+		float surface_height_multiplier = fabsf(stb_perlin_noise3(p_x / 256.0, 0, p_z / 256.0, 0, 0, 0) * 500);
 		float surface_height = fabsf(stb_perlin_noise3(p_x / 256.0, p_y / 256.0, p_z / 256.0, 0, 0, 0) * surface_height_multiplier);
 		float flatness = stb_perlin_ridge_noise3(p_x / 256.0, 0, p_z / 256.0, 2.0, 0.6, 1.2, 6) * 20;
 		*r_surfaceHeight = surface_height + flatness;
@@ -1456,7 +1281,7 @@ static void LC_getBiomeNoiseData(LC_BiomeType p_biome, float p_x, float p_y, flo
 	}
 	case LC_Biome_RockyMountains:
 	{
-		float surface_height_multiplier = fabsf(noise2(p_x / 256.0, p_z / 256.0) * 1);
+		float surface_height_multiplier = fabsf(stb_perlin_noise3(p_x / 256.0, 0, p_z / 256.0, 0, 0, 0) * 1);
 		float surface_height = fabsf(stb_perlin_noise3(p_x / 256.0, p_y / 256.0, p_z / 256.0, 0, 0, 0) * surface_height_multiplier);
 		float flatness = stb_perlin_ridge_noise3(p_x / 256.0, 0, p_z / 256.0, 2.0, 1.8, 1.2, 3) * 12;
 		*r_surfaceHeight = surface_height + flatness;
@@ -1471,8 +1296,8 @@ static void LC_getBiomeNoiseData(LC_BiomeType p_biome, float p_x, float p_y, flo
 	}
 	case LC_Biome_Desert:
 	{
-		float height_multiplier = noise3(p_x / 512.0, p_y / 256.0, p_z / 512.0) * 100;
-		float surface_height = noise2(p_x / 256.0, p_z / 256.0) * height_multiplier;
+		float height_multiplier = 1;
+		float surface_height = 1;
 		float flatness = stb_perlin_fbm_noise3(p_x / 256.0, 0, p_z / 256.0, 2.34, 1.4, 4);
 		*r_surfaceHeight = surface_height + flatness;
 		return;
@@ -1522,11 +1347,11 @@ static LC_Block LC_generateBlock(float p_x, float p_y, float p_z, int p_seed)
 	{
 		if (cave_noise == 0.4)
 		{
-			block.type == LC_BT__AMETHYST;
+			//block.type == LC_BT__AMETHYST;
 		}
 		else
 		{
-			block.type = LC_BT__NONE;
+			//block.type = LC_BT__NONE;
 		}
 		
 	}
@@ -1602,34 +1427,6 @@ static LC_Block LC_generateBlock(float p_x, float p_y, float p_z, int p_seed)
 		}
 		
 	}
-	
-
-	/*
-	static int test = 0;
-	test = Math_rand() % 5;
-	if (test == 0)
-	{
-		block.type = LC_BT__STONE;
-	}
-	else if (test == 1)
-	{
-		block.type = LC_BT__GRASS;
-	}
-	else if (test == 2)
-	{
-		block.type = LC_BT__DIRT;
-	}
-	else if (test == 3)
-	{
-		block.type = LC_BT__DIAMOND;
-	}
-	else if (test == 4)
-	{
-		block.type = LC_BT__IRON;
-	}
-	*/
-
-	//block.type = LC_BT__STONE;
 
 	return block;
 }
@@ -1833,7 +1630,7 @@ static inline void LC_Chunk_GenerateAdditionalBlocks(LC_Chunk* _chunk, int p_x, 
 	else if (block_type == LC_BT__GRASS || block_type == LC_BT__DIRT)
 	{
 		//generate a tree
-		if ((Math_rand() % 4) == 0 && p_gY > 12 && p_gY < 300 && p_y < LC_CHUNK_HEIGHT - 5 && p_x > 2 && p_z > 2 && p_x < LC_CHUNK_WIDTH - 2
+		if ((Math_rand() % 2) == 0 && p_gY > 12 && p_gY < 300 && p_y < LC_CHUNK_HEIGHT - 5 && p_x > 2 && p_z > 2 && p_x < LC_CHUNK_WIDTH - 2
 			&& p_z < LC_CHUNK_LENGTH - 2 && up_block == LC_BT__NONE  && right_block == LC_BT__NONE && front_block == LC_BT__NONE && back_block == LC_BT__NONE)
 		{
 			const int MIN_TREE_HEIGHT = 5;
@@ -1871,15 +1668,15 @@ static inline void LC_Chunk_GenerateAdditionalBlocks(LC_Chunk* _chunk, int p_x, 
 			}
 
 		}
-		else if (p_gY > 20 && (up_block == LC_BT__NONE || LC_isBlockWater(up_block)) && (left_block == LC_BT__NONE || back_block == LC_BT__NONE))
+		else if (p_gY > 5 && (up_block == LC_BT__NONE || LC_isBlockWater(up_block)) && (left_block == LC_BT__NONE || back_block == LC_BT__NONE))
 		{
 			//grass prop
-			if ((Math_rand() % 12) == 0)
+			if ((Math_rand() % 8) == 0)
 			{
 				LC_Chunk_SetBlock(_chunk, p_x, p_y + 1, p_z, LC_BT__GRASS_PROP);
 			}
 			//flower prop
-			else if ((Math_rand() % 12) == 0)
+			else if ((Math_rand() % 8) == 0)
 			{
 				LC_Chunk_SetBlock(_chunk, p_x, p_y + 1, p_z, LC_BT__FLOWER);
 			}
@@ -1907,15 +1704,17 @@ void LC_Chunk_GenerateBlocks(LC_Chunk* const _chunk, int _seed)
 
 					LC_Chunk_SetBlock(_chunk, x, y, z, generated_block.type);
 				}
-				if (y < 5)
+				
+				if (_chunk->blocks[x][y][z].type == LC_BT__WATER)
 				{
 					//LC_Chunk_SetBlock(_chunk, x, y, z, LC_BT__STONE);
 				}
-				else
-				{
-					//LC_Chunk_SetBlock(_chunk, x, y, z, LC_BT__NONE);
-				}
 				
+				
+				if (y > 6)
+				{
+					//LC_Chunk_SetBlock(_chunk, x, y, z, LC_BT__WATER);
+				}
 				
 				//Skip if no block was generated
 				if (_chunk->blocks[x][y][z].type == LC_BT__NONE)
@@ -1981,7 +1780,6 @@ unsigned LC_generateBlockInfoGLBuffer()
 		data[i].position_offset = (LC_isBlockProp(i)) ? 0.5 : 0.0;
 	}
 
-	//glBufferStorage(GL_UNIFORM_BUFFER, sizeof(LC_BlockMaterialData) * LC_BT__MAX, data, GL_CLIENT_STORAGE_BIT);
 	glBufferData(GL_UNIFORM_BUFFER, sizeof(LC_BlockMaterialData) * (LC_BT__MAX + 1), data, GL_STATIC_DRAW);
 
 	return buffer;
@@ -1991,8 +1789,8 @@ void LC_Chunk_CalculateWaterBounds(LC_Chunk* const _chunk, ivec3 dest[2])
 {
 	if (_chunk->water_blocks <= 0)
 	{
-		glm_vec3_zero(dest[0]);
-		glm_vec3_zero(dest[1]);
+		glm_ivec3_zero(dest[0]);
+		glm_ivec3_zero(dest[1]);
 		return;
 	}
 
@@ -2025,17 +1823,7 @@ void LC_Chunk_CalculateWaterBounds(LC_Chunk* const _chunk, ivec3 dest[2])
 					blocks_visited++;
 				}
 
-				if (blocks_visited >= _chunk->water_blocks)
-				{
-					dest[0][0] = minWaterX;
-					dest[0][1] = minWaterY;
-					dest[0][2] = minWaterZ;
-
-					dest[1][0] = maxWaterX;
-					dest[1][1] = maxWaterY;
-					dest[1][2] = maxWaterZ;
-					return;
-				}
+				
 			}
 		}
 	}

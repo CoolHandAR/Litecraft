@@ -111,24 +111,31 @@ static void Pass_gBuffer()
 	glDepthFunc(GL_LESS);
 }
 
-static void Pass_downsample()
-{
-	//Downsample depth and normal
-	glNamedFramebufferReadBuffer(pass->deferred.FBO, GL_COLOR_ATTACHMENT0);
-	glNamedFramebufferDrawBuffer(pass->general.halfsize_fbo, GL_COLOR_ATTACHMENT0);
+static void Pass_downsampleDepthNormal()
+{	
+	if (r_cvars.r_ssaoHalfSize->int_value || r_cvars.r_enableGodrays->int_value);
+	{
+		//Downsample depth and normal
+		glNamedFramebufferReadBuffer(pass->deferred.FBO, GL_COLOR_ATTACHMENT0);
+		glNamedFramebufferDrawBuffer(pass->general.halfsize_fbo, GL_COLOR_ATTACHMENT0);
 
-	glBlitNamedFramebuffer(pass->deferred.FBO, pass->general.halfsize_fbo, 0, 0, backend_data->screenSize[0], backend_data->screenSize[1], 0, 0,
+		glBlitNamedFramebuffer(pass->deferred.FBO, pass->general.halfsize_fbo, 0, 0, backend_data->screenSize[0], backend_data->screenSize[1], 0, 0,
 			backend_data->halfScreenSize[0], backend_data->halfScreenSize[1], GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+	}
 }
 
-static void Pass_AO()
+
+
+static void Pass_SSAO()
 {
 	if (!r_cvars.r_useSsao->int_value)
+	{
 		return;
-
+	}
+		
 	int viewport_width = backend_data->screenSize[0];
 	int viewport_height = backend_data->screenSize[1];
-	
+
 	unsigned normal_tex = pass->deferred.gNormalMetal_texture;
 	unsigned depth_tex = pass->deferred.depth_texture;
 	if (r_cvars.r_ssaoHalfSize->int_value)
@@ -136,57 +143,100 @@ static void Pass_AO()
 		viewport_width >>= 1;
 		viewport_height >>= 1;
 
-		//Downsample depth and normal to half size
-		Pass_downsample();
-		
 		normal_tex = pass->general.normal_halfsize_texture;
 		depth_tex = pass->general.depth_halfsize_texture;
 	}
-	unsigned dispatch_x = 1;
-	unsigned dispatch_y = 1;
-	Pass_GetRoundedDispatchGroupsForScreen(viewport_width, viewport_height, 8, 8, &dispatch_x, &dispatch_y);
 
-	//SSAO 
+	//ACCUMULATION PASS
+	Shader_ResetDefines(&pass->ao.shader);
+	Shader_SetDefine(&pass->ao.shader, SSAO_DEFINE_PASS_ACCUM, true);
+
+	Shader_Use(&pass->ao.shader);
+
+	Shader_SetFloat2(&pass->ao.shader, SSAO_UNIFORM_VIEWPORTSIZE, viewport_width, viewport_height);
+	Shader_SetFloaty(&pass->ao.shader, SSAO_UNIFORM_RADIUS, r_cvars.r_ssaoRadius->float_value);
+	Shader_SetFloaty(&pass->ao.shader, SSAO_UNIFORM_BIAS, r_cvars.r_ssaoBias->float_value);
+	Shader_SetFloaty(&pass->ao.shader, SSAO_UNIFORM_STRENGTH, r_cvars.r_ssaoStrength->float_value);
+
 	glBindTextureUnit(0, depth_tex);
-	glBindTextureUnit(1, pass->ao.noise_texture);
-	glBindTextureUnit(2, normal_tex);
+	glBindTextureUnit(1, normal_tex);
+	glBindTextureUnit(2, pass->ao.noise_texture);
+	
+	glBindImageTexture(0, pass->ao.ao_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8);
 
-	glUseProgram(pass->ao.shader);
-	Shader_SetVector2f(pass->ao.shader, "u_viewportSize", backend_data->screenSize[0], backend_data->screenSize[1]);
-	Shader_SetFloat(pass->ao.shader, "u_uvMultiplier", (r_cvars.r_ssaoHalfSize->int_value) ? 2.0 : 1.0);
+	Pass_DispatchScreenCompute(viewport_width, viewport_height, 8, 8);
+
+	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+	//FIRST BLUR PASS
+	Shader_ResetDefines(&pass->ao.shader);
+	Shader_SetDefine(&pass->ao.shader, SSAO_DEFINE_PASS_BLUR, true);
+
+	Shader_Use(&pass->ao.shader);
+
+	Shader_SetFloat2(&pass->ao.shader, SSAO_UNIFORM_VIEWPORTSIZE, backend_data->screenSize[0], backend_data->screenSize[1]);
+	Shader_SetInt(&pass->ao.shader, SSAO_UNIFORM_SECONDPASS, false);
+
+	glBindTextureUnit(3, pass->ao.ao_texture);
+
+	glBindImageTexture(0, pass->ao.back_ao_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8);
+
+	Pass_DispatchScreenCompute(viewport_width, viewport_height, 8, 8);
+
+	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+	//SECOND BLUR PASS
+	Shader_SetInt(&pass->ao.shader, SSAO_UNIFORM_SECONDPASS, true);
+
+	glBindTextureUnit(3, pass->ao.back_ao_texture);
 
 	glBindImageTexture(0, pass->ao.ao_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8);
 
-	glDispatchCompute(dispatch_x, dispatch_y, 1);
-	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+	Pass_DispatchScreenCompute(viewport_width, viewport_height, 8, 8);
 
-	//Box Blur the ssao texture
-	glUseProgram(pass->general.box_blur_shader);
-	glBindTextureUnit(0, pass->ao.ao_texture);
-	glBindImageTexture(0, pass->ao.blurred_ao_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8);
-	Shader_SetInteger(pass->general.box_blur_shader, "u_size", 2);
-
-	glDispatchCompute(dispatch_x, dispatch_y, 1);
-	
-	//Upsample the texture if needed
+	//UPSAMPLE PASS (if needed)
 	if (r_cvars.r_ssaoHalfSize->int_value)
 	{
 		glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-		dispatch_x = 1;
-		dispatch_y = 1;
-		Pass_GetRoundedDispatchGroupsForScreen(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8, &dispatch_x, &dispatch_y);
+		Shader_ResetDefines(&pass->ao.shader);
+		Shader_SetDefine(&pass->ao.shader, SSAO_DEFINE_PASS_UPSAMPLE, true);
+		
+		Shader_Use(&pass->ao.shader);
 
-		glUseProgram(pass->general.copy_shader);
-		glBindTextureUnit(0, pass->ao.blurred_ao_texture);
-		glBindImageTexture(0, pass->ao.ao_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8);
+		Shader_SetFloat2(&pass->ao.shader, SSAO_UNIFORM_VIEWPORTSIZE, backend_data->screenSize[0], backend_data->screenSize[1]);
 
-		Shader_SetVector2f(pass->general.copy_shader, "u_viewportSize", backend_data->screenSize[0], backend_data->screenSize[1]);
-		Shader_SetFloat(pass->general.copy_shader, "u_uvMultiplier", 0.5);
+		glBindTextureUnit(4, pass->ao.ao_texture);
+		glBindTextureUnit(5, pass->ao.ao_texture);
+		glBindTextureUnit(6, pass->deferred.depth_texture);
 
-		glDispatchCompute(dispatch_x, dispatch_y, 1);
+		glBindImageTexture(0, pass->ao.back_ao_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8);
+
+		glBindSampler(5, pass->ao.linear_sampler);
+
+		Pass_DispatchScreenCompute(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8);
+
+		glBindSampler(5, 0);
 	}
 }
+
+static void Pass_SSIL()
+{
+	glUseProgram(pass->ssil.shader);
+	
+	Shader_SetInteger(pass->ssil.shader, "depth_texture", 0);
+	Shader_SetInteger(pass->ssil.shader, "light_buffer", 1);
+	Shader_SetVector2f(pass->ssil.shader, "u_viewportSize", backend_data->screenSize[0], backend_data->screenSize[1]);
+	
+	glBindTextureUnit(0, pass->deferred.depth_texture);
+	glBindTextureUnit(1, pass->water.refraction_texture);
+
+	glBindImageTexture(0, pass->ssil.output_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+
+	Pass_DispatchScreenCompute(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8);
+}
+
+
 static void Pass_BloomTextureSample()
 {
 	if (!r_cvars.r_useBloom->int_value)
@@ -340,25 +390,77 @@ static void Pass_DepthOfField()
 	}
 }
 
+
 static void Pass_Godrays()
 {
-	glUseProgram(pass->godray.shader);
+	if (!r_cvars.r_enableGodrays->int_value)
+	{
+		return;
+	}
 
-	Shader_SetInteger(pass->godray.shader, "depth_texture", 0);
-	Shader_SetInteger(pass->godray.shader, "shadowMapsDepth", 1);
-	Shader_SetVector2f(pass->godray.shader, "u_viewportSize", backend_data->screenSize[0], backend_data->screenSize[1]);
+	Shader_ResetDefines(&pass->godray.shader);
 
-	glBindTextureUnit(0, pass->deferred.depth_texture);
-	glBindTextureUnit(1, pass->shadow.depth_maps);
-
-	glBindImageTexture(0, pass->godray.godray_fog_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
-	glDispatchCompute(backend_data->screenSize[0] / 8, backend_data->screenSize[1] / 8, 1);
+	//RAYMARCHING PASS
+	Shader_SetDefine(&pass->godray.shader, GODRAY_DEFINE_RAYMARCH_PASS, true);
 	
+	Shader_Use(&pass->godray.shader);
+
+	Shader_SetFloat2(&pass->godray.shader, GODRAY_UNIFORM_VIEWPORTSIZE, backend_data->halfScreenSize[0], backend_data->halfScreenSize[1]);
+	Shader_SetInt(&pass->godray.shader, GODRAY_UNIFORM_MAXSTEPS, 8);
+	Shader_SetFloaty(&pass->godray.shader, GODRAY_UNIFORM_SCATTERING, 0.8);
+
+	glBindTextureUnit(0, pass->general.depth_halfsize_texture);
+	glBindTextureUnit(3, pass->shadow.depth_maps);
+	glBindImageTexture(0, pass->godray.godray_fog_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R16F);
+
+	Pass_DispatchScreenCompute(backend_data->halfScreenSize[0], backend_data->halfScreenSize[1], 8, 8);
+
+	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+	Shader_ResetDefines(&pass->godray.shader);
+	//FIRST BLUR PASS
+	Shader_SetDefine(&pass->godray.shader, GODRAY_DEFINE_BLUR_PASS, true);
+
+	Shader_Use(&pass->godray.shader);
+
+	Shader_SetFloat2(&pass->godray.shader, GODRAY_UNIFORM_VIEWPORTSIZE, backend_data->halfScreenSize[0], backend_data->halfScreenSize[1]);
+	Shader_SetInt(&pass->godray.shader, GODRAY_UNIFORM_SECONDPASS, false);
+
+	glBindTextureUnit(0, pass->general.depth_halfsize_texture);
+	glBindTextureUnit(2, pass->godray.godray_fog_texture);
+	glBindImageTexture(0, pass->godray.back_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R16F);
+
+	Pass_DispatchScreenCompute(backend_data->halfScreenSize[0], backend_data->halfScreenSize[1], 8, 8);
+
+	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+	
+	//SECOND BLUR PASS
+	Shader_SetInt(&pass->godray.shader, GODRAY_UNIFORM_SECONDPASS, true);
+	glBindTextureUnit(2, pass->godray.back_texture);
+	glBindImageTexture(0, pass->godray.godray_fog_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R16F);
+
+	Pass_DispatchScreenCompute(backend_data->halfScreenSize[0], backend_data->halfScreenSize[1], 8, 8);
+
+	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+	Shader_ResetDefines(&pass->godray.shader);
+	//COMPOSITE PASS
+	Shader_SetDefine(&pass->godray.shader, GODRAY_DEFINE_COMPOSITE_PASS, true);
+
+	Shader_Use(&pass->godray.shader);
+	
+	Shader_SetFloat2(&pass->godray.shader, GODRAY_UNIFORM_VIEWPORTSIZE, backend_data->screenSize[0], backend_data->screenSize[1]);
+	
+	glBindTextureUnit(0, pass->general.depth_halfsize_texture);
+	glBindTextureUnit(1, pass->deferred.depth_texture);
+	glBindTextureUnit(2, pass->godray.godray_fog_texture);
+	glBindImageTexture(0, pass->scene.MainSceneColorBuffer, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16F);
+
+	Pass_DispatchScreenCompute(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8);
 }
 
-
 static void Pass_deferredShading()
-{
+{	
 	//make sure ao finishes
 	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
@@ -375,7 +477,7 @@ static void Pass_deferredShading()
 	glBindTextureUnit(0, pass->deferred.gNormalMetal_texture);
 	glBindTextureUnit(1, pass->deferred.gColorRough_texture);
 	glBindTextureUnit(2, pass->deferred.depth_texture);
-	glBindTextureUnit(3, (r_cvars.r_ssaoHalfSize->int_value == 1) ? pass->ao.ao_texture : pass->ao.blurred_ao_texture);
+	glBindTextureUnit(3, (r_cvars.r_ssaoHalfSize->int_value == 0) ? pass->ao.ao_texture : pass->ao.back_ao_texture);
 	glBindTextureUnit(4, pass->shadow.depth_maps);
 	
 	//IBL Textures
@@ -401,10 +503,10 @@ static void Pass_ProcessCubemap()
 	glBindTextureUnit(1, pass->ibl.nightTexture);
 	Shader_SetMatrix4(pass->ibl.sky_compute_shader, "u_proj", pass->ibl.cube_proj);
 
-	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_skyColor", scene.scene_environment.sky_color);
-	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_skyHorizonColor", scene.scene_environment.sky_horizon_color);
-	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_groundHorizonColor", scene.scene_environment.ground_horizon_color);
-	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_groundColor", scene.scene_environment.ground_bottom_color);
+	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_skyColor", scene.environment.sky_color);
+	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_skyHorizonColor", scene.environment.sky_horizon_color);
+	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_groundHorizonColor", scene.environment.ground_horizon_color);
+	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_groundColor", scene.environment.ground_bottom_color);
 
 	static float time = 0;
 	time += Core_getDeltaTime();
@@ -482,12 +584,13 @@ static void Pass_Transparents()
 	//Render_TransparentScene(RPS__STANDART_PASS);
 
 	glEnable(GL_BLEND);
+	glDisable(GL_BLEND);
 	//Render other objects
 	//render water
 	glDisable(GL_CULL_FACE);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-	glDepthMask(GL_FALSE);
+	glDepthMask(GL_TRUE);
 	Render_WorldWaterChunks();
 
 
@@ -502,19 +605,40 @@ static void Pass_Transparents()
 
 }
 
-static void Pass_ReflectionTexture()
+static void Pass_WaterPrePass()
 {
-	R_Camera* cam = Camera_getCurrent();
-
-	if (!cam)
+	//only bother rendering if we have any water chunks in frustrum
+	if (scene.cull_data.lc_world.water_in_frustrum <= 0)
 	{
 		return;
 	}
 
+	//copy main scene's buffer to the refraction texture
+	glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
+	glReadBuffer(GL_COLOR_ATTACHMENT0);
+
+	glBindTexture(GL_TEXTURE_2D, pass->water.refraction_texture);
+	//glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, backend_data->screenSize[0], backend_data->screenSize[1]);
+
+	//Render into the reflection texture
 	glBindFramebuffer(GL_FRAMEBUFFER, pass->water.reflection_fbo);
 	glBindRenderbuffer(GL_RENDERBUFFER, pass->water.reflection_rbo);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+	glUseProgram(pass->shadow.blur_shader);
+	glBindTextureUnit(0, pass->scene.MainSceneColorBuffer);
+	glBindImageTexture(0, pass->water.refraction_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+
+	Pass_DispatchScreenCompute(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8);
+
+
+	bool viewport_change = (r_cvars.r_waterReflectionQuality->int_value < 2);
+	if (viewport_change)
+	{
+		glViewport(0, 0, pass->water.reflection_size[0], pass->water.reflection_size[1]);
+	}
+
+	//Render skybox
 	mat4 view_no_translation;
 	glm_mat4_identity(view_no_translation);
 	glm_mat3_make(pass->water.reflection_view_matrix, view_no_translation);
@@ -534,19 +658,35 @@ static void Pass_ReflectionTexture()
 	glDepthMask(GL_FALSE);
 
 	Render_Cube();
-
+	
+	glDrawBuffer(GL_COLOR_ATTACHMENT0);	
 	glDepthFunc(GL_LESS);
 	glDepthMask(GL_TRUE);
 
-
 	glEnable(GL_CLIP_DISTANCE0);
-	//glViewport(0, 0, backend_data->screenSize[0] / 4, backend_data->screenSize[1] / 4);
-
+	
+	//Render scene
 	Render_OpaqueScene(RPass__REFLECTION_CLIP);
+	Render_SemiOpaqueScene(RPass__REFLECTION_CLIP);
 
 	glDisable(GL_CLIP_DISTANCE0);
 
-	//glViewport(0, 0, backend_data->screenSize[0], backend_data->screenSize[1]);
+	if (viewport_change)
+	{
+		glViewport(0, 0, backend_data->screenSize[0], backend_data->screenSize[1]);
+	}
+
+	//Blur the reflection texture
+	glUseProgram(pass->general.box_blur_shader);
+	glBindTextureUnit(0, pass->water.reflection_texture);
+	glBindImageTexture(0, pass->water.reflection_back_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+
+	Shader_SetInteger(pass->general.box_blur_shader, "u_size", 4);
+	Shader_SetVector2f(pass->general.box_blur_shader, "u_dir", 0.0, 1.0);
+	Shader_SetFloat(pass->general.box_blur_shader, "u_blurScale", 1);
+
+	Pass_DispatchScreenCompute(pass->water.reflection_size[0], pass->water.reflection_size[1], 8, 8);
+
 	glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
 }
 
@@ -588,7 +728,6 @@ static void Pass_PostProcess()
 		glBindTextureUnit(1, pass->deferred.gColorRough_texture);
 		glBindTextureUnit(2, pass->deferred.depth_texture);
 		glBindTextureUnit(3, pass->ao.ao_texture);
-		glBindTextureUnit(4, pass->godray.godray_fog_texture);
 	}
 	//Normal post process pass
 	else
@@ -604,6 +743,7 @@ static void Pass_PostProcess()
 		Shader_SetDefine(&pass->post.post_process_shader, POST_PROCESS_DEFINE_USE_REINHARD_TONEMAP, r_cvars.r_TonemapMode->int_value == 0);
 		Shader_SetDefine(&pass->post.post_process_shader, POST_PROCESS_DEFINE_USE_UNCHARTED2_TONEMAP, r_cvars.r_TonemapMode->int_value == 1);
 		Shader_SetDefine(&pass->post.post_process_shader, POST_PROCESS_DEFINE_USE_ACES_TONEMAP, r_cvars.r_TonemapMode->int_value == 2);
+		Shader_SetDefine(&pass->post.post_process_shader, POST_PROCESS_DEFINE_USE_FOG, scene.environment.depthFogEnabled || scene.environment.heightFogEnabled);
 
 		Shader_Use(&pass->post.post_process_shader);
 		
@@ -613,6 +753,18 @@ static void Pass_PostProcess()
 		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_BRIGHTNESS, r_cvars.r_Brightness->float_value);
 		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_GAMMA, r_cvars.r_Gamma->float_value);
 		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_EXPOSURE, r_cvars.r_Exposure->float_value);
+
+		Shader_SetInt(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_HEIGHTFOGENABLED, scene.environment.heightFogEnabled);
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_HEIGHTFOGMIN, scene.environment.heightFogMin);
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_HEIGHTFOGMAX, scene.environment.heightFogMax);
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_HEIGHTFOGCURVE, scene.environment.heightFogCurve);
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_HEIGHTFOGDENSITY, scene.environment.heightFogDensity);
+		
+		Shader_SetInt(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_DEPTHFOGENABLED, scene.environment.depthFogEnabled);
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_DEPTHFOGBEGIN, scene.environment.depthFogBegin);
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_DEPTHFOGEND, scene.environment.depthFogEnd);
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_DEPTHFOGCURVE, scene.environment.depthFogCurve);
+		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_DEPTHFOGDENSITY, scene.environment.depthFogDensity);
 	}
 	glDisable(GL_DEPTH_TEST);
 	glDisable(GL_BLEND);
@@ -651,9 +803,14 @@ void Pass_Main()
 	Pass_shadowMap();
 
 	glDisable(GL_CULL_FACE);
+
+	//Downsample depth and normal(if needed)
+	Pass_downsampleDepthNormal();
 	
 	//SSAO pass, blur pass
-	Pass_AO();
+	Pass_SSAO();
+
+	//Pass_SSIL();
 
 	//Draw into the main's screen buffer
 	//The scene's framebuffer uses deferred's depth texture
@@ -669,8 +826,8 @@ void Pass_Main()
 	//Render boxes for oclussion culling
 	Pass_OcclussionBoxes();
 
-	//Render reflection texture
-	Pass_ReflectionTexture();
+	//Water render prepass stuff
+	Pass_WaterPrePass();
 
 	//Render all transparent objects
 	Pass_Transparents();
@@ -686,7 +843,8 @@ void Pass_Main()
 
 	//Blur the main scene buffer for Depth of field effects
 	Pass_DepthOfField();
-
+	
+	//Perform godrays
 	Pass_Godrays();
 
 	//Bind to the default framebuffer

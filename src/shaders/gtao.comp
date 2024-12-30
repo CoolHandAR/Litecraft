@@ -1,0 +1,179 @@
+#version 460 core
+
+#include "../shader_commons.incl"
+#include "../scene_incl.incl"
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(rgba16f, binding = 0) writeonly restrict uniform image2D ssaoOutput;
+
+uniform sampler2D depth_texture;
+uniform sampler2D gNormal_Metal;
+uniform sampler2D light_buffer;
+uniform sampler2D old_ao;
+
+uniform vec2 u_viewportSize;
+
+const float pi = 3.14159265359;
+const float twoPi = 2.0 * pi;
+const float halfPi = 0.5 * pi;
+const float sliceCount = 4;
+const float sampleRadius = 0.5;
+const float sampleCount = 4;
+const float hitThickness = 0.5;
+// https://blog.demofox.org/2022/01/01/interleaved-gradient-noise-a-different-kind-of-low-discrepancy-sequence/
+float randf(int x, int y) {
+    return mod(52.9829189 * mod(0.06711056 * float(x) + 0.00583715 * float(y), 1.0), 1.0);
+}
+// https://graphics.stanford.edu/%7Eseander/bithacks.html
+uint bitCount(uint value) {
+    value = value - ((value >> 1u) & 0x55555555u);
+    value = (value & 0x33333333u) + ((value >> 2u) & 0x33333333u);
+    return ((value + (value >> 4u) & 0xF0F0F0Fu) * 0x1010101u) >> 24u;
+}
+
+// https://cdrinmatane.github.io/posts/ssaovb-code/
+const uint sectorCount = 32u;
+uint updateSectors(float minHorizon, float maxHorizon, uint outBitfield) {
+    uint startBit = uint(minHorizon * float(sectorCount));
+    uint horizonAngle = uint(ceil((maxHorizon - minHorizon) * float(sectorCount)));
+    uint angleBit = horizonAngle > 0u ? uint(0xFFFFFFFFu >> (sectorCount - horizonAngle)) : 0u;
+    uint currentBitfield = angleBit << startBit;
+    return outBitfield | currentBitfield;
+}
+vec3 viewNormalAtPixelPosition(vec2 vpos)
+{   
+        vec2 pixel_size = 1.0 / u_viewportSize;
+    
+        // get current pixel's view space position
+        vec3 viewSpacePos_c = depthToViewPos(depth_texture, cam.invProj, vpos);
+
+        // get view space position at 1 pixel offsets in each major direction
+        vec3 viewSpacePos_r = depthToViewPos(depth_texture, cam.invProj, vpos + vec2( pixel_size.x, 0.0));
+        vec3 viewSpacePos_u = depthToViewPos(depth_texture, cam.invProj, vpos + vec2( 0.0, pixel_size.y));
+
+        // get the difference between the current and each offset position
+        vec3 hDeriv = viewSpacePos_r - viewSpacePos_c;
+        vec3 vDeriv = viewSpacePos_u - viewSpacePos_c;
+
+        // get view space normal from the cross product of the diffs
+        vec3 viewNormal = normalize(cross(hDeriv, vDeriv));
+
+        return viewNormal;
+}
+
+vec3 viewNormalAtPixelPosition2(vec2 vpos)
+{   
+        vec2 pixel_size = 1.0 / u_viewportSize;
+    
+        // get current pixel's view space position
+        vec3 viewSpacePos_c = depthToViewPos(depth_texture, cam.invProj, vpos);
+
+        // get view space position at 1 pixel offsets in each major direction
+        vec3 viewSpacePos_l = depthToViewPos(depth_texture, cam.invProj, vpos + vec2( -pixel_size.x, 0.0));
+        vec3 viewSpacePos_r = depthToViewPos(depth_texture, cam.invProj, vpos + vec2( pixel_size.x, 0.0));
+        vec3 viewSpacePos_d = depthToViewPos(depth_texture, cam.invProj, vpos + vec2( 0.0, -pixel_size.y));
+        vec3 viewSpacePos_u = depthToViewPos(depth_texture, cam.invProj, vpos + vec2( 0.0, pixel_size.y));
+
+        vec3 l = viewSpacePos_c - viewSpacePos_l;
+        vec3 r = viewSpacePos_r - viewSpacePos_c;
+        vec3 d = viewSpacePos_c - viewSpacePos_d;
+        vec3 u = viewSpacePos_u - viewSpacePos_c;
+
+        // get the difference between the current and each offset position
+        vec3 hDeriv = abs(l.z) < abs(r.z) ? l : r;
+        vec3 vDeriv = abs(d.z) < abs(u.z) ? d : u;
+
+        // get view space normal from the cross product of the diffs
+        vec3 viewNormal = normalize(cross(hDeriv, vDeriv));
+
+        return viewNormal;
+}
+
+void main()
+{
+	const ivec2 iCoords = ivec2(gl_GlobalInvocationID.xy);
+
+    //Make sure we are not processing more than we need to
+    if (any(greaterThanEqual(iCoords, u_viewportSize))) 
+    { 
+		return;
+	}
+
+    vec2 coords = (vec2(iCoords + 0.5) / vec2(u_viewportSize));
+
+    float visibility = 0.0;
+    vec3 lighting = vec3(0.0);
+
+    uint indirect = 0u;
+    uint occlusion = 0u;
+    vec2 frontBackHorizon = vec2(0.0);
+    vec3 viewPos = depthToViewPos(depth_texture, cam.invProj, coords);
+    vec3 camera = normalize(-viewPos);
+    vec3 normal = viewNormalAtPixelPosition2(coords);
+    vec2 aspect = u_viewportSize.yx / u_viewportSize.x;
+
+    float sliceRotation = twoPi / (sliceCount - 1.0);
+    float sampleScale = (-sampleRadius * cam.proj[0][0]) / viewPos.z;
+    float sampleOffset = 0.01;
+    float jitter = randf(int(gl_GlobalInvocationID.x), int(gl_GlobalInvocationID.y)) - 0.5;
+
+    float ao = texture(old_ao, coords).r;
+
+     for (float slice = 0.0; slice < sliceCount + 0.5; slice += 1.0) 
+     {
+        float phi = sliceRotation * (slice + jitter) + pi;
+        vec2 omega = vec2(cos(phi), sin(phi));
+        vec3 direction = vec3(omega.x, omega.y, 0.0);
+        vec3 orthoDirection = direction - dot(direction, camera) * camera;
+        vec3 axis = cross(direction, camera);
+        vec3 projNormal = normal - axis * dot(normal, axis);
+        float projLength = length(projNormal);
+
+        float signN = sign(dot(orthoDirection, projNormal));
+        float cosN = clamp(dot(projNormal, camera) / projLength, 0.0, 1.0);
+        float n = signN * acos(cosN);
+
+        for (float currentSample = 0.0; currentSample < sampleCount + 0.5; currentSample += 1.0) 
+        {
+            float sampleStep = (currentSample + jitter) / sampleCount + sampleOffset;
+            vec2 sampleUV = coords - sampleStep * sampleScale * omega * aspect;
+            vec3 samplePosition = depthToViewPos(depth_texture, cam.invProj, sampleUV);
+            vec3 sampleNormal = viewNormalAtPixelPosition2(sampleUV);
+            vec3 sampleLight = texture(light_buffer, sampleUV).rgb;
+
+            vec3 sampleDistance = samplePosition - viewPos;
+            float sampleLength = length(sampleDistance);
+            vec3 sampleHorizon = sampleDistance / sampleLength;
+
+            frontBackHorizon.x = dot(sampleHorizon, camera);
+            frontBackHorizon.y = dot(normalize(sampleDistance - camera * hitThickness), camera);
+
+            frontBackHorizon = acos(frontBackHorizon);
+            frontBackHorizon = clamp((frontBackHorizon + n + halfPi) / pi, 0.0, 1.0);
+
+            indirect = updateSectors(frontBackHorizon.x, frontBackHorizon.y, 0u);
+            lighting += (1.0 - float(bitCount(indirect & ~occlusion)) / float(sectorCount)) *
+                sampleLight * clamp(dot(normal, sampleHorizon), 0.0, 1.0) *
+                clamp(dot(sampleNormal, -sampleHorizon), 0.0, 1.0);
+
+            occlusion |= indirect;
+        }
+
+        visibility += 1.0 - float(bitCount(occlusion)) / float(sectorCount);
+    }
+
+    visibility /= sliceCount;
+    lighting /= sliceCount;
+
+    //visibility =  1.0 - visibility;
+
+     visibility = pow(visibility, 4);
+
+  
+   //visibility = ao;
+
+    //visibility = clamp(visibility, 0.0, 1.0);
+
+    imageStore(ssaoOutput, iCoords, vec4(lighting, visibility));
+}

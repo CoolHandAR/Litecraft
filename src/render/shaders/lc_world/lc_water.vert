@@ -5,27 +5,48 @@
 
 layout (location = 0) in ivec3 a_Pos;
 
+const float PI = 3.1415926535897932384626433832795;
+
+const float waveAmplitude = 3.4;
+
 out VS_OUT
 {
-    vec2 TexCoords;
     vec4 ClipPos;
     vec3 WorldPos;
+    vec2 TexCoords;
 } vs_out;
 
+
 uniform float u_tilingFactor;
+uniform float u_moveFactor;
+
+vec3 calcDistortion(vec3 vertex)
+{
+    float fy = fract(vertex.y + 0.001);
+	float wave = 0.05 * sin(2 * PI * (u_moveFactor *0.8 + vertex.x /  2.5 +vertex.z / 5.0))
+			+ 0.05 * sin(2 * PI * (u_moveFactor *0.6 + vertex.x / 6.0 + vertex.z /  12.0));
+
+    vertex.y += clamp(wave, -fy, 1.0-fy)* waveAmplitude;
+
+    return vertex;
+}
+
 
 void main()
-{
-    vec4 worldPos = vec4(chunk_data.data[gl_BaseInstance].min_point.xyz + a_Pos.xyz, 1.0);
+{   
+    vec4 worldPos = vec4(chunk_data.data[gl_BaseInstance].min_point.xyz, 1.0);
     worldPos.xz -= 0.5;
 
-    vec4 clipPos = cam.viewProjection * worldPos;
-    
-    vec2 vertexPos = vec2(a_Pos.x, a_Pos.z);
+    vec3 v0 = vec3(a_Pos) + worldPos.xyz;
+  
+    //apply distortion
+    v0 = calcDistortion(v0);
 
-    vs_out.WorldPos = worldPos.xyz;
-    vs_out.ClipPos = clipPos; 
-    vs_out.TexCoords = vec2(vertexPos.x / 2.0 + 0.5, vertexPos.y / 2.0 + 0.5) * 0.08;
+    vec4 ClipPosDistorted = cam.viewProjection * vec4(v0.xyz, 1.0);
 
-    gl_Position = clipPos;
+    vs_out.ClipPos = ClipPosDistorted;
+    vs_out.WorldPos = v0.xyz;
+    vs_out.TexCoords = vec2(v0.x / 2.0 + 0.5, v0.z / 2.0 + 0.5) * (1.0 / 32.0);
+
+    gl_Position = ClipPosDistorted;
 }

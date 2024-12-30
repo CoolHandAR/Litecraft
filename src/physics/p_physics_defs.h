@@ -1,7 +1,7 @@
 #pragma once
 
 #include "utility/u_math.h"
-#include "lc_defs.h"
+#include "lc/lc_defs.h"
 #include "lc/lc_block_defs.h"
 
 #define MAX_BLOCK_CONTACTS 4

@@ -55,19 +55,19 @@ const vec3 CUBE_BITANGENT_NORMALS_TABLE[6] =
 	vec3(0.0, -1.0, 0.0),
 
    // Front face
-	vec3(0.0, -1.0,  0.0),
+	vec3(0.0, 1.0,  0.0),
 
 	// Left face
 	vec3(0.0,  -1.0,  0.0),
 
 	// Right face
-	vec3(0.0,  -1.0,  0.0),
+	vec3(0.0,  1.0,  0.0),
 
 	 // Bottom face
 	vec3(0.0, 0.0, -1.0),
 
 	 // Top face
-	vec3(0.0,  0.0, -1.0)
+	vec3(0.0,  0.0, 1.0)
 };
 
 const ivec2 POS_INDEX_TABLE[6] =
@@ -91,6 +91,32 @@ const ivec2 POS_INDEX_TABLE[6] =
 	ivec2(-1, 2)
 };
 
+const float PI = 3.1415927;
+const float PI48 = 150.796447372;
+uniform float frameTimeCounter;
+float animationSpeed = 2;
+float pi2wt = (PI48*frameTimeCounter) * animationSpeed;
+
+
+
+vec2 calcWave2D(vec3 pos, float fm, float mm, float ma, float f0, float f1, float f2, float f3, float f4, float f5) {
+    vec2 ret;
+    float magnitude,d0,d1,d2,d3;
+    magnitude = sin(pi2wt*fm + pos.x*0.5 + pos.z*0.5 + pos.y*0.5) * mm + ma;
+    d0 = sin(pi2wt*f0);
+    d1 = sin(pi2wt*f1);
+    d2 = sin(pi2wt*f2);
+    ret.x = sin(pi2wt*f3 + d0 + d1 - pos.x + pos.z + pos.y) * magnitude;
+	ret.y = sin(pi2wt*f5 + d2 + d0 + pos.z + pos.y - pos.y) * magnitude;
+    return ret;
+}
+
+vec2 calcMove2D(vec3 pos, float f0, float f1, float f2, float f3, float f4, float f5, vec3 amp1, vec3 amp2) {
+    vec2 move1 = calcWave2D(pos      , 0.0027, 0.0400, 0.0400, 0.0127, 0.0089, 0.0114, 0.0063, 0.0224, 0.0015) * amp1.xz;
+	vec2 move2 = calcWave2D(pos+ vec3(move1, 0), 0.0348, 0.0400, 0.0400, f0, f1, f2, f3, f4, f5) * amp2.xz;
+    return move1+move2;
+}
+
 out VS_OUT
 {
     mat3 TBN;
@@ -107,7 +133,7 @@ void main()
 
     vec3 normal = CUBE_NORMALS_TABLE[unpacked_norm];
     vec3 tangent = CUBE_TANGENT_NORMALS_TABLE[unpacked_norm];
-    vec3 biTangent = normalize(cross(normal, tangent));
+    vec3 biTangent = normalize(cross(normal, tangent)); //CUBE_BITANGENT_NORMALS_TABLE[unpacked_norm];
     mat3 TBN = mat3(tangent, biTangent, normal);
 
     ivec2 posIndex = POS_INDEX_TABLE[unpacked_norm];
@@ -121,6 +147,50 @@ void main()
 #ifdef SEMI_TRANSPARENT
 	float posOffset = block_info.data[a_BlockType].position_offset;
 	worldPos.xz -= (posOffset * normal.xz);
+	
+	vec2 windOffset = vec2(0.0);
+	
+	switch(a_BlockType)
+	{
+		//LEAVES
+		case 6:
+		case 23:
+		{
+			windOffset = calcMove2D(worldPos.xyz,
+			0.0040,
+			0.0064,
+			0.0043,
+			0.0035,
+			0.0037,
+			0.0041,
+			vec3(1.0,0.2,1.0),
+			vec3(0.5,0.1,0.5));
+			break;
+		}
+		case 9:
+		case 20:
+		case 22:
+		{
+			windOffset = calcMove2D(worldPos.xyz,
+			0.0041,
+			0.0070,
+			0.0044,
+			0.0038,
+			0.0240,
+			0.0000,
+			vec3(0.8,0.0,0.8),
+			vec3(0.4,0.0,0.4));
+			break;
+		}
+		default:
+		{
+			break;
+		}
+	}	
+	
+
+	worldPos.xz += windOffset.xy;
+
 #endif
 	
 	gl_Position = cam.viewProjection * vec4(worldPos - 0.5, 1.0);

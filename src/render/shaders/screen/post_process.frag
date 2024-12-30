@@ -20,14 +20,19 @@ uniform float u_Saturation;
 
 //Fog
 uniform vec3 u_fogColor;
-uniform float u_fogDensity;
+
+uniform float u_heightFogDensity;
 uniform float u_heightFogMin;
 uniform float u_heightFogMax;
 uniform float u_heightFogCurve;
 
+uniform float u_depthFogDensity;
 uniform float u_depthFogBegin;
 uniform float u_depthFogEnd;
 uniform float u_depthFogCurve;
+
+uniform bool u_depthFogEnabled;
+uniform bool u_heightFogEnabled;
 
 vec3 Uncharted2ToneMapping(vec3 color, float gamma, float exposure)
 {
@@ -114,11 +119,7 @@ vec3 applyBloom(vec2 coords, vec3 color, float strength)
     vec3 bloom_color = texture(BloomSceneTexture, coords).rgb;
 
     vec3 out_color = mix(color, bloom_color, strength);
-    //vec3 out_color = vec3(0.0);
-
-    //out_color.rgb = clamp(color.rgb, vec3(0.0f), vec3(1.0f));
-	//out_color.rgb = max((color.rgb + bloom_color.rgb) - (color.rgb * bloom_color.rgb), vec3(0.0));
-
+    
     return out_color;
 }
 
@@ -209,28 +210,32 @@ vec3 apply_fog(vec3 color, vec2 coords)
     float fog_amount = 0.0;
 
     //Depth fog
+   if(u_depthFogEnabled && u_depthFogDensity > 0) 
    {
-        float fog_depth_begin = scene.depthFogBegin;
-        float fog_depth_end = scene.depthFogEnd;
+        float fog_depth_begin = u_depthFogBegin;
+        float fog_depth_end = u_depthFogEnd;
 
         float fog_far = fog_depth_end > 0.0 ? fog_depth_end : cam.z_far;
         float fog_z = smoothstep(fog_depth_begin, fog_far, length(ViewPos.xyz));
 
-        fog_amount = pow(fog_z, scene.depthFogCurve);
+        fog_amount = pow(fog_z, u_depthFogCurve);
+        fog_amount *= u_depthFogDensity;
 
         {
-            vec3 total_light = emission + color;
-             float transmit = pow(fog_z, 12);
+           // vec3 total_light = emission + color;
+            //float transmit = pow(fog_z, 12);
             //fog_color = mix(max(total_light, fog_color), fog_color, transmit);
         }
 
     }
 
     //Height fog
-    fog_amount = max(fog_amount, pow(smoothstep(scene.heightFogMin, scene.heightFogMax, WorldPos.y), scene.heightFogCurve));
-
-    fog_amount *= scene.fogDensity;
-    
+    if(u_heightFogEnabled)
+    {
+        fog_amount = max(fog_amount, pow(smoothstep(u_heightFogMin, u_heightFogMax, WorldPos.y), u_heightFogCurve));
+        fog_amount *= u_heightFogDensity;
+    }
+  
     emission = emission * (1.0 - fog_amount) + fog_color * fog_amount;
 
     color *= 1.0 - fog_amount;
@@ -251,11 +256,10 @@ void main()
     scene_color = applyFXAA(scene_color, u_Exposure);
 #endif
 
-#if defined(USE_FOG)
-    float view_space_depth = depthToViewSpace(depth_texture, cam.invProj, TexCoords);
-#endif
+#ifdef USE_FOG
     //FOG
-    //scene_color = apply_fog(scene_color, TexCoords);
+    scene_color = apply_fog(scene_color, TexCoords);
+#endif
 
 #ifdef USE_BLOOM
     //BLOOM
@@ -264,7 +268,6 @@ void main()
     
     //TONEMAP
     scene_color = tonemapColor(scene_color);
-
 
     //BCS
     scene_color = applyBrightnessContrastSaturation(scene_color, u_Brightness, u_Contrast, u_Saturation);

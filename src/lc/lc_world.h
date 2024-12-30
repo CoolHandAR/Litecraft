@@ -6,30 +6,11 @@
 #include "utility/u_utility.h"
 #include "render/r_shader.h"
 #include "utility/forward_list.h"
-#include "physics/p_physics_world.h"
-#include "physics/p_aabb_tree.h"
+#include "physics/physics_world.h"
+#include "utility/BVH_Tree.h"
+#include "render/r_texture.h"
 
 #define LC_WORLD_WATER_HEIGHT 12
-
-typedef enum LC_TimeOfDay
-{
-	LC_ToD__MIDNIGHT,
-	LC_ToD__NOON,
-	LC_ToD__MORNING,
-	LC_ToD__AFTERNOON,
-	LC_ToD__EVENING,
-	LC_ToD__DAWN,
-	LC_ToD__DUSK
-
-} LC_TimeOfDay;
-
-typedef struct
-{
-	vec3 position;
-	vec3 direction_to_world_center;
-	vec3 color;
-	float speed;
-} LC_Sun;
 
 typedef struct
 {
@@ -47,7 +28,6 @@ typedef struct
 } CombinedChunkDrawCmdData;
 
 
-
 typedef struct
 {
 	vec4 min_point;
@@ -59,6 +39,7 @@ typedef struct
 	int chunk_data_index;
 	int opaque_index;
 	int transparent_index;
+	int water_index;
 } LCTreeData;
 
 typedef struct
@@ -77,7 +58,6 @@ typedef struct
 	int skip_water_owner;
 
 	unsigned chunk_amount;
-
 } LC_WorldUniformBuffer;
 
 typedef struct
@@ -104,26 +84,28 @@ typedef struct
 	R_Texture* texture_atlas;
 	R_Texture* texture_atlas_normals;
 	R_Texture* texture_atlas_mer;
+	R_Texture* texture_atlas_height;
 
 	R_Texture* texture_dudv;
 	R_Texture* water_normal_map;
+	R_Texture* water_displacement_texture;
+	R_Texture* water_noise_texture_1;
+	R_Texture* water_noise_texture_2;
+	R_Texture* gradient_map;
+	R_Texture* foam_map;
 	
-	AABB_Tree aabb_tree;
+	BVH_Tree bvh_tree;
 } WorldRenderData;
 
 typedef struct
 {
-	P_PhysWorld* phys_world;
-	FL_Head* entities;
+	PhysicsWorld* phys_world;
 	WorldRenderData render_data;
 	CHMap chunk_map;
-	CHMap chunk_cache_map;
 	CHMap light_hash_map;
-	LC_Sun sun;
 
 	size_t chunk_count;
 	size_t chunks_vertex_loaded;
-	ivec3 chunks_bounds_normalized[2];
 
 	size_t total_num_blocks;
 
@@ -145,7 +127,7 @@ int LC_World_calcWaterLevelFromPoint(float p_x, float p_y, float p_z);
 WorldRenderData* LC_World_getRenderData();
 size_t LC_World_GetChunkAmount();
 size_t LC_World_GetDrawCmdAmount();
-P_PhysWorld* LC_World_GetPhysWorld();
+PhysicsWorld* LC_World_GetPhysWorld();
 void LC_World_getSunDirection(vec3 v);
 int LC_World_getPrevMinedBlockHP();
 void LC_World_Draw();

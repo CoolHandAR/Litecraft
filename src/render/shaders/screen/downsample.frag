@@ -31,8 +31,8 @@ vec3 ToSRGB(vec3 v)   { return PowVec3(v, invGamma); }
 
 float sRGBToLuma(vec3 col)
 {
-    return dot(col, vec3(0.2126f, 0.7152f, 0.0722f));
-	//return dot(col, vec3(0.299f, 0.587f, 0.114f));
+    //return dot(col, vec3(0.2126f, 0.7152f, 0.0722f));
+	return dot(col, vec3(0.299f, 0.587f, 0.114f));
 }
 
 float KarisAverage(vec3 col)

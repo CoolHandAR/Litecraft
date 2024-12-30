@@ -1,12 +1,9 @@
-
-
 #include <glad/glad.h>
-#include "lc_core.h"
-#include <stdio.h>
-#include "core/core_common.h"
-#include "cvar.h"
-#include <Windows.h>
+#include <windows.h>
 #include <assert.h>
+
+#include "core/core_common.h"
+
 
 #define DEFAULT_WINDOW_WIDTH 1280
 #define DEFAULT_WINDOW_HEIGHT 720
@@ -17,9 +14,9 @@ typedef struct
 	DWORD gl_context_owner_thread_id;
 	bool is_full_screen;
 	bool cursor_enabled;
+	bool vsync_enabled;
 } WindowState;
 
-extern void r_onWindowResize(ivec2 window_size);
 extern void RCore_onWindowResize(int width, int height);
 extern void PL_onMouseScroll(int yOffset);
 
@@ -34,7 +31,6 @@ static void WinCallback_Framebuffer(GLFWwindow* window, int width, int height)
 	vec[0] = width;
 	vec[1] = height;
 
-	r_onWindowResize(vec);
 	RCore_onWindowResize(width, height);
 }
 
@@ -215,4 +211,15 @@ void Window_EndFrame()
 	}
 
 	window_state.cursor_enabled = false;
+}
+
+void Window_SetVsync(bool enabled)
+{
+	if (window_state.vsync_enabled == enabled)
+	{
+		return;
+	}
+	glfwSwapInterval(enabled);
+
+	window_state.vsync_enabled = enabled;
 }

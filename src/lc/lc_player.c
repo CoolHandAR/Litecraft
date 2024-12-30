@@ -1,16 +1,17 @@
+#include "lc/lc_core.h"
+
+#include <GLFW/glfw3.h>
+
 #include "core/cvar.h"
-#include "input.h"
+#include "core/input.h"
+#include "core/core_common.h"
 #include "physics/p_physics_defs.h"
-#include "physics/p_physics_world.h"
+#include "physics/physics_world.h"
 #include "lc/lc_world.h"
 #include "render/r_camera.h"
-#include <GLFW/glfw3.h>
-#include "core/core_common.h"
-#include "lc/lc_core.h"
-#include "sound/sound.h"
 #include "render/r_public.h"
-#include <core/resource_manager.h>
-
+#include "core/sound.h"
+#include "core/resource_manager.h"
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -18,6 +19,10 @@ MAIN PLAYER STUFF, MOVEMENT, ACTIONS ETC
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
 
+extern LC_ResourceList lc_resources;
+extern LC_SoundGroups lc_sound_groups;
+extern LC_Emitters lc_emitters;
+extern ma_engine sound_engine;
 
 #define PLAYER_AABB_WIDTH 1.1
 #define PLAYER_AABB_HEIGHT 3
@@ -32,6 +37,9 @@ MAIN PLAYER STUFF, MOVEMENT, ACTIONS ETC
 #define PLAYER_GROUND_FRICTION 1
 #define PLAYER_AIR_FRICTION 10
 #define PLAYER_FLYING_FRICTION 10
+
+#define PLAYER_PLACE_COOLDOWN 0.5
+#define PLAYER_MINE_COOLDOWN 0.15
 
 
 typedef struct
@@ -71,19 +79,27 @@ typedef struct
 
 	int dig_sound_index;
 	float dig_sound_timer;
+	
+	int emitter_index;
+
+	float alive_timer;
+
+	LightID flashlight_id;
+	bool flashlight_active;
 } Player;
 
-PlayerCvars pl_cvars;
+typedef struct
+{
+	LC_BlockType inventory_blocks[21][6];
+
+	bool is_opened;
+} Inventory;
+
+static PlayerCvars pl_cvars;
 static SelectedBlock selected_block;
-Player player;
-LC_Hotbar hotbar;
-extern LC_ResourceList lc_resources;
-extern LC_SoundGroups lc_sound_groups;
-extern LC_Emitters lc_emitters;
-static float alive_timer = 0;
-static LC_BlockType inventory_blocks[21][6];
-extern ma_engine sound_engine;
-static bool inventory_opened = false;
+static Player player;
+static LC_Hotbar hotbar;
+static Inventory inventory;
 
 static bool PL_isPlayerInBlock(int p_gX, int p_gY, int p_gZ)
 {
@@ -146,7 +162,7 @@ static void PL_spawnCorrect()
 }
 static void PL_initInventoryBlocks()
 {
-	memset(inventory_blocks, 0, sizeof(inventory_blocks));
+	memset(&inventory, 0, sizeof(inventory));
 
 	int counter = 0;
 	for (int x = 0; x < 20; x++)
@@ -160,7 +176,7 @@ static void PL_initInventoryBlocks()
 				return;
 			}
 
-			inventory_blocks[x][y] = LC_BT__NONE + counter;
+			inventory.inventory_blocks[x][y] = LC_BT__NONE + counter;
 		}
 	}
 }
@@ -209,6 +225,7 @@ static void PL_initInputs()
 	Input_registerAction("NextBlock");
 	Input_registerAction("PrevBlock");
 	Input_registerAction("Inventory");
+	Input_registerAction("Flashlight");
 	Input_registerAction("Block0");
 	Input_registerAction("Block1");
 	Input_registerAction("Block2");
@@ -231,6 +248,7 @@ static void PL_initInputs()
 	Input_setActionBinding("NextBlock", IT__KEYBOARD, GLFW_KEY_E, 0);
 	Input_setActionBinding("PrevBlock", IT__KEYBOARD, GLFW_KEY_Q, 0);
 	Input_setActionBinding("Inventory", IT__KEYBOARD, GLFW_KEY_I, 0);
+	Input_setActionBinding("Flashlight", IT__KEYBOARD, GLFW_KEY_U, 0);
 
 	Input_setActionBinding("Block0", IT__KEYBOARD, GLFW_KEY_1, 0);
 	Input_setActionBinding("Block1", IT__KEYBOARD, GLFW_KEY_2, 0);
@@ -280,7 +298,7 @@ void PL_initPlayer(vec3 p_spawnPos)
 	aabb.length = PLAYER_AABB_LENGTH;
 
 	//register the physics body
-	player.k_body = PhysWorld_AddKinematicBody(LC_World_GetPhysWorld(), &aabb, NULL);
+	player.k_body = PhysicsWorld_AddKinematicBody(LC_World_GetPhysWorld(), &aabb, NULL);
 	//setup default body config
 	player.k_body->config.ducking_scale = 0.2f;
 	player.k_body->config.ground_accel = 5;
@@ -298,6 +316,22 @@ void PL_initPlayer(vec3 p_spawnPos)
 	player.k_body->config.flying_speed = 50;
 	
 	player.held_block_type = LC_BT__GRASS;
+
+	SpotLight light;
+	memset(&light, 0, sizeof(light));
+
+	light.color[0] = 1;
+	light.color[1] = 1;
+	light.color[2] = 1;
+	light.color[3] = 1;
+
+	light.ambient_intensity = 23;
+	light.specular_intensity = 2;
+	light.range = 12;
+	light.angle_attenuation = 1;
+	light.angle = 45;
+	light.attenuation = 1;
+	player.flashlight_id = RScene_RegisterSpotLight(light, false);
 }	
 
 static ma_sound* PL_getStepSound()
@@ -547,8 +581,6 @@ static void PL_updateModifiedCvars()
 	}
 }
 
-
-
 static void PL_UpdateSelectedBlock()
 {
 	R_Camera* cam = Camera_getCurrent();
@@ -621,7 +653,7 @@ static void PL_placeBlock()
 	}
 
 	//Reset the timer
-	player.action_timer = 8;
+	player.action_timer = PLAYER_PLACE_COOLDOWN;
 }
 
 static void PL_mineBlock()
@@ -668,21 +700,19 @@ static void PL_mineBlock()
 
 	vec3 origin;
 	origin[0] = selected_block.position[0];
-	origin[1] = selected_block.position[1] + 0.5;
+	origin[1] = selected_block.position[1] + 0.25; //small offset
 	origin[2] = selected_block.position[2];
 	LC_Block_Texture_Offset_Data texture_data = LC_BLOCK_TEX_OFFSET_DATA[selected_block.block.type];
 	int frame = (25 * texture_data.back_face[1]) + texture_data.back_face[0];
 
-	static int emitter_index = 0;
+	//cycle through the emitters so, that we can have more alive particles
+	player.emitter_index = (player.emitter_index + 1) % 4;
 
-	emitter_index = (emitter_index + 1) % 4;
-
-	lc_emitters.block_dig[emitter_index]->frame = frame;
-	//lc_emitters.block_dig[emitter_index]->settings.particle_amount = 5;
-	Particle_EmitTransformed(lc_emitters.block_dig[emitter_index], dir, origin);
+	lc_emitters.block_dig[player.emitter_index]->frame = frame;
+	Particle_EmitTransformed(lc_emitters.block_dig[player.emitter_index], dir, origin);
 
 	//Reset the timer
-	player.action_timer = 3;
+	player.action_timer = PLAYER_MINE_COOLDOWN;
 }
 
 static void PL_move(int p_dirX, int p_dirY, int p_dirZ)
@@ -793,9 +823,35 @@ static void PL_updateListener()
 	ma_engine_listener_set_direction(&sound_engine, 0, dir_listener_x, dir_listener_y, dir_listener_z);
 }
 
-static void PL_inventoryInput()
+static void PL_updateFlashlight()
 {
+	SpotLight* light = RScene_GetRenderInstanceData(player.flashlight_id);
 
+	if (!player.flashlight_active)
+	{
+		light->ambient_intensity = 0;
+		return;
+	}
+	R_Camera* cam = Camera_getCurrent();
+
+	if (!cam)
+	{
+		return;
+	}
+
+	light->ambient_intensity = 23;
+
+	static vec3 light_direction = { 0, 0, 0};
+
+	light_direction[0] = glm_lerp(light_direction[0], cam->data.camera_front[0], 0.1);
+	light_direction[1] = glm_lerp(light_direction[1], cam->data.camera_front[1], 0.1);
+	light_direction[2] = glm_lerp(light_direction[2], cam->data.camera_front[2], 0.1);
+
+	light->direction[0] = light_direction[0];
+	light->direction[1] = light_direction[1];
+	light->direction[2] = light_direction[2];
+
+	RScene_SetRenderInstancePosition(player.flashlight_id, cam->data.position);
 }
 
 static int PL_checkForHotbarSlotInput()
@@ -845,10 +901,10 @@ static void PL_processInput()
 
 	if (Input_IsActionJustPressed("Inventory"))
 	{
-		inventory_opened = !inventory_opened;
+		inventory.is_opened = !inventory.is_opened;
 	}
 
-	if (inventory_opened)
+	if (inventory.is_opened)
 	{
 		return;
 	}
@@ -911,6 +967,10 @@ static void PL_processInput()
 			Cvar_setValueDirect(pl_cvars.pl_freefly, "1");
 		}
 	}
+	if (Input_IsActionJustPressed("Flashlight"))
+	{
+		player.flashlight_active = !player.flashlight_active;
+	}
 	int hotbar_input = PL_checkForHotbarSlotInput();
 
 	if (hotbar_input >= 0)
@@ -936,7 +996,7 @@ static void PL_UpdateCamera()
 	cam->data.position[1] = glm_lerp(cam->data.position[1], player.k_body->box.position[1] + player.k_body->box.height * 0.5f, interp);
 	cam->data.position[2] = glm_lerp(cam->data.position[2], player.k_body->box.position[2] + player.k_body->box.length * 0.5f, interp);
 }
-extern GLFWwindow* glfw_window;
+
 static void PL_HandleInventory()
 {
 	Window_EnableCursor();
@@ -980,7 +1040,7 @@ static void PL_HandleInventory()
 
 			if (glm_aabb2d_point(box, mouse_pos) && (Input_IsActionPressed("Place")))
 			{
-				LC_BlockType selected_block_type = inventory_blocks[x][y];
+				LC_BlockType selected_block_type = inventory.inventory_blocks[x][y];
 
 				int hotbar_input = PL_checkForHotbarSlotInput();
 
@@ -1011,12 +1071,12 @@ void PL_IssueDrawCmds()
 	}
 	if (pl_cvars.pl_showchunk->int_value)
 	{
-		LC_Draw_ChunkInfo(selected_block.chunk, 0);
+		//LC_Draw_ChunkInfo(selected_block.chunk, 0);
 	}
 
-	if (inventory_opened)
+	if (inventory.is_opened)
 	{
-		LC_Draw_Inventory(inventory_blocks, &hotbar);
+		LC_Draw_Inventory(inventory.inventory_blocks, &hotbar);
 	}
 	else
 	{
@@ -1042,25 +1102,18 @@ void PL_IssueDrawCmds()
 		box[1][1] += selected_block.position[1];
 		box[1][2] += selected_block.position[2];
 
-		vec4 black;
-		memset(black, 0, sizeof(vec4));
+		const vec4 wire_color = { 0, 0, 0, 0 };
+		Draw_CubeWires(box, wire_color);
 
-		Draw_CubeWires(box, black);
-
-
+		//draw shattered effect if block is being mined
 		if (LC_World_getPrevMinedBlockHP() < 7 && !LC_isBlockProp(selected_block.block.type))
 		{
-			vec3 box[2];
-
-			memset(box, 0, sizeof(box));
-
-			box[0][0] = (float)selected_block.position[0] - 0.51;
-			box[0][1] = (float)selected_block.position[1] - 0.51;
-			box[0][2] = (float)selected_block.position[2] - 0.51;
-
-			box[1][0] = (float)selected_block.position[0] + 0.51;
-			box[1][1] = (float)selected_block.position[1] + 0.51;
-			box[1][2] = (float)selected_block.position[2] + 0.51;
+			//add a small offset
+			for (int i = 0; i < 3; i++)
+			{
+				box[0][i] -= 0.01;
+				box[1][i] += 0.01;
+			}
 
 			M_Rect2Df tex_Region;
 
@@ -1078,12 +1131,6 @@ void PL_IssueDrawCmds()
 
 void PL_Update()
 {
-	//temp hack
-	//if (player.k_body->box[1] < 10)
-//	{
-
-	//}
-
 	//Fall check and play sound if landed
 	PL_fallCheck();
 
@@ -1096,20 +1143,23 @@ void PL_Update()
 	//update the timer
 	if (player.action_timer > 0)
 	{
-		player.action_timer -= Core_getDeltaTime() * 15;
+		player.action_timer -= Core_getDeltaTime();
 	}
 
-	alive_timer += Core_getDeltaTime();
+	player.alive_timer += Core_getDeltaTime();
 
 	//Update listener position
 	PL_updateListener();
+
+	//Update flashlight if active
+	PL_updateFlashlight();
 
 	//Process inputs
 	PL_processInput();
 
 	PL_UpdateCamera();
 
-	if (inventory_opened)
+	if (inventory.is_opened)
 	{
 		PL_HandleInventory();
 	}
@@ -1126,10 +1176,10 @@ void PL_Update()
 	
 	player.held_block_type = hotbar.blocks[hotbar.active_index];
 
-	if (alive_timer < 1)
+	if (player.alive_timer < 1)
 	{
-		PL_spawnCorrect();
-		printf(" spawn corecting %f \n", alive_timer);
+		//PL_spawnCorrect();
+		printf(" spawn corecting %f \n", player.alive_timer);
 	}
 
 }

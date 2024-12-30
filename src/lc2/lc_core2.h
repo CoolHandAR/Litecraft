@@ -4,8 +4,6 @@
 #include "utility/dynamic_array.h"
 #include "render/r_camera.h"
 #include "core/cvar.h"
-typedef struct GLFWwindow GLFWwindow;
-
 
 /*
 * ~~~~~~~~~~~~~~~~~~~~
