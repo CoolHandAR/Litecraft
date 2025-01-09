@@ -386,16 +386,16 @@ static void RCore_UploadGpuData()
 	{
 		if (scene.cull_data.lc_world.total_in_frustrum_count > 0)
 		{
-			glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_ssbo, 0, sizeof(int) * scene.cull_data.lc_world.total_in_frustrum_count, scene.cull_data.lc_world.frustrum_sorted_query_buffer);
+			//glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_ssbo, 0, sizeof(int) * scene.cull_data.lc_world.total_in_frustrum_count, scene.cull_data.lc_world.frustrum_sorted_query_buffer);
 		}
-		glNamedBufferSubData(drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo, 0, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_indexes->elements_size,
-			drawData->lc_world.shadow_sorted_chunk_indexes->data);
+		//glNamedBufferSubData(drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo, 0, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_indexes->elements_size,
+		//	drawData->lc_world.shadow_sorted_chunk_indexes->data);
 
-		glNamedBufferSubData(drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_indexes->elements_size, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_transparent_indexes->elements_size,
-			drawData->lc_world.shadow_sorted_chunk_transparent_indexes->data);
+		//glNamedBufferSubData(drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_indexes->elements_size, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_transparent_indexes->elements_size,
+			//drawData->lc_world.shadow_sorted_chunk_transparent_indexes->data);
 
 
-		glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_ssbo, 0, sizeof(int) * 500, scene.cull_data.lc_world.frustrum_query_buffer);
+		glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_buffer, 0, sizeof(int) * 500, scene.cull_data.lc_world.frustrum_query_buffer);
 	}
 
 	//Camera update

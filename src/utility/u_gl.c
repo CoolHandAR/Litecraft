@@ -164,7 +164,7 @@ RenderStorageBuffer RSB_Create(size_t p_initReserveSize, size_t p_itemSize, unsi
 	if (p_rsbFlags & RSB_FLAG__WRITABLE)
 	{
 		rsb.buffer_flags |= GL_DYNAMIC_STORAGE_BIT;
-		rsb.buffer_flags |= GL_MAP_WRITE_BIT;
+		//rsb.buffer_flags |= GL_MAP_WRITE_BIT;
 	}
 	if (p_rsbFlags & RSB_FLAG__PERSISTENT)
 	{
@@ -246,7 +246,12 @@ unsigned RSB_Request(RenderStorageBuffer* const rsb)
 
 	if (!(rsb->rsb_flags & RSB_FLAG__RESIZABLE))
 	{
-		assert(r_index + 1 <= rsb->reserve_size && "Max limit reached");
+		if (r_index + 1 >= rsb->reserve_size)
+		{
+			float x = 0;
+		}
+
+		assert(r_index + 1 < rsb->reserve_size && "Max limit reached");
 	}
 
 	//we resize, so we can give the promised space in the array
@@ -504,12 +509,19 @@ unsigned DRB_EmplaceItem(DynamicRenderBuffer* const drb, size_t p_len, const voi
 
 		drb_item->offset = drb->used_bytes;
 	}
+	if ((drb->drb_flags & DRB_FLAG__POOLABLE_KEEP_DATA) && (drb->drb_flags & DRB_FLAG__POOLABLE))
+	{
+		
+	}
+	else
+	{
+		assert(drb_item->count == 0);
+		drb_item->offset = drb->used_bytes;
 
-	assert(drb_item->count == 0);
+		drb->used_bytes += p_len;
+	}
 
-	drb_item->offset = drb->used_bytes;
 	
-	drb->used_bytes += p_len;
 
 	if(p_len > 0)
 		DRB_ChangeData(drb, p_len, p_data, drb_item_index);
@@ -752,10 +764,12 @@ void DRB_RemoveItem(DynamicRenderBuffer* const drb, unsigned p_drbItemIndex)
 	DRB_Item item = DRB_GetItem(drb, p_drbItemIndex);
 	size_t old_size = item.count;
 
-	DRB_ChangeData(drb, 0, NULL, p_drbItemIndex);
-
 	if (drb->drb_flags & DRB_FLAG__POOLABLE)
 	{
+		if (!(drb->drb_flags & DRB_FLAG__POOLABLE_KEEP_DATA))
+		{
+			DRB_ChangeData(drb, 0, NULL, p_drbItemIndex);
+		}
 		//add the index id to the free list
 		unsigned* emplaced = dA_emplaceBack(drb->_free_list);
 		*emplaced = p_drbItemIndex;
@@ -763,6 +777,7 @@ void DRB_RemoveItem(DynamicRenderBuffer* const drb, unsigned p_drbItemIndex)
 	else
 	{
 		dA_erase(drb->item_list, p_drbItemIndex, 1);
+		DRB_ChangeData(drb, 0, NULL, p_drbItemIndex);
 	}
 }
 
@@ -857,7 +872,7 @@ DRB_Item DRB_GetItem(DynamicRenderBuffer* const drb, unsigned p_drbItemIndex)
 
 	DRB_Item* drb_item = &array[p_drbItemIndex];
 
-	assert(drb_item->offset + drb_item->count <= drb->used_bytes && "Invalid item offset and count");
+	//assert(drb_item->offset + drb_item->count <= drb->used_bytes && "Invalid item offset and count");
 
 	return *drb_item;
 }

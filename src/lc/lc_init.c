@@ -14,6 +14,7 @@ INIT GAME RESOURCES, GAME WORLD, PHYSICS WORLD, ETC...
 LC_ResourceList lc_resources;
 LC_SoundGroups lc_sound_groups;
 LC_Emitters lc_emitters;
+LC_CoreData lc_core_data;
 
 static int Init_loadResources()
 {
@@ -87,7 +88,7 @@ void Init_SoundGroups()
 	Sound_createGroup(0, &lc_sound_groups.step);
 }
 
-static void Process_ParticleCollideWithWorld(ParticleCpu* const particle, ParticleEmitterSettings* const emitter, float local_delta)
+void Process_ParticleCollideWithWorld(ParticleCpu* const particle, ParticleEmitterSettings* const emitter, float local_delta)
 {
 	vec3 normal_vel;
 	glm_vec3_normalize_to(particle->velocity, normal_vel);
@@ -197,10 +198,24 @@ void Init_Emitters()
 	}
 	
 }
-
-int LC_Init2()
+extern void PL_initPlayer(vec3 p_spawnPos);
+void LC_Init()
 {
 	if (!Init_loadResources()) return false;
 	Init_Emitters();
 
+	memset(&lc_core_data, 0, sizeof(lc_core_data));
+
+	lc_core_data.cam = Camera_Init();
+	Camera_setCurrent(&lc_core_data.cam);
+
+	LC_World_Create(16, 7, 16);
+
+	vec3 player_pos;
+	player_pos[0] = -5;
+	player_pos[1] = 16;
+	player_pos[2] = 5;
+	PL_initPlayer(player_pos);
+
+	
 }

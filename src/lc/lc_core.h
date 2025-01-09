@@ -1,58 +1,46 @@
+#ifndef LC_CORE_H
+#define LC_CORE_H
 #pragma once
 
-
-#include "utility/dynamic_array.h"
-#include "render/r_camera.h"
-#include "core/cvar.h"
-#include "lc/lc_chunk.h"
-#include "lc_block_defs.h"
 #include "render/r_texture.h"
 #include "core/sound.h"
+#include "lc/lc_chunk.h"
 #include "render/r_public.h"
-#include "lc/lc_world.h"
+#include "lc/lc_world2.h"
+#include "lc_common.h"
 
-typedef struct GLFWwindow GLFWwindow;
-
-
-
-
-/*
-* ~~~~~~~~~~~~~~~~~~~~
-	CVARS
-* ~~~~~~~~~~~~~~~~~~~
-*/
-typedef struct
-{
-	Cvar* lc_timeofday;
-} LC_Cvars;
 
 /*
 * ~~~~~~~~~~~~~~~~~~~~
 	CORE
 * ~~~~~~~~~~~~~~~~~~~
 */
-void LC_Init();
+void LC_StartFrame();
+void LC_EndFrame();
 void LC_Draw();
-void LC_Loop(float delta);
-void LC_PhysLoop(float delta);
-void LC_Cleanup();
+void LC_PhysUpdate(float delta);
+void LC_Init();
+void LC_Exit();
+
+typedef struct
+{
+	R_Camera cam;
+} LC_CoreData;
 
 /*
 * ~~~~~~~~~~~~~~~~~~~~
-	PLAYER, INVENTORY STUFF
+	PLAYER STUFF
 * ~~~~~~~~~~~~~~~~~~~
 */
 #define LC_PLAYER_MAX_HOTBAR_SLOTS 9
 typedef struct
 {
-	int x;
-} LC_Inventory;
-
-typedef struct
-{
 	LC_BlockType blocks[LC_PLAYER_MAX_HOTBAR_SLOTS];
 	int active_index;
 } LC_Hotbar;
+
+void PL_Update();
+void LC_Player_getPosition(vec3 dest);
 
 /*
 * ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -61,8 +49,8 @@ typedef struct
 */
 void LC_Draw_DrawShowPos(vec3 pos, vec3 vel, float yaw, float pitch, uint8_t held_block, uint8_t selected_block, int corner);
 void LC_Draw_ChunkInfo(LC_Chunk* const chunk, int corner);
-void LC_Draw_Hotbar(LC_Hotbar* const hotbar);
-void LC_Draw_Inventory(LC_BlockType blocks[21][6], LC_Hotbar* const hotbar);
+void LC_Draw_Hotbar(LC_Hotbar* const hotbar, int block_amounts[LC_BT__MAX]);
+void LC_Draw_Inventory(LC_BlockType blocks[21][6], int block_amounts[LC_BT__MAX], LC_Hotbar* const hotbar);
 void LC_Draw_Crosshair();
 void LC_Draw_WorldInfo(LC_World* const world, int corner);
 void LC_Draw_WaterOverlayScreenTexture(int water_level);
@@ -98,3 +86,5 @@ typedef struct
 	ParticleEmitterSettings* block_break;
 	ParticleEmitterSettings* block_dig[5];
 } LC_Emitters;
+
+#endif

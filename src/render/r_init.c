@@ -112,7 +112,7 @@ static void Init_registerCvars()
     r_cvars.r_waterReflectionQuality = Cvar_Register("r_waterReflectionQuality", "1", NULL, CVAR__SAVE_TO_FILE, 0, 2);
 
     //DEBUG
-    r_cvars.r_drawDebugTexture = Cvar_Register("r_drawDebugTexture", "-1", NULL, CVAR__SAVE_TO_FILE, -1, 6);
+    r_cvars.r_drawDebugTexture = Cvar_Register("r_drawDebugTexture", "-1", NULL, CVAR__SAVE_TO_FILE, -1, 5);
     r_cvars.r_wireframe = Cvar_Register("r_wireframe", "0", NULL, CVAR__SAVE_TO_FILE, 0, 2);
     r_cvars.r_drawPanel = Cvar_Register("r_drawPanel", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
 }
@@ -1246,9 +1246,14 @@ static void Init_SceneData()
     scene.environment.ground_horizon_color[1] = 0.4;
     scene.environment.ground_horizon_color[2] = 0.6;
 
-  
-    float sky_curve = 0.15;
-    float ground_curve = 0.02;
+    scene.environment.godrayFogAmount = 1.4;
+    scene.environment.godrayScatteringAmount = 0.3;
+
+    scene.environment.depthOfFieldNearBegin = 0;
+    scene.environment.depthOfFieldFarBegin = 12;
+    scene.environment.depthOfFieldNearEnd = 2;
+    scene.environment.depthOfFieldFarEnd = 24;
+    scene.environment.depthOfFieldBlurScale = 0.5;
 }
 
 static bool _initRenderThread()

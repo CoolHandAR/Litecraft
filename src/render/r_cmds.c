@@ -895,7 +895,7 @@ static void Process_CameraUpdate()
     if (process_reflection_matrix)
     {
         R_Camera reflection_camera = *cam;
-        reflection_camera.data.position[1] -= 2 * (reflection_camera.data.position[1] - 12);
+        reflection_camera.data.position[1] -= 2 * (reflection_camera.data.position[1] - LC_WORLD_WATER_HEIGHT);
         reflection_camera.data.pitch *= -1;
         reflection_camera.data.camera_up[1] = -1;
         Camera_updateFront(&reflection_camera);
@@ -1141,7 +1141,7 @@ void Process_CullRegisterHit(const void* _data, BVH_ID _index)
 
 void Process_CullRegisterHitLCWorld(const void* _data, BVH_ID _index)
 {
-    LCTreeData* tree_data = _data;
+    LC_TreeData* tree_data = _data;
 
     int node_index = tree_data->chunk_data_index;
 
@@ -1173,11 +1173,11 @@ void Process_CullRegisterHitLCWorld(const void* _data, BVH_ID _index)
 
 void Process_CullRegisterHitLCWorldShadow(const void* _data, BVH_ID _index)
 {
-    LCTreeData* tree_data = _data;
+    LC_TreeData* tree_data = _data;
 
     if (tree_data->opaque_index >= 0)
     {
-        DRB_Item opaque_item = DRB_GetItem(&drawData->lc_world.world_render_data->vertex_buffer, tree_data->opaque_index);
+        DRB_Item opaque_item = DRB_GetItem(&drawData->lc_world.world_render_data->opaque_buffer, tree_data->opaque_index);
 
         int* first = dA_emplaceBack(drawData->lc_world.shadow_firsts[ACTIVE_SPLIT]);
         int* count = dA_emplaceBack(drawData->lc_world.shadow_counts[ACTIVE_SPLIT]);
@@ -1192,7 +1192,7 @@ void Process_CullRegisterHitLCWorldShadow(const void* _data, BVH_ID _index)
     }
     if (tree_data->transparent_index >= 0)
     {
-        DRB_Item transparent_item = DRB_GetItem(&drawData->lc_world.world_render_data->transparents_vertex_buffer, tree_data->transparent_index);
+        DRB_Item transparent_item = DRB_GetItem(&drawData->lc_world.world_render_data->semi_transparent_buffer, tree_data->transparent_index);
 
         int* first = dA_emplaceBack(drawData->lc_world.shadow_firsts_transparent[ACTIVE_SPLIT]);
         int* count = dA_emplaceBack(drawData->lc_world.shadow_counts_transparent[ACTIVE_SPLIT]);
@@ -1208,11 +1208,11 @@ void Process_CullRegisterHitLCWorldShadow(const void* _data, BVH_ID _index)
 }
 void Process_CullRegisterHitLCWorldReflection(const void* _data, BVH_ID _index)
 {
-    LCTreeData* tree_data = _data;
+    LC_TreeData* tree_data = _data;
 
     if (tree_data->opaque_index >= 0)
     {
-        DRB_Item opaque_item = DRB_GetItem(&drawData->lc_world.world_render_data->vertex_buffer, tree_data->opaque_index);
+        DRB_Item opaque_item = DRB_GetItem(&drawData->lc_world.world_render_data->opaque_buffer, tree_data->opaque_index);
 
         int* first = dA_emplaceBack(drawData->lc_world.reflection_pass_opaque_firsts);
         int* count = dA_emplaceBack(drawData->lc_world.reflection_pass_opaque_counts);
@@ -1227,7 +1227,7 @@ void Process_CullRegisterHitLCWorldReflection(const void* _data, BVH_ID _index)
     }
     if (tree_data->transparent_index >= 0)
     {
-        DRB_Item transparent_item = DRB_GetItem(&drawData->lc_world.world_render_data->transparents_vertex_buffer, tree_data->transparent_index);
+        DRB_Item transparent_item = DRB_GetItem(&drawData->lc_world.world_render_data->semi_transparent_buffer, tree_data->transparent_index);
 
         int* first = dA_emplaceBack(drawData->lc_world.reflection_pass_transparent_firsts);
         int* count = dA_emplaceBack(drawData->lc_world.reflection_pass_transparent_counts);

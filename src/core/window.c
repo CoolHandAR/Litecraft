@@ -19,6 +19,7 @@ typedef struct
 
 extern void RCore_onWindowResize(int width, int height);
 extern void PL_onMouseScroll(int yOffset);
+extern void LC_MouseUpdate(double x, double y);
 
 GLFWwindow* glfw_window;
 static WindowState window_state;

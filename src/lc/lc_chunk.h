@@ -2,13 +2,7 @@
 
 #include <cglm/cglm.h>
 #include <stdint.h>
-
-#define LC_CHUNK_WIDTH 16
-#define LC_CHUNK_HEIGHT 16
-#define LC_CHUNK_LENGTH 16
-#define LC_CHUNK_TOTAL_SIZE LC_CHUNK_WIDTH * LC_CHUNK_HEIGHT * LC_CHUNK_LENGTH
-
-#define LC_BLOCK_STARTING_HP 7
+#include "lc_common.h"
 
 typedef enum
 {
@@ -21,17 +15,6 @@ typedef enum
 	LC_Biome_Max
 } LC_BiomeType;
 
-typedef struct
-{
-	int8_t position[3];
-	int8_t packed_norm_hp;
-	uint8_t block_type;
-} ChunkVertex;
-
-typedef struct
-{
-	int8_t position[3];
-} ChunkWaterVertex;
 
 typedef struct
 {
@@ -63,39 +46,13 @@ typedef struct
 	int16_t water_blocks; //Num water blocks
 
 	int16_t light_blocks; //Num blocks that emit light
-
-	size_t vertex_count;
-
-	size_t transparent_vertex_count;
-
-	size_t water_vertex_count;
 	
-	bool vertex_loaded;
-
-	bool user_modified;
-
 	bool is_deleted;
-
-	bool is_generated;
 
 } LC_Chunk;
 
-typedef struct
-{
-	ChunkVertex* opaque_vertices;
-	ChunkVertex* transparent_vertices;
-	ChunkWaterVertex* water_vertices;
-} GeneratedChunkVerticesResult;
 
 uint8_t LC_getBlockInheritedType(uint8_t block_type);
-bool LC_isBlockOpaque(uint8_t block_type);
-bool LC_isBlockCollidable(uint8_t block_type);
-bool LC_isblockEmittingLight(uint8_t block_type);
-bool LC_isBlockTransparent(uint8_t block_type);
-bool LC_isBlockWater(uint8_t blockType);
-bool LC_isBlockProp(uint8_t blockType);
-void LC_getBlockTypeAABB(uint8_t blockType, vec3 dest[2]);
-const char* LC_getBlockName(uint8_t block_type);
 
 LC_BiomeType LC_getBiomeType(float p_x, float p_z);
 void LC_getBiomeNoiseVarianceData(LC_BiomeType p_biome, float* r_surfaceHeightMin, float* r_surfaceHeightMax);
@@ -108,3 +65,4 @@ unsigned LC_generateBlockInfoGLBuffer();
 void LC_Chunk_CalculateWaterBounds(LC_Chunk* const _chunk, ivec3 dest[2]);
 void LC_Chunk_SetBlock(LC_Chunk* const p_chunk, int x, int y, int z, uint8_t block_type);
 uint8_t LC_Chunk_getType(LC_Chunk* const p_chunk, int x, int y, int z);
+LC_Block* LC_Chunk_GetBlock(LC_Chunk* const p_chunk, int x, int y, int z);

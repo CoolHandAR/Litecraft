@@ -4,15 +4,13 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
-#define NK_INCLUDE_FONT_BAKING
-#include <nuklear/nuklear.h>
-#include <nuklear/nuklear_glfw_gl3.h>
 
 #define DYNAMIC_ARRAY_IMPLEMENTATION
 #include "utility/dynamic_array.h"
 
 #define CHM_IMPLEMENTATION
 #include "utility/Custom_Hashmap.h"
+
 
 #include "cvar.h"
 #include "core/core_common.h"

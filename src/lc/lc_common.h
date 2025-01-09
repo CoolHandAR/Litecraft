@@ -1,3 +1,5 @@
+#ifndef LC_COMMON_H 
+#define LC_COMMON_H
 #pragma once
 
 #include <cglm/cglm.h>
@@ -9,12 +11,20 @@
 	The arrays are index by the order of the LC_BlockType Enums
   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-
-#define LC_BLOCK_ATLAS_WIDTH 1024
-#define LC_BLOCK_ATLAS_HEIGHT 512
-#define LC_BLOCK_ATLAS_TEX_SIZE 8
+#define LC_BASE_RESOLUTION_WIDTH 1280
+#define LC_BASE_RESOLUTION_HEIGHT 720
+#define LC_BLOCK_ATLAS_WIDTH 400
+#define LC_BLOCK_ATLAS_HEIGHT 400
+#define LC_BLOCK_ATLAS_TEX_SIZE 16
 #define LC_BLOCK_ATLAS_WIDTH_DIVIDED 64
 #define LC_BLOCK_ATLAS_HEIGHT_DIVIDED 32
+#define LC_CHUNK_WIDTH 16
+#define LC_CHUNK_HEIGHT 16
+#define LC_CHUNK_LENGTH 16
+#define LC_CHUNK_TOTAL_SIZE LC_CHUNK_WIDTH * LC_CHUNK_HEIGHT * LC_CHUNK_LENGTH
+#define LC_WORLD_MAX_CHUNK_LIMIT 5000
+#define LC_WORLD_WATER_HEIGHT 15
+#define LC_BLOCK_STARTING_HP 7
 
 typedef enum LC_BlockType
 {
@@ -391,16 +401,16 @@ typedef struct
 	float radius;
 	float attenuation;
 	
-} LC_Block_LightingData;
+} LC_Block_LightData;
 
-static const LC_Block_LightingData LC_BLOCK_LIGHTING_DATA[] =
+static const LC_Block_LightData LC_BLOCK_LIGHTING_DATA[] =
 {
 	//GLOWSTONE
 	LC_BT__GLOWSTONE,
 	0.98, 0.85, 0.45,
 	24.8,
 	0.2,
-	0.42,
+	6.42,
 	0.20,
 
 	//MAGMA
@@ -428,3 +438,138 @@ static const LC_Block_LightingData LC_BLOCK_LIGHTING_DATA[] =
 	0.20,
 };
 
+static const char* LC_BLOCK_CHAR_NAME[] =
+{
+	//NONE
+	"None",
+
+	//GRASS
+	"Grass",
+
+	//SAND
+	"Sand",
+
+	//STONE
+	"Stone",
+
+	//DIRT
+	"Dirt",
+
+	//TRUNK
+	"Trunk",
+
+	//TREE LEAVES
+	"Tree leaves",
+
+	//WATER
+	"Water",
+
+	//GLASS
+	"Glass",
+
+	//FLOWER
+	"Flower",
+
+	//GLOWSTONE
+	"Glowstone",
+
+	//MAGMA
+	"Magma",
+
+	//OBSIDIAN
+	"Obsidian",
+
+	//DIAMOND
+	"Diamond",
+
+	//IRON
+	"Iron",
+
+	//SPECULAR
+	"Specular",
+
+	//CACTUS
+	"Cactus",
+
+	//SNOW
+	"Snow",
+
+	//GRASS SNOW
+	"Grass snow",
+
+	//SPRUCE PLANKS
+	"Spruce planks",
+
+	//GRASS PROP
+	"Grass prop",
+
+	//TORCH
+	"Torch",
+
+	//Dead bush
+	"Dead bush",
+
+	//Snowy leaves
+	"Snowy leaves",
+
+	//Amethyst,
+	"Amethyst",
+
+	//MAX
+	"Max"
+};
+
+typedef enum
+{
+	LC_Biome_None2,
+	LC_Biome_SnowyMountains2,
+	LC_Biome_RockyMountains2,
+	LC_Biome_GrassyPlains2,
+	LC_Biome_SnowyPlains2,
+	LC_Biome_Desert2,
+	LC_Biome_Max2
+} LC_BiomeType2;
+
+
+bool LC_IsBlockWater(uint8_t block_type);
+bool LC_isBlockOpaque(uint8_t block_type);
+bool LC_isBlockSemiTransparent(uint8_t block_type);
+bool LC_isBlockCollidable(uint8_t block_type);
+bool LC_isblockEmittingLight(uint8_t block_type);
+bool LC_isBlockProp(uint8_t block_type);
+LC_Block_LightData LC_getBlockLightingData(uint8_t block_type);
+const char* LC_getBlockName(uint8_t block_type);
+void LC_getBlockTypeAABB(uint8_t blockType, vec3 dest[2]);
+
+void LC_getNormalizedChunkPosition(float p_x, float p_y, float p_z, ivec3 dest);
+unsigned LC_generateBlockInfoGLBuffer();
+
+float LC_CalculateContinentalness(float p_x, float p_z);
+float LC_CalculateSurfaceHeight(float p_x, float p_y, float p_z);
+LC_BlockType LC_Generate_Block(float p_x, float p_y, float p_z);
+
+
+typedef struct
+{
+	int8_t position[3];
+	int8_t normal;
+	uint8_t block_type;
+} ChunkVertex;
+
+typedef struct
+{
+	int8_t position[2];
+} ChunkWaterVertex;
+
+typedef struct
+{
+	ChunkVertex* opaque_vertices;
+	ChunkVertex* transparent_vertices;
+	ChunkWaterVertex* water_vertices;
+
+	size_t opaque_vertex_count;
+	size_t transparent_vertex_count;
+	size_t water_vertex_count;
+} GeneratedChunkVerticesResult;
+
+#endif

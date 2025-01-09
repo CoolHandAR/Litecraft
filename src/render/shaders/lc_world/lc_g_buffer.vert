@@ -133,7 +133,8 @@ void main()
 
     vec3 normal = CUBE_NORMALS_TABLE[unpacked_norm];
     vec3 tangent = CUBE_TANGENT_NORMALS_TABLE[unpacked_norm];
-    vec3 biTangent = normalize(cross(normal, tangent)); //CUBE_BITANGENT_NORMALS_TABLE[unpacked_norm];
+    //vec3 biTangent = normalize(cross(normal, tangent)); //CUBE_BITANGENT_NORMALS_TABLE[unpacked_norm];
+	vec3 biTangent = CUBE_BITANGENT_NORMALS_TABLE[unpacked_norm];
     mat3 TBN = mat3(tangent, biTangent, normal);
 
     ivec2 posIndex = POS_INDEX_TABLE[unpacked_norm];

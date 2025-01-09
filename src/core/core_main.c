@@ -5,7 +5,7 @@
 #include "utility/u_math.h"
 #include "cvar.h"
 #include "input.h"
-#include "lc/lc_world.h"
+#include "lc/lc_world2.h"
 #include "core/core_common.h"
 
 /*
@@ -16,14 +16,6 @@ CORE ENGINE FUNCTIONS
 #define NUKLEAR_MAX_VERTEX_BUFFER 512 * 1024
 #define NUKLEAR_MAX_ELEMENT_BUFFER 128 * 1024
 
-#define NK_INCLUDE_DEFAULT_FONT
-#define NK_INCLUDE_FIXED_TYPES
-#define NK_INCLUDE_STANDARD_IO
-#define NK_INCLUDE_STANDARD_VARARGS
-#define NK_INCLUDE_DEFAULT_ALLOCATOR
-#define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
-#define NK_INCLUDE_FONT_BAKING
-#define NK_KEYSTATE_BASED_INPUT
 #define NK_GLFW_GL3_IMPLEMENTATION
 #define NK_IMPLEMENTATION
 #include <nuklear/nuklear.h>
@@ -339,8 +331,9 @@ static void Core_Loop()
 		*	CORE GAME LOOP
 		* ~~~~~~~~~~~~~~~~~~
 		*/
-		LC_Loop(s_engineTiming.delta_time);
-		LC_World_StartFrame();
+		//LC_Loop(s_engineTiming.delta_time);
+		LC_StartFrame();
+		//LC_World_StartFrame();
 	
 		/*
 		* ~~~~~~~~~~~~~~~~~~
@@ -359,7 +352,7 @@ static void Core_Loop()
 		{
 			s_engineTiming.phys_in_frame = true;
 			
-			LC_PhysLoop(delta);
+			LC_PhysUpdate(delta);
 
 			s_engineTiming.phys_ticks++;
 
@@ -383,7 +376,8 @@ static void Core_Loop()
 		* END TICK
 		* ~~~~~~~~~~~~~~~~~~
 		*/
-		LC_World_EndFrame();
+		LC_EndFrame();
+		//LC_World_EndFrame();
 		ThreadCore_ShutdownInactiveThreads();
 		s_engineTiming.ticks++;
 		s_engineTiming.frames_drawn++;
@@ -392,7 +386,6 @@ static void Core_Loop()
 		Window_EndFrame();
 	}
 }
-
 
 int Core_entry()
 {
@@ -414,7 +407,7 @@ int Core_entry()
 
 	//CLEAN UP
 	Core_Exit();
-	LC_Cleanup();
+	LC_Exit();
 
 	return 0;
 }

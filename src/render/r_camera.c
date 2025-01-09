@@ -138,21 +138,6 @@ void Camera_ProcessMove(R_Camera* const p_cam, int x, int y)
 
 }
 
-void Camera_UpdateMatrices(R_Camera* const p_cam, float screen_width, float screen_height)
-{
-	return;
-	vec3 center;
-	glm_vec3_add(p_cam->data.position, p_cam->data.camera_front, center);
-
-	glm_lookat(p_cam->data.position, center, p_cam->data.camera_up, p_cam->data.view_matrix);
-
-	glm_perspective(glm_rad(p_cam->config.fov), screen_width / screen_height, p_cam->config.zNear, p_cam->config.zFar, p_cam->data.proj_matrix);
-	
-	mat4 view_proj;
-	glm_mat4_mul(p_cam->data.proj_matrix, p_cam->data.view_matrix, view_proj);
-
-	glm_frustum_planes(view_proj, p_cam->data.frustrum_planes);
-}
 
 void Camera_setCurrent(R_Camera* const p_cam)
 {

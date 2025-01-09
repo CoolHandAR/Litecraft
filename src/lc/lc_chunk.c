@@ -1,6 +1,5 @@
 
 #include "lc/lc_chunk.h"
-#include "lc/lc_block_defs.h"
 #include <string.h>
 #include <assert.h>
 #include "utility/u_math.h"
@@ -8,7 +7,7 @@
 #define STB_PERLIN_IMPLEMENTATION
 #include <stb_perlin/stb_perlin.h>
 #include <glad/glad.h>
-
+#include "lc_common.h"
 
 
 #define VERTICES_PER_CUBE 36
@@ -219,73 +218,9 @@ uint8_t LC_getBlockInheritedType(uint8_t block_type)
 	return LC_BT__NONE;
 }
 
-bool LC_isBlockOpaque(uint8_t block_type)
-{
-	return !LC_isBlockTransparent(block_type) && block_type != LC_BT__WATER;
-}
-bool LC_isBlockCollidable(uint8_t block_type)
-{
-	return LC_BLOCK_MISC_DATA[block_type].collidable >= 1;
-}
-bool LC_isblockEmittingLight(uint8_t block_type)
-{
-	return LC_BLOCK_MISC_DATA[block_type].emits_light >= 1;
-}
-bool LC_isBlockTransparent(uint8_t block_type)
-{
-	return LC_BLOCK_MISC_DATA[block_type].material_type == 1 || LC_BLOCK_MISC_DATA[block_type].material_type == 3;
-}
-bool LC_isBlockWater(uint8_t blockType)
-{
-	return LC_BLOCK_MISC_DATA[blockType].material_type == 2;
-}
 
-bool LC_isBlockProp(uint8_t blockType)
-{
-	return LC_BLOCK_MISC_DATA[blockType].material_type == 3;
-}
 
-void LC_getBlockTypeAABB(uint8_t blockType, vec3 dest[2])
-{
-	float width = 1;
-	float height = 1;
-	float length = 1;
 
-	if (LC_isBlockProp(blockType))
-	{
-		if (blockType == LC_BT__DEAD_BUSH || blockType == LC_BT__GRASS_PROP)
-		{
-			width = 0.5;
-			height = 0.8;
-			length = 0.5;
-		}
-		else
-		{
-			width = 0.5;
-			height = 0.5;
-			length = 0.5;
-		}
-	}
-	else
-	{
-
-		width = 1.0;
-		height = 1.0;
-		length = 1.0;
-	}
-	dest[0][0] = -(0.5 * width);
-	dest[0][1] = -(0.5 * height);
-	dest[0][2] = -(0.5) * length;
-
-	dest[1][0] = width - (width * 0.5);
-	dest[1][1] = height - (height* 0.5);
-	dest[1][2] = length - (length * 0.5);
-}
-
-const char* LC_getBlockName(uint8_t block_type)
-{
-	return LC_BLOCK_CHAR_NAME[block_type];
-}
 
 //#define CULL_SKIP_TRANSPARENT_FACES
 static inline bool skipCheck(LC_Block const b1, LC_Block const b2)
@@ -319,7 +254,7 @@ static inline bool skipCheck(LC_Block const b1, LC_Block const b2)
 	}
 #endif
 	//if the first one isn't water and the other is don't skip
-	if (!LC_isBlockWater(b1.type) && LC_isBlockWater(b2.type))
+	if (!LC_IsBlockWater(b1.type) && LC_IsBlockWater(b2.type))
 	{
 		return false;
 	}
@@ -556,8 +491,7 @@ static void meshTest(LC_Chunk* const chunk, ChunkVertex* vertices, size_t* index
 GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chunk)
 {
 	
-
-	float start_time = glfwGetTime();
+	float start_time = 1;
 
 	GeneratedChunkVerticesResult* result = malloc(sizeof(GeneratedChunkVerticesResult));
 
@@ -596,9 +530,9 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 
 
 
-	float end_time = glfwGetTime();
+	float end_time = 1;
 
-	printf("%f \n", end_time - start_time);
+	//printf("%f \n", end_time - start_time);
 	//[0] BACK, [1] FRONT, [2] LEFT, [3] RIGHT, [4] BOTTOM, [5] TOP
 	bool drawn_faces[LC_CHUNK_WIDTH][LC_CHUNK_HEIGHT][LC_CHUNK_LENGTH][6];
 	memset(&drawn_faces, 0, sizeof(drawn_faces));
@@ -629,7 +563,7 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 					continue;
 
 				//The water is just a flat quad
-				if (LC_isBlockWater(chunk->blocks[x][y][z].type))
+				if (LC_IsBlockWater(chunk->blocks[x][y][z].type))
 				{
 					continue;
 				}
@@ -643,33 +577,54 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 				bool skip_bottom = (y > 0 && skipCheck(chunk->blocks[x][y][z], chunk->blocks[x][y - 1][z])) || drawn_faces[x][y][z][4] == true;
 				bool skip_top = (next_y != 0 && skipCheck(chunk->blocks[x][y][z], chunk->blocks[x][next_y][z])) || drawn_faces[x][y][z][5] == true;
 				
-			
 				/*
-				if (z == 0 && neighbours[0])
+				if (neighbours)
 				{
-					//skip_back = skipCheck(chunk->blocks[x][y][z], neighbours[0]->blocks[x][y][LC_CHUNK_LENGTH - 1]);
-				}
-				else if (z == LC_CHUNK_LENGTH - 1 && neighbours[1])
-				{
-					//skip_front = skipCheck(chunk->blocks[x][y][z], neighbours[1]->blocks[x][y][0]);
-				}
-				if (x == 0 && neighbours[2])
-				{
-					//skip_left = skipCheck(chunk->blocks[x][y][z], neighbours[2]->blocks[LC_CHUNK_WIDTH - 1][y][z]);
-				}
-				else if (x == LC_CHUNK_WIDTH - 1 && neighbours[3])
-				{
-					//skip_right = skipCheck(chunk->blocks[x][y][z], neighbours[3]->blocks[0][y][z]);
-				}
-				if (y == 0 && neighbours[4])
-				{
-					//skip_bottom = skipCheck(chunk->blocks[x][y][z], neighbours[4]->blocks[x][LC_CHUNK_HEIGHT - 1][z]);
-				}
-				else if (y == LC_CHUNK_HEIGHT - 1 && neighbours[5])
-				{
-					//skip_top = skipCheck(chunk->blocks[x][y][z], neighbours[5]->blocks[x][0][z]);
+					if (z == 0 && neighbours[0])
+					{
+						if (skipCheck(chunk->blocks[x][y][z], neighbours[0]->blocks[x][y][LC_CHUNK_LENGTH - 1]))
+						{
+							skip_back = true;
+						}
+					}
+					else if (z == LC_CHUNK_LENGTH - 1 && neighbours[1])
+					{
+						if (skipCheck(chunk->blocks[x][y][z], neighbours[1]->blocks[x][y][0]))
+						{
+							skip_front = true;
+						}
+					}
+					if (x == 0 && neighbours[2])
+					{
+						if (skipCheck(chunk->blocks[x][y][z], neighbours[2]->blocks[LC_CHUNK_WIDTH - 1][y][z]))
+						{
+							skip_left = true;
+						}
+					}
+					else if (x == LC_CHUNK_WIDTH - 1 && neighbours[3])
+					{
+						if (skipCheck(chunk->blocks[x][y][z], neighbours[3]->blocks[0][y][z]))
+						{
+							skip_right = true;
+						}
+					}
+					if (y == 0 && neighbours[4])
+					{
+						if (skipCheck(chunk->blocks[x][y][z], neighbours[4]->blocks[x][LC_CHUNK_HEIGHT - 1][z]))
+						{
+							skip_bottom = true;
+						}
+					}
+					else if (y == LC_CHUNK_HEIGHT - 1 && neighbours[5])
+					{
+						if (skipCheck(chunk->blocks[x][y][z], neighbours[5]->blocks[x][0][z]))
+						{
+							skip_top = true;
+						}
+					}
 				}
 				*/
+				
 
 				if (LC_isBlockProp(chunk->blocks[x][y][z].type))
 				{
@@ -678,12 +633,12 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 				}
 
 				//choose buffer and index
-				if (LC_isBlockTransparent(chunk->blocks[x][y][z].type) || LC_isBlockProp(chunk->blocks[x][y][z].type))
+				if (LC_isBlockSemiTransparent(chunk->blocks[x][y][z].type) || LC_isBlockProp(chunk->blocks[x][y][z].type))
 				{
 					buffer = transparent_vertices;
 					index = &transparent_index;
 				}
-				else if (!LC_isBlockWater(chunk->blocks[x][y][z].type))
+				else if (!LC_IsBlockWater(chunk->blocks[x][y][z].type))
 				{
 					buffer = vertices;
 					index = &vert_index;
@@ -823,7 +778,7 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 								norm = 1;
 							}
 							buffer[*index].block_type = chunk->blocks[x][y][z].type;
-							buffer[*index].packed_norm_hp = pack_norm_hp(7, norm);
+							buffer[*index].normal = pack_norm_hp(7, norm);
 
 							*index = *index + 1;
 						}
@@ -847,7 +802,7 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 								norm = 1;
 							}
 							buffer[*index].block_type = chunk->blocks[x][y][z].type;
-							buffer[*index].packed_norm_hp = pack_norm_hp(7, norm);
+							buffer[*index].normal = pack_norm_hp(7, norm);
 
 							*index = *index + 1;
 						}
@@ -954,7 +909,7 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 								norm = 3;
 							}
 							buffer[*index].block_type = chunk->blocks[x][y][z].type;
-							buffer[*index].packed_norm_hp = pack_norm_hp(7, norm);
+							buffer[*index].normal = pack_norm_hp(7, norm);
 
 							*index = *index + 1;
 						}
@@ -979,7 +934,7 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 								norm = 3;
 							}
 							buffer[*index].block_type = chunk->blocks[x][y][z].type;
-							buffer[*index].packed_norm_hp = pack_norm_hp(7, norm);
+							buffer[*index].normal = pack_norm_hp(7, norm);
 
 
 							*index = *index + 1;
@@ -1107,7 +1062,7 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 								norm = 5;
 							}
 							buffer[*index].block_type = chunk->blocks[x][y][z].type;
-							buffer[*index].packed_norm_hp = pack_norm_hp(7, norm);
+							buffer[*index].normal = pack_norm_hp(7, norm);
 
 							*index = *index + 1;
 						}
@@ -1132,7 +1087,7 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 							}
 
 							buffer[*index].block_type = chunk->blocks[x][y][z].type;
-							buffer[*index].packed_norm_hp = pack_norm_hp(7, norm);
+							buffer[*index].normal = pack_norm_hp(7, norm);
 
 							*index = *index + 1;
 						}
@@ -1150,7 +1105,6 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 		LC_Chunk_CalculateWaterBounds(chunk, water_bounds);
 	
 		int total = 0;
-		index = &water_index;
 
 		int minX = water_bounds[0][0];
 		int minZ = water_bounds[0][2];
@@ -1166,49 +1120,43 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 			printf("Failed to malloc cube vertices\n");
 			return NULL;
 		}
-
+		water_index = 0;
 		for (int x = minX; x < maxX; x++)
 		{
 			for (int z = minZ; z < maxZ; z++)
-			{
+			{	
 				total += 6;
 				//FIRST TRIANGLE
-				water_vertices[*index].position[0] = x;
-				water_vertices[*index].position[1] = water_bounds[1][1];
-				water_vertices[*index].position[2] = z;
+				water_vertices[water_index].position[0] = x;
+				water_vertices[water_index].position[1] = z;
 
-				*index = *index + 1;
+				water_index++;
 
-				water_vertices[*index].position[0] = x + 1;
-				water_vertices[*index].position[1] = water_bounds[1][1];
-				water_vertices[*index].position[2] = z;
+				water_vertices[water_index].position[0] = x + 1;
+				water_vertices[water_index].position[1] = z;
 
-				*index = *index + 1;
+				water_index++;
 
-				water_vertices[*index].position[0] = x + 1;
-				water_vertices[*index].position[1] = water_bounds[1][1];
-				water_vertices[*index].position[2] = z + 1;
+				water_vertices[water_index].position[0] = x + 1;
+				water_vertices[water_index].position[1] = z + 1;
 
-				*index = *index + 1;
+				water_index++;
 
 				//SECOND TRIANGLE
-				water_vertices[*index].position[0] = x;
-				water_vertices[*index].position[1] = water_bounds[1][1];
-				water_vertices[*index].position[2] = z;
+				water_vertices[water_index].position[0] = x;
+				water_vertices[water_index].position[1] = z;
 
-				*index = *index + 1;
+				water_index++;
 
-				water_vertices[*index].position[0] = x;
-				water_vertices[*index].position[1] = water_bounds[1][1];
-				water_vertices[*index].position[2] = z + 1;
+				water_vertices[water_index].position[0] = x;
+				water_vertices[water_index].position[1] = z + 1;
 
-				*index = *index + 1;
+				water_index++;
 
-				water_vertices[*index].position[0] = x + 1;
-				water_vertices[*index].position[1] = water_bounds[1][1];
-				water_vertices[*index].position[2] = z + 1;
+				water_vertices[water_index].position[0] = x + 1;
+				water_vertices[water_index].position[1] = z + 1;
 
-				*index = *index + 1;
+				water_index++;
 			}
 		}
 
@@ -1218,15 +1166,19 @@ GeneratedChunkVerticesResult* LC_Chunk_GenerateVerticesTest(LC_Chunk* const chun
 
 	
 
-	chunk->vertex_count = vert_index;
-	chunk->transparent_vertex_count = transparent_index;
-	chunk->water_vertex_count = water_index;
+	//chunk->vertex_count = vert_index;
+	//chunk->transparent_vertex_count = transparent_index;
+	//chunk->water_vertex_count = water_index;
+
+	result->opaque_vertex_count = vert_index;
+	result->transparent_vertex_count = transparent_index;
+	result->water_vertex_count = water_index;
 
 	result->opaque_vertices = vertices;
 	result->transparent_vertices = transparent_vertices;
 	result->water_vertices = water_vertices;
 
-	printf("%d \n", chunk->vertex_count);
+	//printf("%d \n", chunk->vertex_count);
 
 	return result;
 }
@@ -1321,7 +1273,7 @@ static LC_Block LC_generateBlock(float p_x, float p_y, float p_z, int p_seed)
 
 	float surface_y = surface_height;
 
-	float sea_level = 12;
+	float sea_level = LC_WORLD_WATER_HEIGHT;
 	float deep_surface = -2;
 
 	LC_Block block;
@@ -1428,6 +1380,31 @@ static LC_Block LC_generateBlock(float p_x, float p_y, float p_z, int p_seed)
 		
 	}
 
+	/*
+	static int test = 0;
+	test = Math_rand() % 5;
+	if (test == 0)
+	{
+		block.type = LC_BT__STONE;
+	}
+	else if (test == 1)
+	{
+		block.type = LC_BT__GRASS;
+	}
+	else if (test == 2)
+	{
+		block.type = LC_BT__DIRT;
+	}
+	else if (test == 3)
+	{
+		block.type = LC_BT__DIAMOND;
+	}
+	else if (test == 4)
+	{
+		block.type = LC_BT__IRON;
+	}
+	*/
+
 	return block;
 }
 
@@ -1466,6 +1443,27 @@ uint8_t LC_Chunk_getType(LC_Chunk* const p_chunk, int x, int y, int z)
 	return block->type;
 }
 
+LC_Block* LC_Chunk_GetBlock(LC_Chunk* const p_chunk, int x, int y, int z)
+{
+	//bounds check
+	if (x < 0 || x >= LC_CHUNK_WIDTH)
+	{
+		return NULL;
+	}
+	if (y < 0 || y >= LC_CHUNK_HEIGHT)
+	{
+		return NULL;
+	}
+	if (z < 0 || z >= LC_CHUNK_LENGTH)
+	{
+		return NULL;
+	}
+
+	LC_Block* block = &p_chunk->blocks[x][y][z];
+
+	return block;
+}
+
 void LC_Chunk_SetBlock(LC_Chunk* const p_chunk, int x, int y, int z, uint8_t block_type)
 {
 	//bounds check
@@ -1487,11 +1485,11 @@ void LC_Chunk_SetBlock(LC_Chunk* const p_chunk, int x, int y, int z, uint8_t blo
 
 	if (block->type != LC_BT__NONE)
 	{
-		if (LC_isBlockTransparent(block->type))
+		if (LC_isBlockSemiTransparent(block->type))
 		{
 			p_chunk->transparent_blocks--;
 		}
-		else if (LC_isBlockWater(block->type))
+		else if (LC_IsBlockWater(block->type))
 		{
 			p_chunk->water_blocks--;
 		}
@@ -1511,11 +1509,11 @@ void LC_Chunk_SetBlock(LC_Chunk* const p_chunk, int x, int y, int z, uint8_t blo
 	
 	if (block->type != LC_BT__NONE)
 	{
-		if (LC_isBlockTransparent(block->type))
+		if (LC_isBlockSemiTransparent(block->type))
 		{
 			p_chunk->transparent_blocks++;
 		}
-		else if (LC_isBlockWater(block->type))
+		else if (LC_IsBlockWater(block->type))
 		{
 			p_chunk->water_blocks++;
 		}
@@ -1583,7 +1581,7 @@ static inline void LC_Chunk_GenerateAdditionalBlocks(LC_Chunk* _chunk, int p_x, 
 	else if (block_type == LC_BT__SNOW || block_type == LC_BT__GRASS_SNOW)
 	{
 		//Dead bush
-		if ((Math_rand() % 16) == 0 && p_gY > 12 && (up_block == LC_BT__NONE || LC_isBlockWater(up_block)) && (left_block == LC_BT__NONE || back_block == LC_BT__NONE))
+		if ((Math_rand() % 16) == 0 && p_gY > 12 && (up_block == LC_BT__NONE || LC_IsBlockWater(up_block)) && (left_block == LC_BT__NONE || back_block == LC_BT__NONE))
 		{
 			LC_Chunk_SetBlock(_chunk, p_x, p_y + 1, p_z, LC_BT__DEAD_BUSH);
 		}
@@ -1668,7 +1666,7 @@ static inline void LC_Chunk_GenerateAdditionalBlocks(LC_Chunk* _chunk, int p_x, 
 			}
 
 		}
-		else if (p_gY > 5 && (up_block == LC_BT__NONE || LC_isBlockWater(up_block)) && (left_block == LC_BT__NONE || back_block == LC_BT__NONE))
+		else if (p_gY > 5 && (up_block == LC_BT__NONE || LC_IsBlockWater(up_block)) && (left_block == LC_BT__NONE || back_block == LC_BT__NONE))
 		{
 			//grass prop
 			if ((Math_rand() % 8) == 0)
@@ -1700,7 +1698,11 @@ void LC_Chunk_GenerateBlocks(LC_Chunk* const _chunk, int _seed)
 				//Generate block
 				if (_chunk->blocks[x][y][z].type == LC_BT__NONE)
 				{
-					LC_Block generated_block = LC_generateBlock(g_x, g_y, g_z, _seed);
+					//LC_Block generated_block = LC_generateBlock(g_x, g_y, g_z, _seed);
+
+					LC_Block generated_block;
+
+					generated_block.type = LC_Generate_Block(g_x, g_y, g_z, _seed);
 
 					LC_Chunk_SetBlock(_chunk, x, y, z, generated_block.type);
 				}
@@ -1721,6 +1723,8 @@ void LC_Chunk_GenerateBlocks(LC_Chunk* const _chunk, int _seed)
 				{
 					continue;
 				}
+
+
 
 				//Generate additional blocks like trees, cactuses, etc..
 				LC_Chunk_GenerateAdditionalBlocks(_chunk, x, y, z, g_x, g_y, g_z);
@@ -1753,37 +1757,7 @@ unsigned LC_Chunk_getAliveBlockCount(LC_Chunk* const _chunk)
 	return alive_blocks;
 }
 
-typedef struct
-{
-	int texture_offsets[6];
-	float position_offset;
-} LC_BlockMaterialData;
 
-unsigned LC_generateBlockInfoGLBuffer()
-{
-	unsigned buffer = 0;
-	glGenBuffers(1, &buffer);
-	glBindBuffer(GL_UNIFORM_BUFFER, buffer);
-
-	LC_BlockMaterialData data[LC_BT__MAX + 1];
-	memset(&data, 0, sizeof(data));
-	for (int i = 0; i < LC_BT__MAX + 1; i++)
-	{
-		LC_Block_Texture_Offset_Data texture_data = LC_BLOCK_TEX_OFFSET_DATA[i];
-		data[i].texture_offsets[0] = (25 * texture_data.back_face[1]) + texture_data.back_face[0];
-		data[i].texture_offsets[1] = (25 * texture_data.front_face[1]) + texture_data.front_face[0];
-		data[i].texture_offsets[2] = (25 * texture_data.left_face[1]) + texture_data.left_face[0];
-		data[i].texture_offsets[3] = (25 * texture_data.right_face[1]) + texture_data.right_face[0];
-		data[i].texture_offsets[4] = (25 * texture_data.bottom_face[1]) + texture_data.bottom_face[0];
-		data[i].texture_offsets[5] = (25 * texture_data.top_face[1]) + texture_data.top_face[0];
-
-		data[i].position_offset = (LC_isBlockProp(i)) ? 0.5 : 0.0;
-	}
-
-	glBufferData(GL_UNIFORM_BUFFER, sizeof(LC_BlockMaterialData) * (LC_BT__MAX + 1), data, GL_STATIC_DRAW);
-
-	return buffer;
-}
 
 void LC_Chunk_CalculateWaterBounds(LC_Chunk* const _chunk, ivec3 dest[2])
 {
@@ -1810,7 +1784,7 @@ void LC_Chunk_CalculateWaterBounds(LC_Chunk* const _chunk, ivec3 dest[2])
 		{
 			for (int z = 0; z < LC_CHUNK_LENGTH; z++)
 			{
-				if (LC_isBlockWater(_chunk->blocks[x][y][z].type))
+				if (LC_IsBlockWater(_chunk->blocks[x][y][z].type))
 				{
 					minWaterX = min(minWaterX, x);
 					minWaterY = min(minWaterY, y);

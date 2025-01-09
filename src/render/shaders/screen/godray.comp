@@ -247,9 +247,9 @@ void main()
 
     float fog = textureOffset(fog_texture, coords, offset).r;
 
-    //fog = pow(fog, 1);
+    fog = pow(fog, u_fogCurve);
 
-    fog *= 0.3;
+    //fog *= 0.7;
  
     vec3 fog_color = vec3(scene.dirLightColor.rgb * scene.dirLightAmbientIntensity) * fog;
 

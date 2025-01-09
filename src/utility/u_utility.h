@@ -101,6 +101,7 @@ typedef enum
 	DRB_FLAG__PERSISTENT = 1 << 4,
 	DRB_FLAG__ALWAYS_MAP_TO_MAX_RESERVE = 1 << 5,
 	DRB_FLAG__POOLABLE = 1 << 6,
+	DRB_FLAG__POOLABLE_KEEP_DATA = 1 << 7
 } DRB_Flags;
 
 typedef struct

@@ -72,9 +72,9 @@ void main()
     float water_depth = floor_distance - water_distance;
 
     //get distortion coords
-    vec2 distortionCoords = texture(dudv_map, vec2(vs_in.TexCoords.x + u_moveFactor * 0.01, vs_in.TexCoords.y)).rg;
-    distortionCoords = distortionCoords + vec2(distortionCoords.x, distortionCoords.y + u_moveFactor * 0.1);
-    vec2 totalDistortion = (texture(dudv_map, distortionCoords).rg * 2.0 - 1.0) * 0.01;
+    vec2 distortionCoords = texture(dudv_map, vec2(vs_in.TexCoords.x + u_moveFactor * 0.05, vs_in.TexCoords.y)).rg;
+    distortionCoords = distortionCoords + vec2(distortionCoords.x, distortionCoords.y + u_moveFactor * 0.05);
+    vec2 totalDistortion = (texture(dudv_map, distortionCoords).rg * 2.0 - 1.0) * 0.02;
 
     reflectionCoords += totalDistortion;
     reflectionCoords = clamp(reflectionCoords, 0.002, 0.998);
@@ -86,8 +86,8 @@ void main()
     vec4 reflection_color = texture(reflection_texture, reflectionCoords);
     vec4 refraction_color = texture(refraction_texture, refractionCoords);
 
-    vec3 normalColor = texture(normal_map, distortionCoords).rgb;
-    vec3 normal = normalize(vec3(normalColor.r * 2.0 - 1.0, normalColor.b * 3.0, normalColor.g * 2.0 - 1.0));
+    vec3 normalColor = texture(dudv_map, distortionCoords).rgb;
+    vec3 normal = normalize(vec3(normalColor.r * 2.0 - 1.0, 3.0, normalColor.g * 2.0 - 1.0));
 
     vec3 viewDir = normalize(cam.position.xyz - vs_in.WorldPos.xyz);
     float refractiveFactor = dot(viewDir, normal);

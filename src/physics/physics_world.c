@@ -1,10 +1,9 @@
 #include "physics_world.h"
 
-#include "lc/lc_world.h"
+#include "lc/lc_world2.h"
 #include <stdio.h>
 
 
-#include "lc/lc_block_defs.h"
 #include "core/core_common.h"
 
 
@@ -594,22 +593,22 @@ void PhysicsWorld_Destruct(PhysicsWorld* world)
 	world = NULL;
 }
 
-Static_Body* PhysicsWorld_AddStaticBody(PhysicsWorld* const world, AABB* const p_initBox, LC_Entity* ent_handle)
+Static_Body* PhysicsWorld_AddStaticBody(PhysicsWorld* const world, AABB* const p_initBox)
 {
 	Static_Body* sb_node = FL_emplaceFront(world->static_bodies)->value;
 	
 	sb_node->box = *p_initBox;
-	sb_node->handle = ent_handle;
+	//sb_node->handle = ent_handle;
 
 	return sb_node;
 }
 
-Kinematic_Body* PhysicsWorld_AddKinematicBody(PhysicsWorld* const world, AABB* const p_initBox, LC_Entity* ent_handle)
+Kinematic_Body* PhysicsWorld_AddKinematicBody(PhysicsWorld* const world, AABB* const p_initBox)
 {
 	Kinematic_Body* kb_node = FL_emplaceFront(world->kinematic_bodies)->value;
 	
 	kb_node->box = *p_initBox;
-	kb_node->handle = ent_handle;
+	//kb_node->handle = ent_handle;
 
 	return kb_node;
 }

@@ -59,6 +59,14 @@ static void Pass_shadowMap()
 
 	int splits = r_cvars.r_shadowSplits->int_value;
 
+	glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_buffer, 0, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_indexes->elements_size,
+		drawData->lc_world.shadow_sorted_chunk_indexes->data);
+
+	glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_buffer, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_indexes->elements_size, sizeof(int) * drawData->lc_world.shadow_sorted_chunk_transparent_indexes->elements_size,
+		drawData->lc_world.shadow_sorted_chunk_transparent_indexes->data);
+
+	glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+
 	for (int i = 0; i < splits; i++)
 	{
 		glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, pass->shadow.depth_maps, 0, i);
@@ -309,7 +317,14 @@ static void Pass_DepthOfField()
 	Shader_Use(&pass->dof.shader);
 
 	Shader_SetFloat2(&pass->dof.shader, DOF_UNIFORM_VIEWPORTSIZE, backend_data->screenSize[0], backend_data->screenSize[1]);
-	Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_BLUR_SIZE, 8.0);
+	Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_BLUR_SIZE, scene.environment.depthOfFieldBlurScale * 64.0);
+	Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_NEARBEGIN, scene.environment.depthOfFieldNearBegin);
+	Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_FARBEGIN, scene.environment.depthOfFieldFarBegin);
+	Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_NEAREND, scene.environment.depthOfFieldNearEnd);
+	Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_FAREND, scene.environment.depthOfFieldFarEnd);
+
+	Shader_SetInt(&pass->dof.shader, DOF_UNIFORM_NEARBLURENABLED, scene.environment.depthOfFieldNearEnabled);
+	Shader_SetInt(&pass->dof.shader, DOF_UNIFORM_FARBLURENABLED, scene.environment.depthOfFieldFarEnabled);
 
 	glBindTextureUnit(0, pass->deferred.depth_texture);
 	glBindImageTexture(0, pass->scene.MainSceneColorBuffer, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16F);
@@ -341,7 +356,7 @@ static void Pass_DepthOfField()
 
 		Shader_SetFloat2(&pass->dof.shader, DOF_UNIFORM_VIEWPORTSIZE, backend_data->halfScreenSize[0], backend_data->halfScreenSize[1]);
 		Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_BLUR_SCALE, scale);
-		Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_BLUR_SIZE, 8.0);
+		Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_BLUR_SIZE, scene.environment.depthOfFieldBlurScale * 64.0);
 	
 		Pass_DispatchScreenCompute(backend_data->halfScreenSize[0], backend_data->halfScreenSize[1], 8, 8);
 	}
@@ -359,7 +374,7 @@ static void Pass_DepthOfField()
 		Shader_SetInt(&pass->dof.shader, DOF_UNIFORM_SECOND_PASS, false);
 		Shader_SetFloat2(&pass->dof.shader, DOF_UNIFORM_VIEWPORTSIZE, backend_data->screenSize[0], backend_data->screenSize[1]);
 		Shader_SetInt(&pass->dof.shader, DOF_UNIFORM_BLUR_STEPS, steps);
-		Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_BLUR_SIZE, 8.0);
+		Shader_SetFloaty(&pass->dof.shader, DOF_UNIFORM_BLUR_SIZE, scene.environment.depthOfFieldBlurScale * 64.0);
 
 		Pass_DispatchScreenCompute(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8);
 
@@ -407,7 +422,7 @@ static void Pass_Godrays()
 
 	Shader_SetFloat2(&pass->godray.shader, GODRAY_UNIFORM_VIEWPORTSIZE, backend_data->halfScreenSize[0], backend_data->halfScreenSize[1]);
 	Shader_SetInt(&pass->godray.shader, GODRAY_UNIFORM_MAXSTEPS, 8);
-	Shader_SetFloaty(&pass->godray.shader, GODRAY_UNIFORM_SCATTERING, 0.8);
+	Shader_SetFloaty(&pass->godray.shader, GODRAY_UNIFORM_SCATTERING, scene.environment.godrayScatteringAmount);
 
 	glBindTextureUnit(0, pass->general.depth_halfsize_texture);
 	glBindTextureUnit(3, pass->shadow.depth_maps);
@@ -450,6 +465,7 @@ static void Pass_Godrays()
 	Shader_Use(&pass->godray.shader);
 	
 	Shader_SetFloat2(&pass->godray.shader, GODRAY_UNIFORM_VIEWPORTSIZE, backend_data->screenSize[0], backend_data->screenSize[1]);
+	Shader_SetFloaty(&pass->godray.shader, GODRAY_UNIFORM_FOGCURVE, scene.environment.godrayFogAmount);
 	
 	glBindTextureUnit(0, pass->general.depth_halfsize_texture);
 	glBindTextureUnit(1, pass->deferred.depth_texture);
@@ -719,7 +735,7 @@ static void Pass_PostProcess()
 	//draw the debug texture if needed
 	if (r_cvars.r_drawDebugTexture->int_value > -1)
 	{
-		//-1 disabled, 0 = Normal, 1 = Albedo, 2 = Depth, 3 = Metal, 4 = Rough, 5 = AO, 6 = Bloom
+		//-1 disabled, 0 = Normal, 1 = Albedo, 2 = Depth, 3 = Metal, 4 = Rough, 5 = AO
 		glUseProgram(pass->post.debug_shader);
 
 		Shader_SetInteger(pass->post.debug_shader, "u_selection", r_cvars.r_drawDebugTexture->int_value);

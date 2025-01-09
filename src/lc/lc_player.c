@@ -7,7 +7,7 @@
 #include "core/core_common.h"
 #include "physics/p_physics_defs.h"
 #include "physics/physics_world.h"
-#include "lc/lc_world.h"
+#include "lc/lc_world2.h"
 #include "render/r_camera.h"
 #include "render/r_public.h"
 #include "core/sound.h"
@@ -91,6 +91,7 @@ typedef struct
 typedef struct
 {
 	LC_BlockType inventory_blocks[21][6];
+	LC_BlockType block_amounts[LC_BT__MAX];
 
 	bool is_opened;
 } Inventory;
@@ -173,10 +174,18 @@ static void PL_initInventoryBlocks()
 
 			if (counter >= LC_BT__MAX)
 			{
-				return;
+				break;
 			}
-
+			
 			inventory.inventory_blocks[x][y] = LC_BT__NONE + counter;
+		}
+	}
+
+	if (LC_World_IsCreativeModeOn())
+	{
+		for (int i = 0; i < LC_BT__MAX; i++)
+		{
+			inventory.block_amounts[i] = 1000;
 		}
 	}
 }
@@ -620,6 +629,15 @@ static void PL_placeBlock()
 	{
 		return;
 	}
+	
+	//do we have any amount of the block in inventory?
+	if (!LC_World_IsCreativeModeOn())
+	{
+		if (inventory.block_amounts[player.held_block_type] <= 0)
+		{
+			return;
+		}
+	}
 
 	//add the block
 	//we failed to add the block(for whatever reason)
@@ -627,7 +645,11 @@ static void PL_placeBlock()
 	{
 		return;
 	}
-
+	if (!LC_World_IsCreativeModeOn())
+	{
+		inventory.block_amounts[player.held_block_type]--;
+	}
+	
 	//if we will possibly be stuck after placing the block, move the player by the face norma amount
 	if (!LC_isBlockProp(selected_block.block.type) && !LC_isBlockProp(player.held_block_type))
 	{
@@ -677,9 +699,15 @@ static void PL_mineBlock()
 		return;
 	}
 
-	
 	//Play the dig sound
 	bool destroy_or_dig = (LC_World_getPrevMinedBlockHP() == 1 || LC_isBlockProp(selected_block.block.type));
+
+	if (destroy_or_dig)
+	{
+		//add to inventory
+		inventory.block_amounts[selected_block.block.type]++;
+	}
+
 	ma_sound* dig_sound = PL_getDigSound(selected_block.block.type, destroy_or_dig);
 
 	if (dig_sound)
@@ -703,7 +731,7 @@ static void PL_mineBlock()
 	origin[1] = selected_block.position[1] + 0.25; //small offset
 	origin[2] = selected_block.position[2];
 	LC_Block_Texture_Offset_Data texture_data = LC_BLOCK_TEX_OFFSET_DATA[selected_block.block.type];
-	int frame = (25 * texture_data.back_face[1]) + texture_data.back_face[0];
+	int frame = (25 * texture_data.side_face[1]) + texture_data.side_face[0];
 
 	//cycle through the emitters so, that we can have more alive particles
 	player.emitter_index = (player.emitter_index + 1) % 4;
@@ -990,7 +1018,7 @@ static void PL_UpdateCamera()
 
 	double interp = Core_getLerpFraction();
 
-	interp = glm_clamp(interp, 0.2, 0.7);
+	interp = glm_smoothinterp(0.0, 1.0, interp);
 
 	cam->data.position[0] = glm_lerp(cam->data.position[0], player.k_body->box.position[0] + player.k_body->box.width * 0.5f, interp);
 	cam->data.position[1] = glm_lerp(cam->data.position[1], player.k_body->box.position[1] + player.k_body->box.height * 0.5f, interp);
@@ -1012,8 +1040,8 @@ static void PL_HandleInventory()
 	Window_getSize(window_size);
 	
 	vec2 window_scale;
-	window_scale[0] = ((float)window_size[0] / 1280.0);
-	window_scale[1] = ((float)window_size[1] / 720.0);
+	window_scale[0] = ((float)window_size[0] / LC_BASE_RESOLUTION_WIDTH);
+	window_scale[1] = ((float)window_size[1] / LC_BASE_RESOLUTION_HEIGHT);
 
 	const int NUM_X_TILES = 20;
 	const int NUM_Y_TILES = 5;
@@ -1076,12 +1104,12 @@ void PL_IssueDrawCmds()
 
 	if (inventory.is_opened)
 	{
-		LC_Draw_Inventory(inventory.inventory_blocks, &hotbar);
+		LC_Draw_Inventory(inventory.inventory_blocks, inventory.block_amounts, &hotbar);
 	}
 	else
 	{
 
-		LC_Draw_Hotbar(&hotbar);
+		LC_Draw_Hotbar(&hotbar, inventory.block_amounts);
 		LC_Draw_Crosshair();
 	}
 	if (player.k_body->in_water && player.k_body->water_level > 0)
@@ -1179,13 +1207,21 @@ void PL_Update()
 	if (player.alive_timer < 1)
 	{
 		//PL_spawnCorrect();
-		printf(" spawn corecting %f \n", player.alive_timer);
+		//printf(" spawn corecting %f \n", player.alive_timer);
 	}
+
+	//printf("%f \n", LC_CalculateSurfaceHeight(player.k_body->box.position[0], player.k_body->box.position[2], ));
 
 }
 
 void LC_Player_getPosition(vec3 dest)
 {
+	if (!player.k_body)
+	{
+		glm_vec3_zero(dest);
+		return;
+	}
+
 	dest[0] = player.k_body->box.position[0];
 	dest[1] = player.k_body->box.position[1];
 	dest[2] = player.k_body->box.position[2];

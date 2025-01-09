@@ -11,7 +11,7 @@
 #include "r_shader.h"
 #include "r_model.h"
 #include "core/cvar.h"
-#include "lc/lc_world.h"
+#include "lc/lc_world2.h"
 #include "utility/u_object_pool.h"
 #include "utility/BVH_Tree.h"
 #include "r_shader2.h"
@@ -261,7 +261,7 @@ typedef struct
 typedef struct
 {
 	bool draw;
-	WorldRenderData* world_render_data;
+	LC_WorldRenderData* world_render_data;
 
 	dynamic_array* shadow_firsts[4];
 	dynamic_array* shadow_counts[4];
@@ -586,14 +586,12 @@ typedef struct
 	//DOF
 	Cvar* r_DepthOfFieldMode; //0 == box, 1 == circular
 	Cvar* r_DepthOfFieldQuality;
-	Cvar* r_DepthOfFieldFar;
-	Cvar* r_DepthOfFieldNear;
 
 	//WATER
 	Cvar* r_waterReflectionQuality;
 
 	//DEBUG
-	Cvar* r_drawDebugTexture; //-1 disabled, 0 = Normal, 1 = Albedo, 2 = Depth, 3 = Metal, 4 = Rough, 5 = AO, 6 = BLOOM
+	Cvar* r_drawDebugTexture; //-1 disabled, 0 = Normal, 1 = Albedo, 2 = Depth, 3 = Metal, 4 = Rough, 5 = AO
 	Cvar* r_wireframe;
 	Cvar* r_drawPanel;
 } R_Cvars;
@@ -689,6 +687,17 @@ typedef struct
 	float godrayScatteringAmount;
 	float godrayFogAmount;
 
+	//DEPTH OF FIELD
+	bool depthOfFieldNearEnabled;
+	bool depthOfFieldFarEnabled;
+
+	float depthOfFieldNearBegin;
+	float depthOfFieldFarBegin;
+
+	float depthOfFieldNearEnd;
+	float depthOfFieldFarEnd;
+
+	float depthOfFieldBlurScale;
 } RScene_Environment;
 
 typedef enum

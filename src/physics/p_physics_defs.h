@@ -1,8 +1,8 @@
+#ifndef PHYSICS_DEFS_H
+#define PHYSICS_DEFS_H
 #pragma once
 
 #include "utility/u_math.h"
-#include "lc/lc_defs.h"
-#include "lc/lc_block_defs.h"
 
 #define MAX_BLOCK_CONTACTS 4
 
@@ -28,10 +28,7 @@ typedef struct Static_Body
 	int layer;
 	int aabb_tree_index;
 
-	LC_Entity* handle;
-
 	bool collidable;
-
 
 } Static_Body;
 
@@ -90,9 +87,9 @@ typedef struct Kinematic_Body
 	bool on_ground;
 	bool force_update_on_frame;
 
-	LC_Entity* handle;
 
 	Block_Contact block_contacts[MAX_BLOCK_CONTACTS];
 	Block_Contact ground_contact;
 
 } Kinematic_Body;
+#endif // !PHYSICS_DEFS_H

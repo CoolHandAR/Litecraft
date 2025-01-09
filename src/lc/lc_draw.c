@@ -8,8 +8,7 @@ Process all draw calls, UI drawing associated with the game
 #include <cglm/cglm.h>
 #include "lc_core.h"
 #include "core/resource_manager.h"
-#include "lc/lc_world.h"
-
+#include "lc/lc_world2.h"
 
 extern NK_Data nk;
 
@@ -121,10 +120,7 @@ void LC_Draw_WorldInfo(LC_World* const world, int corner)
 
 	nk_style_push_color(nk.ctx, &nk.ctx->style.text.color, nk_rgba(255, 255, 255, 255));
 	nk_layout_row_dynamic(nk.ctx, 15, 1);
-	nk_labelf(nk.ctx, NK_TEXT_ALIGN_LEFT, "Num Chunks: %i", (int)world->chunk_count);
-	nk_labelf(nk.ctx, NK_TEXT_ALIGN_LEFT, "Chunks Vertex Loaded: %i", (int)world->chunks_vertex_loaded);
-	nk_labelf(nk.ctx, NK_TEXT_ALIGN_LEFT, "Chunks In Frustrum: %i", (int)world->render_data.chunks_in_frustrum_count);
-	nk_labelf(nk.ctx, NK_TEXT_ALIGN_LEFT, "Total blocks: %u", world->total_num_blocks);
+
 	nk_style_pop_color(nk.ctx);
 	nk_style_pop_color(nk.ctx);
 
@@ -146,10 +142,10 @@ void LC_Draw_WaterOverlayScreenTexture(int water_level)
 }
 
 
-void LC_Draw_Hotbar(LC_Hotbar* const hotbar)
+void LC_Draw_Hotbar(LC_Hotbar* const hotbar, int block_amounts[LC_BT__MAX])
 {
-	float x_position = 640;
-	float y_position = 690;
+	float x_position = LC_BASE_RESOLUTION_WIDTH / 2.0;
+	float y_position = LC_BASE_RESOLUTION_HEIGHT - 35;
 	float scale = 2;
 	
 	R_Texture* gui_texture = Resource_get("assets/ui/gui_atlas.png", RESOURCE__TEXTURE);
@@ -187,16 +183,23 @@ void LC_Draw_Hotbar(LC_Hotbar* const hotbar)
 		texture_region.x = tex_data.top_face[0] * 16;
 		texture_region.y = -tex_data.top_face[1] * 16;
 
-		Draw_ScreenTexture(block_atlas_texture, &texture_region, (x_position - 160) + xPosOffset, y_position, scale, scale, 0);
+		float alpha = 0.2;
+
+		if (block_amounts[hotbar->blocks[i]] > 0)
+		{
+			alpha = 1.0;
+		}
+
+		Draw_ScreenTextureColored(block_atlas_texture, &texture_region, (x_position - 160) + xPosOffset, y_position, scale, scale, 0, 1, 1, 1, alpha);
 		xPosOffset += 20 * scale;
 	}
 
 }
 
-void LC_Draw_Inventory(LC_BlockType blocks[21][6], LC_Hotbar* const hotbar)
+void LC_Draw_Inventory(LC_BlockType blocks[21][6], int block_amounts[LC_BT__MAX], LC_Hotbar* const hotbar)
 {
-	float x_position = 640;
-	float y_position = 360;
+	float x_position = LC_BASE_RESOLUTION_WIDTH / 2.0;
+	float y_position = LC_BASE_RESOLUTION_HEIGHT - 360;
 
 	//Render inventory
 	Draw_ScreenTexture(Resource_get("assets/ui/new_inventory.png", RESOURCE__TEXTURE), NULL, x_position, y_position, 3, 3, 0);
@@ -236,7 +239,13 @@ void LC_Draw_Inventory(LC_BlockType blocks[21][6], LC_Hotbar* const hotbar)
 			texture_region.x = tex_data.top_face[0] * 16;
 			texture_region.y = -tex_data.top_face[1] * 16;
 			
-			Draw_ScreenTextureColored(block_atlas_texture, &texture_region, offseted_x, offseted_y, 3, 3, 0, 1, 1, 1, 1.0);
+			float alpha = 0.1;
+			if (block_amounts[blocks[x][y]] > 0)
+			{
+				alpha = 1.0;
+			}
+
+			Draw_ScreenTextureColored(block_atlas_texture, &texture_region, offseted_x, offseted_y, 3, 3, 0, 1, 1, 1, alpha);
 			
 		}
 	}
@@ -264,8 +273,8 @@ void LC_Draw_Inventory(LC_BlockType blocks[21][6], LC_Hotbar* const hotbar)
 void LC_Draw_Crosshair()
 {
 	vec2 center_point;
-	center_point[0] = 1280.0 / 2.0;
-	center_point[1] = 720.0 / 2.0;
+	center_point[0] = LC_BASE_RESOLUTION_WIDTH / 2.0;
+	center_point[1] = LC_BASE_RESOLUTION_HEIGHT / 2.0;
 	
 	R_Texture* crosshair_texture = Resource_get("assets/ui/crosshair.png", RESOURCE__TEXTURE);
 	Draw_ScreenTexture(crosshair_texture, NULL, center_point[0], center_point[1], 1.5, 2, 0);

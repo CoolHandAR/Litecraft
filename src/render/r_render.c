@@ -144,6 +144,11 @@ static void Render_OpaqueWorldChunks(bool p_TextureDraw, int mode)
     }
     size_t max_chunk_render_amount = scene.cull_data.lc_world.opaque_in_frustrum;
 
+    if (max_chunk_render_amount > 0)
+    {
+        max_chunk_render_amount += 20;
+    }
+
     if (p_TextureDraw)
     {
         glBindTextureUnit(0, drawData->lc_world.world_render_data->texture_atlas->id);
@@ -151,22 +156,30 @@ static void Render_OpaqueWorldChunks(bool p_TextureDraw, int mode)
         glBindTextureUnit(2, drawData->lc_world.world_render_data->texture_atlas_mer->id);
     }
     glBindVertexArray(drawData->lc_world.world_render_data->vao);
-    glBindBuffer(GL_ARRAY_BUFFER, drawData->lc_world.world_render_data->vertex_buffer.buffer);
-    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->draw_cmds_buffer.buffer);
-    glBindVertexBuffer(0, drawData->lc_world.world_render_data->vertex_buffer.buffer, 0, sizeof(ChunkVertex));
-    GLenum render_mode = (r_cvars.r_wireframe->int_value == 2) ? GL_LINES : GL_TRIANGLES;
+    glBindBuffer(GL_ARRAY_BUFFER, drawData->lc_world.world_render_data->opaque_buffer.buffer);
+    glBindVertexBuffer(0, drawData->lc_world.world_render_data->opaque_buffer.buffer, 0, sizeof(ChunkVertex));
       
     //Normal rendering
     if (mode == 0)
     {
+        GLenum render_mode = (r_cvars.r_wireframe->int_value == 2) ? GL_LINES : GL_TRIANGLES;
+
         int offset = 0;
         if (max_chunk_render_amount > 0)
         {
             glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_ATOMIC_COUNTER_BUFFER);
-            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->sorted_draw_cmds_buffer.buffer);
-            glBindBuffer(GL_PARAMETER_BUFFER, drawData->lc_world.world_render_data->draw_cmds_counters_buffers[0]);
+            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->draw_cmds_sorted_buffer);
+            glBindBuffer(GL_PARAMETER_BUFFER, drawData->lc_world.world_render_data->atomic_counters[0]);
 
             glMultiDrawArraysIndirectCount(render_mode, offset, 0, max_chunk_render_amount, 0);
+
+            //kinda hacky but works(only for debugging)
+            if (r_cvars.r_wireframe->int_value == 1)
+            {
+                glDisable(GL_DEPTH_TEST);
+                glMultiDrawArraysIndirectCount(GL_LINES, offset, 0, max_chunk_render_amount, 0);
+                glEnable(GL_DEPTH_TEST);
+            }
         }
        
     }
@@ -184,7 +197,7 @@ static void Render_OpaqueWorldChunks(bool p_TextureDraw, int mode)
         draw_count = scene.cull_data.lc_world.shadow_cull_count[shadow_split];
         if (draw_count > 0)
         {
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 35, drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo);
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 35, drawData->lc_world.world_render_data->visibles_sorted_buffer);
             glMultiDrawArrays(GL_TRIANGLES, first, count, draw_count);
         } 
     }
@@ -201,7 +214,7 @@ static void Render_OpaqueWorldChunks(bool p_TextureDraw, int mode)
             glBindTextureUnit(3, pass->ibl.envCubemapTexture);
             glBindTextureUnit(4, pass->ibl.brdfLutTexture);
 
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 35, drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo);
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 35, drawData->lc_world.world_render_data->visibles_sorted_buffer);
             glMultiDrawArrays(GL_TRIANGLES, first, count, draw_count);
         }
     }
@@ -223,20 +236,32 @@ static void Render_SemiTransparentWorldChunks(bool p_TextureDraw, int mode)
 
     size_t max_chunk_render_amount = scene.cull_data.lc_world.transparent_in_frustrum;
 
-    glBindVertexArray(drawData->lc_world.world_render_data->vao);
-    glBindBuffer(GL_ARRAY_BUFFER, drawData->lc_world.world_render_data->transparents_vertex_buffer.buffer);
-    glBindVertexBuffer(0, drawData->lc_world.world_render_data->transparents_vertex_buffer.buffer, 0, sizeof(ChunkVertex));
+    if (max_chunk_render_amount > 0)
+    {
+        max_chunk_render_amount += 20;
+    }
 
-    GLenum render_mode = (r_cvars.r_wireframe->int_value == 2) ? GL_LINES : GL_TRIANGLES;
+    glBindVertexArray(drawData->lc_world.world_render_data->vao);
+    glBindBuffer(GL_ARRAY_BUFFER, drawData->lc_world.world_render_data->semi_transparent_buffer.buffer);
+    glBindVertexBuffer(0, drawData->lc_world.world_render_data->semi_transparent_buffer.buffer, 0, sizeof(ChunkVertex));
 
     if (mode == 0)
     {   
+        GLenum render_mode = (r_cvars.r_wireframe->int_value == 2) ? GL_LINES : GL_TRIANGLES;
         if (max_chunk_render_amount > 0)
         {
             glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_ATOMIC_COUNTER_BUFFER | GL_SHADER_STORAGE_BARRIER_BIT);
-            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->sorted_draw_cmds_buffer.buffer);
-            glBindBuffer(GL_PARAMETER_BUFFER, drawData->lc_world.world_render_data->draw_cmds_counters_buffers[1]);
+            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->draw_cmds_sorted_buffer);
+            glBindBuffer(GL_PARAMETER_BUFFER, drawData->lc_world.world_render_data->atomic_counters[1]);
             glMultiDrawArraysIndirectCount(render_mode, sizeof(DrawArraysIndirectCommand) * 2000, 0, max_chunk_render_amount, 0);
+
+            //kinda hacky but works(only for debugging)
+            if (r_cvars.r_wireframe->int_value == 1)
+            {
+                glDisable(GL_DEPTH_TEST);
+                glMultiDrawArraysIndirectCount(GL_LINES, sizeof(DrawArraysIndirectCommand) * 2000, 0, max_chunk_render_amount, 0);
+                glEnable(GL_DEPTH_TEST);
+            }
         }
     }
     //Shadow rendering
@@ -254,7 +279,7 @@ static void Render_SemiTransparentWorldChunks(bool p_TextureDraw, int mode)
 
         if (draw_count > 0)
         {
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 35, drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo);
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 35, drawData->lc_world.world_render_data->visibles_sorted_buffer);
             glBindTextureUnit(0, drawData->lc_world.world_render_data->texture_atlas->id);
             glMultiDrawArrays(GL_TRIANGLES, first, count, draw_count);
         }
@@ -295,8 +320,7 @@ void Render_WorldWaterChunks()
     Shader_SetFloat(pass->lc.water_shader, "u_moveFactor", time);
 
     glBindTextureUnit(0, pass->ibl.envCubemapTexture);
-    glBindTextureUnit(1, drawData->lc_world.world_render_data->texture_dudv->id);
-    glBindTextureUnit(2, drawData->lc_world.world_render_data->water_normal_map->id);
+    glBindTextureUnit(1, drawData->lc_world.world_render_data->water_displacement_texture->id);
     glBindTextureUnit(3, pass->water.reflection_back_texture);
     glBindTextureUnit(4, pass->water.refraction_texture);
     glBindTextureUnit(5, pass->deferred.depth_texture);
@@ -306,10 +330,10 @@ void Render_WorldWaterChunks()
     glBindTextureUnit(9, drawData->lc_world.world_render_data->gradient_map->id);
 
     glBindVertexArray(drawData->lc_world.world_render_data->water_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, drawData->lc_world.world_render_data->water_vertex_buffer.buffer);
+    glBindBuffer(GL_ARRAY_BUFFER, drawData->lc_world.world_render_data->water_buffer.buffer);
 
-    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->sorted_draw_cmds_buffer.buffer);
-    glBindBuffer(GL_PARAMETER_BUFFER, drawData->lc_world.world_render_data->draw_cmds_counters_buffers[2]);
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->draw_cmds_sorted_buffer);
+    glBindBuffer(GL_PARAMETER_BUFFER, drawData->lc_world.world_render_data->atomic_counters[2]);
 
     if (max_chunk_render_amount > 0)
     {
@@ -319,15 +343,18 @@ void Render_WorldWaterChunks()
 
 void Render_DrawChunkOcclusionBoxes()
 {
-    if (drawData->lc_world.draw == false || !drawData->lc_world.world_render_data)
+    if (drawData->lc_world.draw == false || !drawData->lc_world.world_render_data || scene.cull_data.lc_world.total_in_frustrum_count <= 0)
     {
         return;
     }
 
+    glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_buffer, 0, sizeof(int) * scene.cull_data.lc_world.total_in_frustrum_count, scene.cull_data.lc_world.frustrum_sorted_query_buffer);
+    glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+
     glUseProgram(pass->lc.occlussion_boxes_shader);
 
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 15, drawData->lc_world.world_render_data->chunk_data.buffer);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 17, drawData->lc_world.world_render_data->visibles_sorted_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 15, drawData->lc_world.world_render_data->chunk_data_buffer.buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 17, drawData->lc_world.world_render_data->visibles_sorted_buffer);
 
     glBindVertexArray(resources.cubeVAO);
     glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 14, scene.cull_data.lc_world.total_in_frustrum_count);
@@ -358,15 +385,15 @@ static void Compute_WorldChunks()
     drawData->lc_world.world_render_data = LC_World_getRenderData();
 
     glUseProgram(pass->lc.chunk_process_shader);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 15, drawData->lc_world.world_render_data->chunk_data.buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 15, drawData->lc_world.world_render_data->chunk_data_buffer.buffer);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 16, drawData->lc_world.world_render_data->draw_cmds_buffer.buffer);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 17, drawData->lc_world.world_render_data->visibles_sorted_ssbo);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 19, drawData->lc_world.world_render_data->visibles_ssbo);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 20, drawData->lc_world.world_render_data->sorted_draw_cmds_buffer.buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 17, drawData->lc_world.world_render_data->visibles_sorted_buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 19, drawData->lc_world.world_render_data->visibles_buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 20, drawData->lc_world.world_render_data->draw_cmds_sorted_buffer);
 
     for (int i = 0; i < 3; i++)
     {
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 21 + i, drawData->lc_world.world_render_data->draw_cmds_counters_buffers[i]);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 21 + i, drawData->lc_world.world_render_data->atomic_counters[i]);
     }
 
 
@@ -467,14 +494,14 @@ void Render_OpaqueScene(RenderPassState rpass_state)
     }
     case RPass__REFLECTION_CLIP:
     {
-        glNamedBufferSubData(drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo, 0, sizeof(int) * drawData->lc_world.reflection_pass_chunk_indexes->elements_size,
+        glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_buffer, 0, sizeof(int) * drawData->lc_world.reflection_pass_chunk_indexes->elements_size,
             drawData->lc_world.reflection_pass_chunk_indexes->data);
 
         glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
 
         glUseProgram(pass->lc.clip_distance_shader);
         Shader_SetMatrix4(pass->lc.clip_distance_shader, "u_matrix", pass->water.reflection_projView_matrix);
-        Shader_SetFloat(pass->lc.clip_distance_shader, "u_clipDistance", -12);
+        Shader_SetFloat(pass->lc.clip_distance_shader, "u_clipDistance", -LC_WORLD_WATER_HEIGHT);
         Shader_SetInteger(pass->lc.clip_distance_shader, "u_dataOffset", 0);
 
         Render_OpaqueWorldChunks(true, 5);
@@ -612,7 +639,7 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
     }
     case RPass__REFLECTION_CLIP:
     {
-        glNamedBufferSubData(drawData->lc_world.world_render_data->shadow_chunk_indexes_ssbo, sizeof(int) * drawData->lc_world.reflection_pass_chunk_indexes->elements_size, 
+        glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_buffer, sizeof(int) * drawData->lc_world.reflection_pass_chunk_indexes->elements_size, 
             sizeof(int) * drawData->lc_world.reflection_pass_transparent_chunk_indexes->elements_size,
             drawData->lc_world.reflection_pass_transparent_chunk_indexes->data);
 
@@ -620,7 +647,7 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
 
         glUseProgram(pass->lc.clip_distance_shader);
         Shader_SetMatrix4(pass->lc.clip_distance_shader, "u_matrix", pass->water.reflection_projView_matrix);
-        Shader_SetFloat(pass->lc.clip_distance_shader, "u_clipDistance", -12);
+        Shader_SetFloat(pass->lc.clip_distance_shader, "u_clipDistance", -LC_WORLD_WATER_HEIGHT);
         Shader_SetInteger(pass->lc.clip_distance_shader, "u_dataOffset", drawData->lc_world.reflection_pass_chunk_indexes->elements_size);
 
         Render_SemiTransparentWorldChunks(true, 5);

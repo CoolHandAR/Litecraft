@@ -138,11 +138,11 @@ void main()
         {
             if(DRAWCMD.o_first > lc_world_data.opaque_update_offset)
             {
-                DRAWCMD.o_first += lc_world_data.opaque_update_move_by;
+               // DRAWCMD.o_first += lc_world_data.opaque_update_move_by;
             }
             else if(DRAWCMD.o_first == lc_world_data.opaque_update_offset && lc_world_data.skip_opaque_owner != index)
             {
-                DRAWCMD.o_count += lc_world_data.opaque_update_move_by;
+                //DRAWCMD.o_count += lc_world_data.opaque_update_move_by;
             }
         }
      }
@@ -152,11 +152,11 @@ void main()
         {
             if(DRAWCMD.t_first > lc_world_data.transparent_update_offset)
             {
-                DRAWCMD.t_first += lc_world_data.transparent_update_move_by;
+               // DRAWCMD.t_first += lc_world_data.transparent_update_move_by;
             }
             else if(DRAWCMD.t_first == lc_world_data.transparent_update_offset && lc_world_data.skip_transparent_owner != index)
             {
-                DRAWCMD.t_count += lc_world_data.transparent_update_move_by;
+               // DRAWCMD.t_count += lc_world_data.transparent_update_move_by;
             }
         }
      }
@@ -166,11 +166,11 @@ void main()
         {
             if(DRAWCMD.w_first > lc_world_data.water_update_offset)
             {
-                DRAWCMD.w_first += lc_world_data.water_update_move_by;
+               // DRAWCMD.w_first += lc_world_data.water_update_move_by;
             }
             else if(DRAWCMD.w_first == lc_world_data.water_update_offset && lc_world_data.skip_water_owner != index)
             {
-                DRAWCMD.w_count += lc_world_data.water_update_move_by;
+               // DRAWCMD.w_count += lc_world_data.water_update_move_by;
             }
         }
      }
@@ -180,7 +180,7 @@ void main()
     //Perform frustrum check
     if(in_frustrum == false)
     {
-        //not in frustrum
+       // not in frustrum
         CHUNK.vis_flags = 0; //reset vis flags
         return;
     }

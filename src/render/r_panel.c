@@ -116,7 +116,7 @@ void RPanel_Main()
 	{
 		Core_BlockInputThisFrame();
 	}
-
+	
 	if (nk_tree_push(nk.ctx, NK_TREE_NODE, "General", NK_MAXIMIZED))
 	{
 		if (nk_tree_push(nk.ctx, NK_TREE_NODE, "Window", NK_MINIMIZED))
@@ -140,8 +140,8 @@ void RPanel_Main()
 	if (nk_tree_push(nk.ctx, NK_TREE_NODE, "Debug", NK_MAXIMIZED))
 	{
 		//DEBUG TEXTURES
-		//-1 disabled, 0 = Normal, 1 = Albedo, 2 = Depth, 3 = Metal, 4 = Rough, 5 = AO, 6 = BLOOM
-		static const char* texture_items[] = { "Disabled", "Normal", "Albedo", "Depth", "Metallic", "Roughness", "SSAO", "Bloom"};
+		//-1 disabled, 0 = Normal, 1 = Albedo, 2 = Depth, 3 = Metal, 4 = Rough, 5 = AO
+		static const char* texture_items[] = { "Disabled", "Normal", "Albedo", "Depth", "Metallic", "Roughness", "SSAO"};
 		int selected_item = r_cvars.r_drawDebugTexture->int_value + 1;
 
 		nk_label(nk.ctx, "Draw texture", NK_TEXT_ALIGN_LEFT);
@@ -149,7 +149,7 @@ void RPanel_Main()
 		{
 			nk_layout_row_dynamic(nk.ctx, 25, 1);
 
-			for (int i = 0; i < 8; i++)
+			for (int i = 0; i < 7; i++)
 			{
 				if (nk_combo_item_label(nk.ctx, texture_items[i], NK_TEXT_LEFT))
 				{
@@ -180,12 +180,14 @@ void RPanel_Main()
 
 		nk_tree_pop(nk.ctx);
 	}
+	
+
 	if (nk_tree_push(nk.ctx, NK_TREE_NODE, "Shadows", NK_MINIMIZED))
 	{
 		if (nk_tree_push(nk.ctx, NK_TREE_NODE, "Directional shadows", NK_MINIMIZED))
 		{
 			RPanel_CvarCheckbox(r_cvars.r_useDirShadowMapping, "Enabled");
-			RPanel_CvarSliderf(r_cvars.r_shadowBias, "Bias", 0.0, 10.0, 0.01, 0.01);
+			RPanel_CvarSliderf(r_cvars.r_shadowBias, "#Bias", 0.0, 10.0, 0.01, 0.01);
 			RPanel_CvarSliderf(r_cvars.r_shadowNormalBias, "Normal Bias", 0.0, 10.0, 0.01, 0.01);
 
 			RPanel_CvarSlideri(r_cvars.r_shadowQualityLevel, "Quality", 0, r_cvars.r_shadowQualityLevel->max_value, 1, 1);
@@ -227,8 +229,38 @@ void RPanel_Main()
 		{
 			RPanel_CvarCheckbox(r_cvars.r_useDepthOfField, "Enabled");
 
-			static const char* DOF_MODES[2] = { "BOX", "CIRCULAR" };
-			RPanel_CvarDropdown(r_cvars.r_DepthOfFieldMode, DOF_MODES, "Mode", 2);
+			if (r_cvars.r_useDepthOfField->int_value)
+			{
+				static const char* DOF_MODES[2] = { "BOX", "CIRCULAR" };
+				RPanel_CvarDropdown(r_cvars.r_DepthOfFieldMode, DOF_MODES, "Mode", 2);
+
+				nk_layout_row_dynamic(nk.ctx, 25, 1);
+
+				scene.environment.depthOfFieldBlurScale = nk_propertyf(nk.ctx, "Blur Scale", 0.01, scene.environment.depthOfFieldBlurScale, 1.0, 0.01, 0.01);
+
+				int depth_of_field_near_enabled = !scene.environment.depthOfFieldNearEnabled;
+				if (nk_checkbox_label(nk.ctx, "Near Enabled", &depth_of_field_near_enabled))
+				{
+					scene.environment.depthOfFieldNearEnabled = !scene.environment.depthOfFieldNearEnabled;
+				}
+				if (scene.environment.depthOfFieldNearEnabled)
+				{
+					scene.environment.depthOfFieldNearBegin = nk_propertyf(nk.ctx, "Near begin", 0.01, scene.environment.depthOfFieldNearBegin, 1500, 0.1, 0.1);
+					scene.environment.depthOfFieldNearEnd = nk_propertyf(nk.ctx, "Near end", 0.01, scene.environment.depthOfFieldNearEnd, 1500, 0.1, 0.1);
+				}
+				int depth_of_field_far_enabled = !scene.environment.depthOfFieldFarEnabled;
+				if (nk_checkbox_label(nk.ctx, "Far Enabled", &depth_of_field_far_enabled))
+				{
+					scene.environment.depthOfFieldFarEnabled = !scene.environment.depthOfFieldFarEnabled;
+				}
+				if (scene.environment.depthOfFieldFarEnabled)
+				{
+					scene.environment.depthOfFieldFarBegin = nk_propertyf(nk.ctx, "Far begin", 0.01, scene.environment.depthOfFieldFarBegin, 1500, 0.1, 0.1);
+					scene.environment.depthOfFieldFarEnd = nk_propertyf(nk.ctx, "Far end", 0.01, scene.environment.depthOfFieldFarEnd, 1500, 0.1, 0.1);
+				}
+
+
+			}
 			
 			nk_tree_pop(nk.ctx);
 		}
@@ -275,57 +307,60 @@ void RPanel_Main()
 
 			nk_tree_pop(nk.ctx);
 		}
-
-
-
+		
 		if (nk_tree_push(nk.ctx, NK_TREE_NODE, "Fog", NK_MINIMIZED))
-		{
-			{	
-				int enabled = !scene.environment.heightFogEnabled;
+		{	
+			int height_fog_enabled = !scene.environment.heightFogEnabled;
+			nk_layout_row_dynamic(nk.ctx, 25, 1);
+			if (nk_checkbox_label(nk.ctx, "Height Fog Enabled", &height_fog_enabled))
+			{
+				scene.environment.heightFogEnabled = !scene.environment.heightFogEnabled;
+			}
+			if (!height_fog_enabled)
+			{
 				nk_layout_row_dynamic(nk.ctx, 25, 1);
-				if (nk_checkbox_label(nk.ctx, "Height Fog Enabled", &enabled))
-				{
-					scene.environment.heightFogEnabled = !scene.environment.heightFogEnabled;
-				}
+				scene.environment.heightFogDensity = nk_propertyf(nk.ctx, "Height fog density", 0.0, scene.environment.heightFogDensity, 1.0, 0.01, 0.001);
 
-				nk_layout_row_dynamic(nk.ctx, 25, 2);
-				nk_labelf_wrap(nk.ctx, "Height fog density %.2f", scene.environment.heightFogDensity);
-				nk_slider_float(nk.ctx, 0, &scene.environment.heightFogDensity, 1, 0.01);
-
-				nk_layout_row_dynamic(nk.ctx, 25, 2);
-				nk_labelf_wrap(nk.ctx, "Height fog min %.2f", scene.environment.heightFogMin);
-				nk_slider_float(nk.ctx, 0, &scene.environment.heightFogMin, 4000, 0.01);
-
-				nk_layout_row_dynamic(nk.ctx, 25, 2);
-				nk_labelf_wrap(nk.ctx, "Height fog max %.2f", scene.environment.heightFogMax);
-				nk_slider_float(nk.ctx, 0, &scene.environment.heightFogMax, 4000, 0.01);
-
-				nk_layout_row_dynamic(nk.ctx, 25, 2);
-				nk_labelf_wrap(nk.ctx, "Height fog curve %.2f", scene.environment.heightFogCurve);
-				nk_slider_float(nk.ctx, 0, &scene.environment.heightFogCurve, 24, 0.01);
-
-				int enabled2 = !scene.environment.depthFogEnabled;
 				nk_layout_row_dynamic(nk.ctx, 25, 1);
-				if (nk_checkbox_label(nk.ctx, "Depth Fog Enabled", &enabled2))
-				{
-					scene.environment.depthFogEnabled = !scene.environment.depthFogEnabled;
-				}
+				scene.environment.heightFogMin = nk_propertyf(nk.ctx, "Height fog min", -100000, scene.environment.heightFogMin, 100000, 0.1, 0.01);
 
-				nk_layout_row_dynamic(nk.ctx, 25, 2);
-				nk_labelf_wrap(nk.ctx, "Depth fog density %.2f", scene.environment.depthFogDensity);
-				nk_slider_float(nk.ctx, 0, &scene.environment.depthFogDensity, 1, 0.01);
+				nk_layout_row_dynamic(nk.ctx, 25, 1);
+				scene.environment.heightFogMax = nk_propertyf(nk.ctx, "Height fog max", -100000, scene.environment.heightFogMax, 100000, 0.1, 0.01);
 
-				nk_layout_row_dynamic(nk.ctx, 25, 2);
-				nk_labelf_wrap(nk.ctx, "Depth fog begin %.2f", scene.environment.depthFogBegin);
-				nk_slider_float(nk.ctx, 0, &scene.environment.depthFogBegin, 4000, 0.01);
+				nk_layout_row_dynamic(nk.ctx, 25, 1);
+				scene.environment.heightFogCurve = nk_propertyf(nk.ctx, "Height fog curve", 0.0, scene.environment.heightFogCurve, 24.0, 0.01, 0.001);
+			}
+			
+			int depth_fog_enabled = !scene.environment.depthFogEnabled;
+			nk_layout_row_dynamic(nk.ctx, 25, 1);
+			if (nk_checkbox_label(nk.ctx, "Depth Fog Enabled", &depth_fog_enabled))
+			{
+				scene.environment.depthFogEnabled = !scene.environment.depthFogEnabled;
+			}
 
-				nk_layout_row_dynamic(nk.ctx, 25, 2);
-				nk_labelf_wrap(nk.ctx, "Depth fog end %.2f", scene.environment.depthFogEnd);
-				nk_slider_float(nk.ctx, 0, &scene.environment.depthFogEnd, 4000, 0.01);
+			if (!depth_fog_enabled)
+			{
+				nk_layout_row_dynamic(nk.ctx, 25, 1);
+				scene.environment.depthFogDensity = nk_propertyf(nk.ctx, "Depth fog density", 0.0, scene.environment.depthFogDensity, 1.0, 0.01, 0.001);
 
-				nk_layout_row_dynamic(nk.ctx, 25, 2);
-				nk_labelf_wrap(nk.ctx, "Depth fog curve %.2f", scene.environment.depthFogCurve);
-				nk_slider_float(nk.ctx, 0, &scene.environment.depthFogCurve, 24, 0.01);
+				nk_layout_row_dynamic(nk.ctx, 25, 1);
+				scene.environment.depthFogBegin = nk_propertyf(nk.ctx, "Depth fog begin", -100000, scene.environment.depthFogBegin, 100000, 0.1, 0.01);
+
+				nk_layout_row_dynamic(nk.ctx, 25, 1);
+				scene.environment.depthFogEnd = nk_propertyf(nk.ctx, "Depth fog end", -100000, scene.environment.depthFogEnd, 100000, 0.1, 0.01);
+
+				nk_layout_row_dynamic(nk.ctx, 25, 1);
+				scene.environment.depthFogCurve = nk_propertyf(nk.ctx, "Depth fog curve", 0.0, scene.environment.depthFogCurve, 24.0, 0.01, 0.001);
+			}
+			
+			RPanel_CvarCheckbox(r_cvars.r_enableGodrays, "Godrays enabled");
+			if (r_cvars.r_enableGodrays->int_value)
+			{
+				nk_layout_row_dynamic(nk.ctx, 25, 1);
+				scene.environment.godrayScatteringAmount = nk_propertyf(nk.ctx, "Scattering amount", 0.0, scene.environment.godrayScatteringAmount, 0.99, 0.01, 0.001);
+
+				nk_layout_row_dynamic(nk.ctx, 25, 1);
+				scene.environment.godrayFogAmount = nk_propertyf(nk.ctx, "Fog curve", 0.0, scene.environment.godrayFogAmount, 24, 0.01, 0.001);
 			}
 
 			nk_tree_pop(nk.ctx);

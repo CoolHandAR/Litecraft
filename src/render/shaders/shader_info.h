@@ -232,10 +232,12 @@ typedef enum
 typedef enum 
 {
     DOF_UNIFORM_VIEWPORTSIZE,
+    DOF_UNIFORM_NEARBLURENABLED,
     DOF_UNIFORM_NEARBEGIN,
-    DOF_UNIFORM_NEARBLURSIZE,
+    DOF_UNIFORM_NEAREND,
+    DOF_UNIFORM_FARBLURENABLED,
     DOF_UNIFORM_FARBEGIN,
-    DOF_UNIFORM_FARBLURSIZE,
+    DOF_UNIFORM_FAREND,
     DOF_UNIFORM_BLUR_SIZE,
     DOF_UNIFORM_BLUR_SCALE,
     DOF_UNIFORM_BLUR_STEPS,
@@ -253,10 +255,12 @@ static const char* DOF_DEFINES_STR[] =
 static const char* DOF_UNIFORMS_STR[] = 
 {
     "u_viewportSize", 
+    "u_nearBlurEnabled", 
     "u_nearBegin", 
-    "u_nearBlurSize", 
+    "u_nearEnd", 
+    "u_farBlurEnabled", 
     "u_farBegin", 
-    "u_farBlurSize", 
+    "u_farEnd", 
     "u_blur_size", 
     "u_blur_scale", 
     "u_blur_steps", 
