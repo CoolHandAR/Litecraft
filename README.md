@@ -15,3 +15,11 @@ and lower vertex count. The current algorithm is pretty slow and needs improveme
 ## Assets
 Assets are not my own. Block assets are taken from https://minecraftrtx.net/ and composed into an atlas for albedo, normals and mer (metallic, emission, roughness).
 Other additional items like sounds and misc are sourced from https://mcasset.cloud/.
+
+## Building
+You need visual studio 2022 to build. You also need glfw3.lib which you can get from https://www.glfw.org/download.html. Place glfw3.lib in the lib folder,
+run build_vs2022.bat, go to build/Litecraft and run the solution. Build in either debug or release. Go to bin/release/ and run the exe. The asset should be
+copied automatically after building, if it doesn't copy it manually.
+
+##Use at your own risk
+There stil ton of bugs, so i don't take any responsability.
