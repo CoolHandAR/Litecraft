@@ -5,10 +5,13 @@ Start and ends the frame
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
 
-#include "r_core.h"
+#include "render/r_core.h"
 
 #include "core/input.h"
-#include "r_public.h"
+#include "render/r_public.h"
+
+#include "core/core_common.h"
+
 
 R_CMD_Buffer* cmdBuffer;
 RDraw_DrawData* drawData;
@@ -32,6 +35,7 @@ extern void RPanel_Metrics();
 Updates metrics and sets if we should skip this frame (if fps limit is on)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
+/*
 static void RCore_updateMetrics()
 {
 	backend_data->skip_frame = false;
@@ -66,6 +70,7 @@ static void RCore_updateMetrics()
 		}
 	}
 }
+*/
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Called on any window resize event. Updates textures sizes, etc...
@@ -133,8 +138,6 @@ void RCore_onWindowResize(int width, int height)
 
 		glBindTexture(GL_TEXTURE_2D, pass->bloom.mip_textures[i]);
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_R11F_G11F_B10F, mipWidth, mipHeight, 0, GL_RGB, GL_FLOAT, NULL);
-		glClearColor(0, 0, 0, 0);
-		glClear(GL_COLOR_BUFFER_BIT);
 		pass->bloom.mip_sizes[i][0] = mipWidth;
 		pass->bloom.mip_sizes[i][1] = mipHeight;
 	}
@@ -231,14 +234,6 @@ static void RCore_checkForModifiedCvars()
 		glfwSwapInterval(enabled);
 		r_cvars.w_useVsync->modified = false;
 	}
-	if (r_cvars.w_width->modified)
-	{
-		
-	}
-	if (r_cvars.w_height->modified)
-	{
-
-	}
 	if (r_cvars.r_useDepthOfField->modified || r_cvars.r_DepthOfFieldMode->modified)
 	{
 		RCore_onWindowResize(backend_data->screenSize[0], backend_data->screenSize[1]);
@@ -248,7 +243,6 @@ static void RCore_checkForModifiedCvars()
 	if (r_cvars.r_useSsao->modified || r_cvars.r_ssaoHalfSize->modified)
 	{
 		RCore_onWindowResize(backend_data->screenSize[0], backend_data->screenSize[1]);
-		RInternal_UpdateDeferredShadingShader(true);
 
 		r_cvars.r_useSsao->modified = false;
 		r_cvars.r_ssaoHalfSize->modified = false;
@@ -261,12 +255,6 @@ static void RCore_checkForModifiedCvars()
 		}
 
 		r_cvars.r_useBloom->modified = false;
-	}
-	if (r_cvars.r_useDirShadowMapping->modified)
-	{
-		RInternal_UpdateDeferredShadingShader(true);
-
-		r_cvars.r_useDirShadowMapping->modified = false;
 	}
 	if (r_cvars.cam_fov->modified || r_cvars.cam_zFar->modified || r_cvars.cam_zNear->modified)
 	{
@@ -299,23 +287,27 @@ static void RCore_checkForModifiedCvars()
 		pass->shadow.shadow_map_size = shadow_size;
 		r_cvars.r_shadowQualityLevel->modified = false;
 	}
-	if (r_cvars.r_shadowBlurLevel->modified)
+	if (r_cvars.r_shadowBlurLevel->modified || r_cvars.r_useSsao->modified || r_cvars.r_useDirShadowMapping->modified)
 	{
 		RInternal_GetShadowQualityData(r_cvars.r_shadowQualityLevel->int_value, r_cvars.r_shadowBlurLevel->int_value, NULL, pass->shadow.shadow_sample_kernels,
 			&pass->shadow.num_shadow_sample_kernels, &pass->shadow.quality_radius_scale);
 
-		RInternal_UpdateDeferredShadingShader(false);
+		Shader_SetDefine(&pass->deferred.shading_shader, DEFERRED_SCENE_DEFINE_USE_DIR_SHADOWS, r_cvars.r_useDirShadowMapping->int_value == 1);
+		Shader_SetDefine(&pass->deferred.shading_shader, DEFERRED_SCENE_DEFINE_USE_SSAO, r_cvars.r_useSsao->int_value == 1);
+
+		Shader_Use(&pass->deferred.shading_shader);
+
+		int loc = Shader_GetUniformLocation(&pass->deferred.shading_shader, DEFERRED_SCENE_UNIFORM_SHADOWSAMPLEKERNELS);
+
+		if (loc > -1)
+		{
+			glUniform2fv(loc, pass->shadow.num_shadow_sample_kernels, pass->shadow.shadow_sample_kernels);
+		}
+
+		Shader_SetFloaty(&pass->deferred.shading_shader, DEFERRED_SCENE_UNIFORM_SHADOWQUALITYRADIUS, pass->shadow.quality_radius_scale);
+		Shader_SetInt(&pass->deferred.shading_shader, DEFERRED_SCENE_UNIFORM_SHADOWSAMPLEAMOUNT, pass->shadow.num_shadow_sample_kernels);
 
 		r_cvars.r_shadowBlurLevel->modified = false;
-	}
-	if (r_cvars.r_bloomSoftThreshold->modified || r_cvars.r_bloomThreshold->modified)
-	{
-		glUseProgram(pass->general.downsample_shader);
-		Shader_SetFloat(pass->general.downsample_shader, "u_softThreshold", r_cvars.r_bloomSoftThreshold->float_value);
-		Shader_SetFloat(pass->general.downsample_shader, "u_threshold", r_cvars.r_bloomThreshold->float_value);
-
-		r_cvars.r_bloomSoftThreshold->modified = false;
-		r_cvars.r_bloomThreshold->modified = false;
 	}
 	if (r_cvars.r_waterReflectionQuality->modified)
 	{
@@ -395,7 +387,7 @@ static void RCore_UploadGpuData()
 			//drawData->lc_world.shadow_sorted_chunk_transparent_indexes->data);
 
 
-		glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_buffer, 0, sizeof(int) * 500, scene.cull_data.lc_world.frustrum_query_buffer);
+		//glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_buffer, 0, sizeof(int) * 500, scene.cull_data.lc_world.frustrum_query_buffer);
 	}
 
 	//Camera update
@@ -403,6 +395,8 @@ static void RCore_UploadGpuData()
 	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(RScene_CameraData), &scene.camera);
 
 	//Scene update
+	scene.scene_data.time += Core_getDeltaTime();
+
 	glBindBuffer(GL_UNIFORM_BUFFER, scene.scene_ubo);
 	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(RScene_UBOData), &scene.scene_data);
 
@@ -449,51 +443,6 @@ static void RCore_DrawUI()
 	//RPanel_Metrics();
 }
 
-static void r_waitForRenderThread()
-{
-	//wait till thread completes it's work
-	WaitForSingleObject(backend_data->thread.event_completed, INFINITE);
-}
-
-static void r_wakeRenderThread()
-{
-	SetEvent(backend_data->thread.event_work_permssion);
-
-	//wait till starts working
-	//WaitForSingleObject(backend_data->thread.event_active, INFINITE);
-}
-
-static void r_renderThreadSleep()
-{	
-	ResetEvent(backend_data->thread.event_active);
-
-	//signal that we have completed our work
-	SetEvent(backend_data->thread.event_completed);
-
-	//stall till we get permission to work from the main thread
-	WaitForSingleObject(backend_data->thread.event_work_permssion, INFINITE);
-	
-	//reset state
-	ResetEvent(backend_data->thread.event_completed);
-	ResetEvent(backend_data->thread.event_work_permssion);
-
-	SetEvent(backend_data->thread.event_active);
-}
-
-void r_threadLoop()
-{
-	while (true)
-	{
-		r_renderThreadSleep();
-
-		backend_data->thread.boolean_active = true;
-
-		RCmds_processCommands();
-
-		backend_data->thread.boolean_active = false;
-	}
-}
-
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Called in c_main.c. Called by the main thread
@@ -507,14 +456,29 @@ void RCore_Start()
 	//Render panel, metrics ui
 	RCore_DrawUI();
 
-	////Dispatch computes
-	Compute_DispatchAll();
+	if (drawData->lc_world.world_render_data)
+	{
+		glNamedBufferSubData(drawData->lc_world.world_render_data->prev_in_frustrum_bitset_buffer, 0, sizeof(int) * 500, scene.cull_data.lc_world.frustrum_query_buffer);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 13, drawData->lc_world.world_render_data->chunk_data_buffer.buffer);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 16, drawData->lc_world.world_render_data->visibles_sorted_buffer);
+	}
+	
 
 	//Process various renderer tasks
 	RCmds_processCommands();
 
+	if (drawData->lc_world.world_render_data)
+	{
+		glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_buffer, 0, sizeof(int) * scene.cull_data.lc_world.total_in_frustrum_count, scene.cull_data.lc_world.frustrum_sorted_query_buffer);
+		glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+	}
+	
+
+	////Dispatch computes
+	Compute_DispatchAll();
+
 	//Update backend stuff
-	RCore_updateMetrics();
+	//RCore_updateMetrics();
 	RCore_checkForModifiedCvars();
 }
 /*

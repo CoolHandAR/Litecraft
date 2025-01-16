@@ -2,11 +2,12 @@
 #include <GLFW/glfw3.h>
 
 #include "lc/lc_core.h"
+#include "lc/lc_world.h"
 #include "utility/u_math.h"
-#include "cvar.h"
-#include "input.h"
-#include "lc/lc_world2.h"
+#include "core/cvar.h"
+#include "core/input.h"
 #include "core/core_common.h"
+#include <Windows.h>
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -16,8 +17,6 @@ CORE ENGINE FUNCTIONS
 #define NUKLEAR_MAX_VERTEX_BUFFER 512 * 1024
 #define NUKLEAR_MAX_ELEMENT_BUFFER 128 * 1024
 
-#define NK_GLFW_GL3_IMPLEMENTATION
-#define NK_IMPLEMENTATION
 #include <nuklear/nuklear.h>
 #include <nuklear/nuklear_glfw_gl3.h>
 
@@ -58,13 +57,28 @@ typedef struct
 	bool phys_in_frame;
 } Core_EngineTiming;
 
+typedef struct
+{
+	Cvar* master_volume;
+} Core_Cvars;
+
 NK_Data nk;
 static Core_EngineTiming s_engineTiming;
+static Core_Cvars s_cvars;
 static bool s_blockedInput = false;
+
+static void Core_UpdateCvars()
+{
+	if (s_cvars.master_volume->modified)
+	{
+		Sound_setMasterVolume(s_cvars.master_volume->float_value);
+		s_cvars.master_volume->modified = false;
+	}
+}
 
 static void Core_CalcMainTimer()
 {
-	//inspired by godot's main tymer sync system https://github.com/godotengine/godot/blob/master/main/main_timer_sync.cpp#L414
+	//inspired/adapted by godot's main tymer sync system https://github.com/godotengine/godot/blob/master/main/main_timer_sync.cpp
 
 	double new_time = glfwGetTime();
 
@@ -298,9 +312,10 @@ static void Core_Loop()
 
 		/*
 		* ~~~~~~~~~~~~~~~~~~
-		*	DELTA TIMINGS UPDATE
+		*	CORE UPDATE
 		* ~~~~~~~~~~~~~~~~~~
 		*/
+		Core_UpdateCvars();
 		Core_CalcMainTimer();
 
 		/*
@@ -331,9 +346,7 @@ static void Core_Loop()
 		*	CORE GAME LOOP
 		* ~~~~~~~~~~~~~~~~~~
 		*/
-		//LC_Loop(s_engineTiming.delta_time);
 		LC_StartFrame();
-		//LC_World_StartFrame();
 	
 		/*
 		* ~~~~~~~~~~~~~~~~~~
@@ -377,8 +390,7 @@ static void Core_Loop()
 		* ~~~~~~~~~~~~~~~~~~
 		*/
 		LC_EndFrame();
-		//LC_World_EndFrame();
-		ThreadCore_ShutdownInactiveThreads();
+		//ThreadCore_ShutdownInactiveThreads();
 		s_engineTiming.ticks++;
 		s_engineTiming.frames_drawn++;
 		glfwPollEvents();
@@ -390,10 +402,18 @@ static void Core_Loop()
 int Core_entry()
 {
 	if (!Core_init()) return -1;
-	LC_Init();
+	if (!LC_Init())
+	{
+		MessageBox(NULL, (LPCWSTR)L"Failed to load assets.\nMake sure there is asset folder", (LPCWSTR)L"Failure to load!", MB_ICONWARNING);
+
+		return -1;
+	}
 
 	memset(&s_engineTiming, 0, sizeof(Core_EngineTiming));
-	
+	memset(&s_cvars, 0, sizeof(s_cvars));
+
+	s_cvars.master_volume = Cvar_Register("master_volume", "1", NULL, CVAR__SAVE_TO_FILE, 0, 24);
+
 	nk.enabled = true;
 
 	for (int i = CONTROL_STEPS - 1; i >= 0; --i) 
@@ -401,9 +421,15 @@ int Core_entry()
 		s_engineTiming.typical_physics_steps[i] = i;
 		s_engineTiming.accumulated_physics_steps[i] = i;
 	}
+	
+	//Load cvar file if it exists
+	Cvar_LoadAllFromFile("config.cfg");
 
 	//START CORE LOOP
 	Core_Loop();
+
+	//Save cvar
+	Cvar_PrintAllToFile("config.cfg");
 
 	//CLEAN UP
 	Core_Exit();

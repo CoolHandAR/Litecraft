@@ -1,10 +1,9 @@
-#include "r_camera.h"
+#include "render/r_camera.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <cglm/clipspace/persp_rh_zo.h>
-#include <cglm/clipspace/view_rh_zo.h>
+
 #include "utility/u_math.h"
 #include "core/core_common.h"
 

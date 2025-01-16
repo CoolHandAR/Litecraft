@@ -1,4 +1,7 @@
+#ifndef CVAR_H
+#define CVAR_H
 #pragma once
+
 #include <stdbool.h>
 
 typedef enum CvarFlags
@@ -45,3 +48,5 @@ void Cvar_ResetAllToDefault();
 bool Cvar_PrintAllToFile(const char* p_filePath);
 bool Cvar_LoadAllFromFile(const char* p_filePath);
 int Cvar_StartWith(const char* p_startsWith, Cvar* r_cvars[5]);
+
+#endif // !CVAR_H

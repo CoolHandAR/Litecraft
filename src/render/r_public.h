@@ -2,7 +2,9 @@
 #define R_PUBLIC_H
 #pragma once
 
-#include "r_model.h"
+#include "utility/dynamic_array.h"
+#include "utility/u_math.h"
+#include "render/r_texture.h"
 
 typedef int RenderInstanceID;
 typedef unsigned LightID;
@@ -83,8 +85,8 @@ void Draw_TexturedQuad(vec3 p_minMax[2], R_Texture* p_tex, M_Rect2Df* p_texRegio
 void Draw_Line(vec3 p_from, vec3 p_to, vec4 p_color);
 void Draw_Line2(float x1, float y1, float z1, float x2, float y2, float z2);
 void Draw_Triangle(vec3 p1, vec3 p2, vec3 p3, vec4 p_color);
-void Draw_Model(R_Model* const p_model, vec3 p_position);
-void Draw_ModelWires(R_Model* const p_model, vec3 p_position);
+//void Draw_Model(R_Model* const p_model, vec3 p_position);
+//void Draw_ModelWires(R_Model* const p_model, vec3 p_position);
 void Draw_LCWorld();
 
 /*

@@ -1,11 +1,13 @@
-#include "input.h"
+#include "core/input.h"
+
 #include <string.h>
 #include <GLFW/glfw3.h>
 #include <math.h>
-#include "core/core_common.h"
 #include <cJSON/cJSON.h>
-#include "utility/u_utility.h"
 #include <stdio.h>
+
+#include "utility/u_utility.h"
+#include "core/core_common.h"
 
 #define MAX_ACTIONS 128
 #define INPUT_HASH_SIZE 128
@@ -300,6 +302,8 @@ bool Input_Init()
 {
 	memset(&s_input_core, 0, sizeof(Input_Core));
 	s_input_core.index_count = 0;
+
+	return true;
 }
 
 bool Input_IsActionPressed(const char* p_name)

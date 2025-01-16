@@ -5,7 +5,7 @@ textures and etc...
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
 
-#include "r_core.h"
+#include "render/r_core.h"
 
 #include <stb_perlin/stb_perlin.h>
 #include <string.h>
@@ -14,8 +14,7 @@ textures and etc...
 #include <glad/glad.h>
 
 #include "core/input.h"
-#include "r_public.h"
-#include "shaders/shader_info.h"
+#include "render/r_public.h"
 
 
 extern R_CMD_Buffer* cmdBuffer;
@@ -26,8 +25,6 @@ extern R_Cvars r_cvars;
 extern R_StorageBuffers storage;
 extern R_Scene scene;
 extern R_RendererResources resources;
-
-extern void r_threadLoop();
 
 static float INIT_WIDTH = 1280;
 static float INIT_HEIGHT = 720;
@@ -40,53 +37,38 @@ static void CheckBoundFrameBufferStatus(const char* p_fboName)
     }
 }
 
-static void Init_SetupTextureArraySamplers(const char* p_arrName, R_Shader p_shader)
-{
-    glUseProgram(p_shader);
-    //set up samplers
-    GLint texture_array_location = glGetUniformLocation(p_shader, p_arrName);
-    int32_t samplers[32];
-
-    for (int i = 0; i < 32; i++)
-    {
-        samplers[i] = i;
-    }
-
-    glUniform1iv(texture_array_location, 32, samplers);
-}
-
 
 static void Init_registerCvars()
 {
-    r_cvars.r_multithread = Cvar_Register("r_multithread", "1", "Use multiple threads for rendering", CVAR__SAVE_TO_FILE, 0, 1);
-    r_cvars.r_limitFPS = Cvar_Register("r_limitFPS", "1", "Limit FPS with r_maxFPS", CVAR__SAVE_TO_FILE, 0, 1);
-    r_cvars.r_maxFPS = Cvar_Register("r_maxFPS", "144", NULL, CVAR__SAVE_TO_FILE, 30, 1000);
+   // r_cvars.r_multithread = Cvar_Register("r_multithread", "1", "Use multiple threads for rendering", CVAR__SAVE_TO_FILE, 0, 1);
+   // r_cvars.r_limitFPS = Cvar_Register("r_limitFPS", "1", "Limit FPS with r_maxFPS", CVAR__SAVE_TO_FILE, 0, 1);
+   // r_cvars.r_maxFPS = Cvar_Register("r_maxFPS", "144", NULL, CVAR__SAVE_TO_FILE, 30, 1000);
     r_cvars.r_useDirShadowMapping = Cvar_Register("r_useDirShadowMapping", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_drawSky = Cvar_Register("r_drawSky", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
 
     //EFFECTS
     r_cvars.r_useDepthOfField = Cvar_Register("r_useDepthOfField", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
-    r_cvars.r_useFxaa = Cvar_Register("r_useFxaa", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+    r_cvars.r_useFxaa = Cvar_Register("r_useFxaa", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_useBloom = Cvar_Register("r_useBloom", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
     r_cvars.r_useSsao = Cvar_Register("r_useSsao", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
-    r_cvars.r_bloomStrength = Cvar_Register("r_bloomStrength", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
-    r_cvars.r_bloomThreshold = Cvar_Register("r_bloomThreshold", "0", NULL, CVAR__SAVE_TO_FILE, 0, 12);
-    r_cvars.r_bloomSoftThreshold = Cvar_Register("r_bloomSoftThreshold", "0", NULL, CVAR__SAVE_TO_FILE, 0, 12);
+    r_cvars.r_bloomStrength = Cvar_Register("r_bloomStrength", "0.1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+    r_cvars.r_bloomThreshold = Cvar_Register("r_bloomThreshold", "4.0", NULL, CVAR__SAVE_TO_FILE, 0, 12);
+    r_cvars.r_bloomSoftThreshold = Cvar_Register("r_bloomSoftThreshold", "1.0", NULL, CVAR__SAVE_TO_FILE, 0, 12);
     r_cvars.r_ssaoBias = Cvar_Register("r_ssaoBias", "0.025", NULL, CVAR__SAVE_TO_FILE, 0, 1);
-    r_cvars.r_ssaoRadius = Cvar_Register("r_ssaoRadius", "0.6", NULL, CVAR__SAVE_TO_FILE, 0, 1);
-    r_cvars.r_ssaoStrength = Cvar_Register("r_ssaoStrength", "1", NULL, CVAR__SAVE_TO_FILE, 0, 8);
+    r_cvars.r_ssaoRadius = Cvar_Register("r_ssaoRadius", "0.4", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+    r_cvars.r_ssaoStrength = Cvar_Register("r_ssaoStrength", "3", NULL, CVAR__SAVE_TO_FILE, 0, 8);
     r_cvars.r_ssaoHalfSize = Cvar_Register("r_ssaoHalfSize", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
-    r_cvars.r_Exposure = Cvar_Register("r_Exposure", "1", NULL, CVAR__SAVE_TO_FILE, 0, 16);
-    r_cvars.r_Gamma = Cvar_Register("r_Gamma", "2.2", NULL, CVAR__SAVE_TO_FILE, 0, 3);
-    r_cvars.r_Brightness = Cvar_Register("r_Brightness", "1", NULL, CVAR__SAVE_TO_FILE, 0.01, 8);
-    r_cvars.r_Contrast = Cvar_Register("r_Contrast", "1", NULL, CVAR__SAVE_TO_FILE, 0.01, 8);
-    r_cvars.r_Saturation = Cvar_Register("r_Saturation", "1", NULL, CVAR__SAVE_TO_FILE, 0.01, 8);
+    r_cvars.r_Exposure = Cvar_Register("r_Exposure", "1.2", NULL, CVAR__SAVE_TO_FILE, 0, 16);
+    r_cvars.r_Gamma = Cvar_Register("r_Gamma", "2.0", NULL, CVAR__SAVE_TO_FILE, 0, 3);
+    r_cvars.r_Brightness = Cvar_Register("r_Brightness", "1.1", NULL, CVAR__SAVE_TO_FILE, 0.01, 8);
+    r_cvars.r_Contrast = Cvar_Register("r_Contrast", "1.05", NULL, CVAR__SAVE_TO_FILE, 0.01, 8);
+    r_cvars.r_Saturation = Cvar_Register("r_Saturation", "1.05", NULL, CVAR__SAVE_TO_FILE, 0.01, 8);
     r_cvars.r_TonemapMode = Cvar_Register("r_TonemapMode", "1", NULL, CVAR__SAVE_TO_FILE, 0, 2);
     r_cvars.r_enableGodrays = Cvar_Register("r_enableGodrays", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
   
     //WINDOW SPECIFIC
-    r_cvars.w_width = Cvar_Register("w_width", "1024", "Window width", CVAR__SAVE_TO_FILE, 480, 4048);
-    r_cvars.w_height = Cvar_Register("w_heigth", "720", "Window heigth", CVAR__SAVE_TO_FILE, 480, 4048);
+  //  r_cvars.w_width = Cvar_Register("w_width", "1024", "Window width", CVAR__SAVE_TO_FILE, 480, 4048);
+   // r_cvars.w_height = Cvar_Register("w_heigth", "720", "Window heigth", CVAR__SAVE_TO_FILE, 480, 4048);
     r_cvars.w_useVsync = Cvar_Register("w_useVsync", "1", "Use vsync", CVAR__SAVE_TO_FILE, 0, 1);
 
     //CAMERA SPECIFIC
@@ -112,14 +94,14 @@ static void Init_registerCvars()
     r_cvars.r_waterReflectionQuality = Cvar_Register("r_waterReflectionQuality", "1", NULL, CVAR__SAVE_TO_FILE, 0, 2);
 
     //DEBUG
-    r_cvars.r_drawDebugTexture = Cvar_Register("r_drawDebugTexture", "-1", NULL, CVAR__SAVE_TO_FILE, -1, 5);
-    r_cvars.r_wireframe = Cvar_Register("r_wireframe", "0", NULL, CVAR__SAVE_TO_FILE, 0, 2);
-    r_cvars.r_drawPanel = Cvar_Register("r_drawPanel", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+    r_cvars.r_drawDebugTexture = Cvar_Register("r_drawDebugTexture", "-1", NULL, 0, -1, 5);
+    r_cvars.r_wireframe = Cvar_Register("r_wireframe", "0", NULL, 0, 0, 2);
+    r_cvars.r_drawPanel = Cvar_Register("r_drawPanel", "0", NULL, 0, 0, 1);
 }
 
 static void Init_ScreenQuadDrawData()
 {
-	drawData->screen_quad.shader = Shader_CompileFromFile("src/render/shaders/screen/screen_shader.vert", "src/render/shaders/screen/screen_shader.frag", NULL);
+    glm_ortho(0.0f, 1280, 720, 0.0f, -1.0f, 1.0f, drawData->screen_quad.ortho);
 
     drawData->screen_quad.tex_index = 0;
 
@@ -186,29 +168,13 @@ static void Init_ScreenQuadDrawData()
 
     //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &color_White);
 
-    glUseProgram(drawData->screen_quad.shader);
 
-    //set up samplers
-    for (int i = 0; i < 32; i++)
-    {
-        char buf[256];
-        memset(buf, 0, sizeof(buf));
 
-        sprintf(buf, "u_textures[%i]", i);
-
-        Shader_SetInteger(drawData->screen_quad.shader, buf, i);
-    }
-
-    //glBindTextureUnit(0, drawData->screen_quad.white_texture);
-
-  //  drawData->screen_quad.tex_array[0] = drawData->screen_quad.white_texture;
 }
 
 static void Init_TextDrawData()
 {
     RDraw_TextData* data = &drawData->text;
-
-    data->shader = Shader_CompileFromFile("src/shaders/screen_shader.vs", "src/shaders/screen_shader.fs", NULL);
 
     glGenVertexArrays(1, &data->vao);
     glGenBuffers(1, &data->vbo);
@@ -261,19 +227,6 @@ static void Init_TextDrawData()
     glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(TextVertex), (void*)(offsetof(TextVertex, tex_index)));
     glEnableVertexAttribArray(4);
 
-   
-    glUseProgram(data->shader);
-
-    //set up samplers
-    GLint texture_array_location = glGetUniformLocation(data->shader, "u_textures");
-    int32_t samplers[32];
-
-    for (int i = 0; i < 32; i++)
-    {
-        samplers[i] = i;
-    }
-
-    glUniform1iv(texture_array_location, 32, samplers);
 }
 
 static void Init_LineDrawData()
@@ -291,12 +244,6 @@ static void Init_LineDrawData()
     glVertexAttribIPointer(2, 4, GL_UNSIGNED_BYTE, sizeof(BasicVertex), (void*)(offsetof(BasicVertex, color)));
     glEnableVertexAttribArray(2);
 
-    const char* DEFINES[2] =
-    {
-        "COLOR_ATTRIB",
-        "COLOR_8BIT"
-    };
-    drawData->lines.shader = Shader_CompileFromFileDefine("src/render/shaders/scene_3d.vert", "src/render/shaders/scene_3d_forward.frag", NULL, DEFINES, 2);
 }
 
 static void Init_TriangleDrawData()
@@ -420,76 +367,10 @@ static void Init_CubeDrawData()
 
     drawData->cube.vertices_buffer = dA_INIT(float, 1);
     
-    //Compile shader
-    const char* SHADER_DEFINES[6] =
-    {
-        "TEXCOORD_ATTRIB",
-        "INSTANCE_MAT3",
-        "INSTANCE_UV",
-        "INSTANCE_COLOR",
-        "INSTANCE_CUSTOM",
-        "USE_TEXTURE_ARR"
-    };
-   // drawData->cube.shader = Shader_CompileFromFile("src/render/shaders/instance_3d.vert", "src/render/shaders/instance_3d.frag", NULL);
-    drawData->cube.shader = Shader_CompileFromFileDefine("src/render/shaders/scene_3d.vert", "src/render/shaders/scene_3d_forward.frag", NULL, SHADER_DEFINES, 6);
-
-    Init_SetupTextureArraySamplers("texture_arr", drawData->cube.shader);
 }
 
 static void Init_ParticleDrawData()
 {
-    const char* DEFINES[7] =
-    {
-        "TEXCOORD_ATTRIB",
-        "NORMAL_ATTRIB",
-        "INSTANCE_MAT3",
-        "INSTANCE_UV",
-        "INSTANCE_COLOR",
-        "INSTANCE_CUSTOM",
-        "USE_TEXTURE_ARR",
-    };
-    drawData->particles.particle_render_shader = Shader_CompileFromFileDefine("src/render/shaders/scene_3d.vert", "src/render/shaders/scene_3d_forward.frag", NULL, DEFINES, 7);
-
-    const char* SHADOW_DEFINES[9] =
-    {
-        "TEXCOORD_ATTRIB",
-        "INSTANCE_MAT3",
-        "INSTANCE_UV",
-        "INSTANCE_CUSTOM",
-        "USE_UNIFORM_CAMERA_MATRIX",
-        "SEMI_TRANSPARENT_PASS",
-        "USE_TEXTURE_ARR",
-        "RENDER_DEPTH",
-        "BILLBOARD_SHADOWS"
-    };
-    drawData->particles.particle_shadow_map_shader = Shader_CompileFromFileDefine("src/render/shaders/scene_3d.vert", "src/render/shaders/scene_3d_depth.frag", NULL, SHADOW_DEFINES, 9);
-
-    const char* PREPASS_DEFINES[7] =
-    {
-        "TEXCOORD_ATTRIB",
-        "SEMI_TRANSPARENT_PASS",
-        "INSTANCE_MAT3",
-        "INSTANCE_UV",
-        "INSTANCE_CUSTOM",
-        "USE_TEXTURE_ARR",
-        "RENDER_DEPTH",
-    };
-
-    drawData->particles.particle_depthPrepass_shader = Shader_CompileFromFileDefine("src/render/shaders/scene_3d.vert", "src/render/shaders/scene_3d_depth.frag", NULL, PREPASS_DEFINES, 7);
-
-    const char* GBUFFER_DEFINES[7] =
-    {
-        "TEXCOORD_ATTRIB",
-        "NORMAL_ATTRIB",
-        "INSTANCE_MAT3",
-        "INSTANCE_UV",
-        "INSTANCE_COLOR",
-        "INSTANCE_CUSTOM",
-        "USE_TEXTURE_ARR",
-    };
-
-    drawData->particles.particle_gBuffer_shader = Shader_CompileFromFileDefine("src/render/shaders/scene_3d.vert", "src/render/shaders/scene_3d_deferred.frag", NULL, GBUFFER_DEFINES, 7);
-
     drawData->particles.instance_buffer = dA_INIT(float, 0);
     
     const float quad_vertices[] =
@@ -551,12 +432,6 @@ static void Init_ParticleDrawData()
     glEnableVertexAttribArray(12);
     glVertexAttribDivisor(12, 1);
 
-#ifndef USE_BINDLESS_TEXTURES
-    Init_SetupTextureArraySamplers("texture_arr", drawData->particles.particle_render_shader);
-    Init_SetupTextureArraySamplers("texture_arr", drawData->particles.particle_shadow_map_shader);
-    Init_SetupTextureArraySamplers("texture_arr", drawData->particles.particle_gBuffer_shader);
-    Init_SetupTextureArraySamplers("texture_arr", drawData->particles.particle_depthPrepass_shader);
-#endif
 }
 
 static void Init_DrawData()
@@ -569,15 +444,11 @@ static void Init_DrawData()
 }
 
 
-static void Init_GeneralPassData()
+static bool Init_GeneralPassData()
 {
-    pass->general.box_blur_shader = ComputeShader_CompileFromFile("src/render/shaders/screen/box_blur.comp");
-    pass->general.downsample_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/downsample.frag", NULL);
-    pass->general.upsample_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/upsample.frag", NULL);
-    pass->general.copy_shader = ComputeShader_CompileFromFile("src/render/shaders/screen/copy.comp");
-
     bool result;
-   // pass->general.sample_shader = Shader_ComputeCreate("src/render/shaders/screen/sample.comp", SAMPLE_DEFINE_MAX, SAMPLE_UNIFORM_MAX, 2, SAMPLE_DEFINES_STR, SAMPLE_UNIFORMS_STR, SAMPLE_TEXTURES_STR, &result);
+    
+    pass->general.blur_shader = Shader_ComputeCreate("assets/shaders/screen/box_blur.comp", 0, BOX_BLUR_UNIFORM_MAX, 1, NULL, BOX_BLUR_UNIFORMS_STR, BOX_BLUR_TEXTURES_STR, &result);
 
     glGenFramebuffers(1, &pass->general.halfsize_fbo);
     glGenTextures(1, &pass->general.depth_halfsize_texture);
@@ -608,25 +479,22 @@ static void Init_GeneralPassData()
 
     pass->general.perlin_noise_texture = noise.id;
     
+    return result;
 }
 
-static void Init_PostProcessData()
+static bool Init_PostProcessData()
 {
     bool result;
-    pass->post.post_process_shader = Shader_PixelCreate("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/post_process.frag", POST_PROCESS_DEFINE_MAX, POST_PROCESS_UNIFORM_MAX
+    pass->post.post_process_shader = Shader_PixelCreate("assets/shaders/screen/base_screen.vert", "assets/shaders/screen/post_process.frag", POST_PROCESS_DEFINE_MAX, POST_PROCESS_UNIFORM_MAX
         , 4, POST_PROCESS_DEFINES_STR, POST_PROCESS_UNIFORMS_STR, POST_PROCESS_TEXTURES_STR, &result);
 
-    pass->post.debug_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/debug_screen.frag", NULL);
+    bool result2;
+    pass->post.debug_shader = Shader_PixelCreate("assets/shaders/screen/base_screen.vert", "assets/shaders/screen/debug_screen.frag", 0, DEBUG_SCREEN_UNIFORM_MAX, 5, NULL, DEBUG_SCREEN_UNIFORMS_STR, DEBUG_SCREEN_TEXTURES_STR, &result2);
 
-    glUseProgram(pass->post.debug_shader);
-    Shader_SetInteger(pass->post.debug_shader, "NormalMetalTexture", 0);
-    Shader_SetInteger(pass->post.debug_shader, "AlbedoRoughTexture", 1);
-    Shader_SetInteger(pass->post.debug_shader, "DepthTexture", 2);
-    Shader_SetInteger(pass->post.debug_shader, "AOTexture", 3);
-    Shader_SetInteger(pass->post.debug_shader, "BloomTexture", 4);
+    return result && result2;
 }
 
-static void Init_LCSpecificData()
+static bool Init_LCSpecificData()
 {
     for (int i = 0; i < 4; i++)
     {
@@ -648,79 +516,27 @@ static void Init_LCSpecificData()
     drawData->lc_world.reflection_pass_chunk_indexes = dA_INIT(int, 0);
     drawData->lc_world.reflection_pass_transparent_chunk_indexes = dA_INIT(int, 0);
 
-    const char* define[1] = { "SEMI_TRANSPARENT" };
 
-    pass->lc.depthPrepass_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_depth.vert", "src/render/shaders/lc_world/lc_depth.frag", NULL);
-    pass->lc.gBuffer_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_g_buffer.vert", "src/render/shaders/lc_world/lc_g_buffer.frag", NULL);
-    pass->lc.shadow_map_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_shadow_map.vert", "src/render/shaders/lc_world/lc_depth.frag", NULL);
-    pass->lc.transparents_forward_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_transparent_forward.vert", "src/render/shaders/lc_world/lc_transparent_forward.frag", NULL);
-    pass->lc.chunk_process_shader = ComputeShader_CompileFromFile("src/render/shaders/lc_world/chunk_process.comp");
-    pass->lc.occlussion_boxes_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_occlusion_boxes.vert", "src/render/shaders/lc_world/lc_occlusion_boxes.frag", NULL);
-    pass->lc.transparents_shadow_map_shader = Shader_CompileFromFileDefine("src/render/shaders/lc_world/lc_shadow_map.vert", "src/render/shaders/lc_world/lc_depth.frag", NULL, define, 1);
-    pass->lc.transparents_gBuffer_shader = Shader_CompileFromFileDefine("src/render/shaders/lc_world/lc_g_buffer.vert", "src/render/shaders/lc_world/lc_g_buffer.frag", NULL, define, 1);
-    pass->lc.depthPrepass_semi_transparents_shader = Shader_CompileFromFileDefine("src/render/shaders/lc_world/lc_depth.vert", "src/render/shaders/lc_world/lc_depth.frag", NULL, define, 1);
-    pass->lc.water_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_water.vert", "src/render/shaders/lc_world/lc_water.frag", NULL);
-    pass->lc.clip_distance_shader = Shader_CompileFromFile("src/render/shaders/lc_world/lc_clipped.vert", "src/render/shaders/lc_world/lc_clipped.frag", NULL);
+    bool result = false;
+    pass->lc.world_shader = Shader_PixelCreate("assets/shaders/lc_world/lc_world.vert", "assets/shaders/lc_world/lc_world.frag", LC_WORLD_DEFINE_MAX, LC_WORLD_UNIFORM_MAX, 6, LC_WORLD_DEFINES_STR, LC_WORLD_UNIFORMS_STR, LC_WORLD_TEXTURES_STR, &result);
+    
+    bool result2 = false;
+    pass->lc.occlusion_box_shader = Shader_PixelCreate("assets/shaders/lc_world/lc_occlusion_boxes.vert", "assets/shaders/lc_world/lc_occlusion_boxes.frag", 0, 0, 0, NULL, NULL, NULL, &result2);
 
-    //SETUP SHADER UNIFORMS
-    glUseProgram(pass->lc.gBuffer_shader);
-    Shader_SetInteger(pass->lc.gBuffer_shader, "texture_atlas", 0);
-    Shader_SetInteger(pass->lc.gBuffer_shader, "texture_atlas_normal", 1);
-    Shader_SetInteger(pass->lc.gBuffer_shader, "texture_atlas_mer", 2);
+    bool result3 = false;
+    pass->lc.water_shader = Shader_PixelCreate("assets/shaders/lc_world/lc_water.vert", "assets/shaders/lc_world/lc_water.frag", 0, 0, 6, NULL, NULL, LC_WATER_TEXTURES_STR, &result3);
 
-    glUseProgram(pass->lc.transparents_gBuffer_shader);
-    Shader_SetInteger(pass->lc.transparents_gBuffer_shader, "texture_atlas", 0);
-    Shader_SetInteger(pass->lc.transparents_gBuffer_shader, "texture_atlas_normal", 1);
-    Shader_SetInteger(pass->lc.transparents_gBuffer_shader, "texture_atlas_mer", 2);
+    bool result4 = false;
+    pass->lc.process_chunks_shader = Shader_ComputeCreate("assets/shaders/lc_world/process_chunks.comp", 0, 0, 0, NULL, NULL, NULL, &result4);
 
-    glUseProgram(pass->lc.transparents_forward_shader);
-    Shader_SetInteger(pass->lc.transparents_forward_shader, "texture_atlas", 0);
-    Shader_SetInteger(pass->lc.transparents_forward_shader, "texture_atlas_normal", 1);
-    Shader_SetInteger(pass->lc.transparents_forward_shader, "texture_atlas_mer", 2);
-
-    Shader_SetInteger(pass->lc.transparents_forward_shader, "brdfLUT", 3);
-    Shader_SetInteger(pass->lc.transparents_forward_shader, "irradianceMap", 4);
-    Shader_SetInteger(pass->lc.transparents_forward_shader, "preFilterMap", 5);
-
-    Shader_SetInteger(pass->lc.transparents_forward_shader, "momentMaps", 6);
-    Shader_SetInteger(pass->lc.transparents_forward_shader, "shadowMapsDepth", 7);
-
-    glUseProgram(pass->lc.transparents_shadow_map_shader);
-    Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "texture_atlas", 0);
-
-    glUseProgram(pass->lc.depthPrepass_semi_transparents_shader);
-    Shader_SetInteger(pass->lc.depthPrepass_semi_transparents_shader, "texture_atlas", 0);
-
-    glUseProgram(pass->lc.water_shader);
-    Shader_SetInteger(pass->lc.water_shader, "skybox_texture", 0);
-    Shader_SetInteger(pass->lc.water_shader, "dudv_map", 1);
-    Shader_SetInteger(pass->lc.water_shader, "normal_map", 2);
-    Shader_SetInteger(pass->lc.water_shader, "reflection_texture", 3);
-    Shader_SetInteger(pass->lc.water_shader, "refraction_texture", 4);
-    Shader_SetInteger(pass->lc.water_shader, "refraction_depth", 5);
-    Shader_SetInteger(pass->lc.water_shader, "displacement_map", 6);
-    Shader_SetInteger(pass->lc.water_shader, "noise_1_texture", 7);
-    Shader_SetInteger(pass->lc.water_shader, "noise_2_texture", 8);
-    Shader_SetInteger(pass->lc.water_shader, "gradient_map", 9);
-
-    glUseProgram(pass->lc.clip_distance_shader);
-    Shader_SetInteger(pass->lc.clip_distance_shader, "texture_atlas", 0);
-    Shader_SetInteger(pass->lc.clip_distance_shader, "texture_atlas_mer", 1);
-    Shader_SetInteger(pass->lc.clip_distance_shader, "irradianceMap", 2);
-    Shader_SetInteger(pass->lc.clip_distance_shader, "preFilterMap", 3);
-    Shader_SetInteger(pass->lc.clip_distance_shader, "brdfLUT", 4);
+    return result && result2 && result3 && result4;
 }
 
-static void Init_DeferredData()
+static bool Init_DeferredData()
 {
-    //SETUP SHADERS
-    pass->deferred.depthPrepass_shader = 0;
-    //assert(pass->deferred.depthPrepass_shader > 0);
-
-    pass->deferred.gBuffer_shader = 0;
-   // assert(pass->deferred.gBuffer_shader > 0);
-    
-    RInternal_UpdateDeferredShadingShader(true);
+    bool result;
+    pass->deferred.shading_shader = Shader_PixelCreate("assets/shaders/screen/base_screen.vert", "assets/shaders/screen/deferred_scene.frag", DEFERRED_SCENE_DEFINE_MAX, DEFERRED_SCENE_UNIFORM_MAX, 9, 
+        DEFERRED_SCENE_DEFINES_STR, DEFERRED_SCENE_UNIFORMS_STR, DEFERRED_SCENE_TEXTURES_STR, &result);
 
     //SETUP FRAMEBUFFER AND TEXTURES
     glGenFramebuffers(1, &pass->deferred.FBO);
@@ -770,17 +586,22 @@ static void Init_DeferredData()
     CheckBoundFrameBufferStatus("Deferred");
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    return result;
 }
 
-static void Init_MainSceneData()
+static bool Init_MainSceneData()
 {
     assert(pass->deferred.depth_texture > 0 && "Init deferred first");
+    
+    bool result;
+    pass->scene.shader_3d_forward = Shader_PixelCreate("assets/shaders/scene_3d.vert", "assets/shaders/scene_3d_forward.frag", SCENE_3D_DEFINE_MAX, SCENE_3D_UNIFORM_MAX, 2, SCENE_3D_DEFINES_STR, SCENE_3D_UNIFORMS_STR, SCENE_3D_TEXTURES_STR, &result);
 
-    //Shaders
-    pass->scene.skybox_shader = Shader_CompileFromFile("src/render/shaders/skybox.vert", "src/render/shaders/skybox.frag", NULL);
+    bool result2;
+    pass->scene.shader_3d_deferred = Shader_PixelCreate("assets/shaders/scene_3d.vert", "assets/shaders/scene_3d_deferred.frag", SCENE_3D_DEFINE_MAX, SCENE_3D_UNIFORM_MAX, 2, SCENE_3D_DEFINES_STR, SCENE_3D_UNIFORMS_STR, SCENE_3D_TEXTURES_STR, &result2);
 
-    glUseProgram(pass->scene.skybox_shader);
-    Shader_SetInteger(pass->scene.skybox_shader, "skybox_texture", 0);
+    bool result3;
+    pass->scene.screen_shader = Shader_PixelCreate("assets/shaders/screen/screen_shader.vert", "assets/shaders/screen/screen_shader.frag", 0, SCREEN_SHADER_UNIFORM_MAX, 1, NULL, SCREEN_SHADER_UNIFORMS_STR, SCREEN_SHADER_TEXTURES_STR, &result3);
 
     glGenFramebuffers(1, &pass->scene.FBO);
 
@@ -806,13 +627,15 @@ static void Init_MainSceneData()
     CheckBoundFrameBufferStatus("Main scene");
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    return result && result2 && result3;
 }
 
-static void Init_AoData()
+static bool Init_AoData()
 {
     //SETUP SHADER
     bool result;
-    pass->ao.shader = Shader_ComputeCreate("src/render/shaders/screen/ssao.comp", SSAO_DEFINE_MAX, SSAO_UNIFORM_MAX, 7, SSAO_DEFINES_STR, SSAO_UNIFORMS_STR, SSAO_TEXTURES_STR, &result);
+    pass->ao.shader = Shader_ComputeCreate("assets/shaders/screen/ssao.comp", SSAO_DEFINE_MAX, SSAO_UNIFORM_MAX, 7, SSAO_DEFINES_STR, SSAO_UNIFORMS_STR, SSAO_TEXTURES_STR, &result);
 
     //SETUP TEXTURES 
     glGenTextures(1, &pass->ao.ao_texture);
@@ -853,10 +676,15 @@ static void Init_AoData()
     glSamplerParameteri(pass->ao.linear_sampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glSamplerParameteri(pass->ao.linear_sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glSamplerParameteri(pass->ao.linear_sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    return result;
 }
 
-static void Init_BloomData()
+static bool Init_BloomData()
 {
+    bool result;
+    pass->bloom.shader = Shader_PixelCreate("assets/shaders/screen/base_screen.vert", "assets/shaders/screen/bloom.frag", BLOOM_DEFINE_MAX, BLOOM_UNIFORM_MAX, 1, BLOOM_DEFINES_STR, BLOOM_UNIFORMS_STR, BLOOM_TEXTURES_STR, &result);
+
     glGenFramebuffers(1, &pass->bloom.FBO);
     glBindFramebuffer(GL_FRAMEBUFFER, pass->bloom.FBO);
 
@@ -891,12 +719,14 @@ static void Init_BloomData()
     CheckBoundFrameBufferStatus("Bloom");
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    return result;
 }
 
-static void Init_DofData()
+static bool Init_DofData()
 {
     bool result;
-    pass->dof.shader = Shader_ComputeCreate("src/render/shaders/screen/dof.comp", DOF_DEFINE_MAX, DOF_UNIFORM_MAX, 3, DOF_DEFINES_STR, DOF_UNIFORMS_STR, DOF_TEXTURES_STR, &result);
+    pass->dof.shader = Shader_ComputeCreate("assets/shaders/screen/dof.comp", DOF_DEFINE_MAX, DOF_UNIFORM_MAX, 3, DOF_DEFINES_STR, DOF_UNIFORMS_STR, DOF_TEXTURES_STR, &result);
 
     glGenTextures(1, &pass->dof.dof_texture);
 
@@ -907,34 +737,54 @@ static void Init_DofData()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+    return result;
 }
 
-static void Init_IBLData()
+static bool Init_IBLData()
 {
     //SETUP SHADERS
-    pass->ibl.equirectangular_to_cubemap_shader = Shader_CompileFromFile("src/render/shaders/cubemap/cubemap.vert", "src/render/shaders/cubemap/equirectangular_to_cubemap.frag", NULL);
-    pass->ibl.single_image_cubemap_convert_shader = Shader_CompileFromFile("src/render/shaders/cubemap/cubemap.vert", "src/render/shaders/cubemap/single_image_cubemap_convert.frag", NULL);
-    pass->ibl.irradiance_convulution_shader = Shader_CompileFromFile("src/render/shaders/cubemap/cubemap.vert", "src/render/shaders/cubemap/irradiance_convolution.frag", NULL);
-    pass->ibl.prefilter_cubemap_shader = Shader_CompileFromFile("src/render/shaders/cubemap/cubemap.vert", "src/render/shaders/cubemap/prefilter_cubemap.frag", NULL);
-    pass->ibl.brdf_shader = Shader_CompileFromFile("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/brdf.frag", NULL);
-    pass->ibl.sky_compute_shader = Shader_CompileFromFile("src/render/shaders/cubemap/cubemap.vert", "src/render/shaders/cubemap/sky_compute.frag", NULL);
+    bool result;
+    pass->ibl.brdf_shader = Shader_PixelCreate("assets/shaders/screen/base_screen.vert", "assets/shaders/screen/brdf.frag", 0, BRDF_UNIFORM_MAX, 0, NULL, BRDF_UNIFORMS_STR, NULL, &result);
+
+    bool result2;
+    pass->ibl.cubemap_shader = Shader_PixelCreate("assets/shaders/cubemap/cubemap.vert", "assets/shaders/cubemap/cubemap.frag", CUBEMAP_DEFINE_MAX, CUBEMAP_UNIFORM_MAX, 4, CUBEMAP_DEFINES_STR, CUBEMAP_UNIFORMS_STR, CUBEMAP_TEXTURES_STR, &result2);
     
-    glUseProgram(pass->ibl.sky_compute_shader);
-    Shader_SetInteger(pass->ibl.sky_compute_shader, "noise_texture", 0);
-    Shader_SetInteger(pass->ibl.sky_compute_shader, "night_texture", 1);
+    pass->ibl.env_size = 512;
+    pass->ibl.irr_size = 32;
+    pass->ibl.filter_size = 128;
 
     glGenFramebuffers(1, &pass->ibl.FBO);
+    glGenFramebuffers(1, &pass->ibl.env_FBO);
+    glGenFramebuffers(1, &pass->ibl.irr_FBO);
+    glGenFramebuffers(1, &pass->ibl.filter_FBO);
+    glGenRenderbuffers(1, &pass->ibl.irr_RBO);
+    glGenRenderbuffers(1, &pass->ibl.env_RBO);
     glGenRenderbuffers(1, &pass->ibl.RBO);
     glGenTextures(1, &pass->ibl.envCubemapTexture);
     glGenTextures(1, &pass->ibl.prefilteredCubemapTexture);
     glGenTextures(1, &pass->ibl.irradianceCubemapTexture);
     glGenTextures(1, &pass->ibl.brdfLutTexture);
     glGenTextures(1, &pass->ibl.nightTexture);
+    
+    for (int i = 0; i < 5; i++)
+    {
+        unsigned int mipWidth = (unsigned)(pass->ibl.filter_size * pow(0.5, i));
+        unsigned int mipHeight = (unsigned)(pass->ibl.filter_size * pow(0.5, i));
+
+        glGenTextures(1, &pass->ibl.filter_depth_mipmaps[i]);
+        glBindTexture(GL_TEXTURE_2D, pass->ibl.filter_depth_mipmaps[i]);
+
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, mipWidth, mipHeight, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    }
 
     glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.envCubemapTexture);
     for (unsigned int i = 0; i < 6; ++i)
     {
-        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F, 512, 512, 0, GL_RGB, GL_FLOAT, NULL);
+        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F, pass->ibl.env_size, pass->ibl.env_size, 0, GL_RGB, GL_FLOAT, NULL);
     }
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -945,7 +795,7 @@ static void Init_IBLData()
     glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.prefilteredCubemapTexture);
     for (unsigned int i = 0; i < 6; ++i)
     {
-        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F, 128, 128, 0, GL_RGB, GL_FLOAT, NULL);
+        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F, pass->ibl.filter_size, pass->ibl.filter_size, 0, GL_RGB, GL_FLOAT, NULL);
     }
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -958,7 +808,7 @@ static void Init_IBLData()
     glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.irradianceCubemapTexture);
     for (unsigned int i = 0; i < 6; ++i)
     {
-        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F, 32, 32, 0, GL_RGB, GL_FLOAT, NULL);
+        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F, pass->ibl.irr_size, pass->ibl.irr_size, 0, GL_RGB, GL_FLOAT, NULL);
     }
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -974,15 +824,10 @@ static void Init_IBLData()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
-    glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 512, 512);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, pass->ibl.RBO);
-
     glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.nightTexture);
     for (unsigned int i = 0; i < 6; ++i)
     {
-        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F, 512, 512, 0, GL_RGB, GL_FLOAT, NULL);
+        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB16F, pass->ibl.env_size, pass->ibl.env_size, 0, GL_RGB, GL_FLOAT, NULL);
     }
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -990,8 +835,33 @@ static void Init_IBLData()
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    CheckBoundFrameBufferStatus("IBL");
+    glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.env_FBO);
+    glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.env_RBO);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, pass->ibl.env_size, pass->ibl.env_size);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, pass->ibl.env_RBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X, pass->ibl.envCubemapTexture, 0);
+    CheckBoundFrameBufferStatus("ENV-IBL");
 
+    glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.irr_FBO);
+    glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.irr_RBO);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, pass->ibl.irr_size, pass->ibl.irr_size);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, pass->ibl.irr_RBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X, pass->ibl.irradianceCubemapTexture, 0);
+    CheckBoundFrameBufferStatus("IRR-IBL");
+
+    glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.filter_FBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X, pass->ibl.prefilteredCubemapTexture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, pass->ibl.filter_depth_mipmaps[0], 0);
+    CheckBoundFrameBufferStatus("FILTER-IBL");
+
+    glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
+    glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->ibl.brdfLutTexture, 0);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 512, 512);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, pass->ibl.RBO);
+
+    CheckBoundFrameBufferStatus("BRDF_IBL");
+   
     //COMPUTE VIEW MATRIXES FOR CUBE
     vec3 eye, center, up;
     glm_vec3_zero(eye);
@@ -1029,19 +899,12 @@ static void Init_IBLData()
 
     //AND PROJ
     glm_perspective(glm_rad(90.0), 1.0, 0.1, 10.0, pass->ibl.cube_proj);
+
+    return result && result2;
 }
 
 static void Init_ShadowMappingData()
 {
-    //SETUP SHADER
-    pass->shadow.depth_shader = Shader_CompileFromFile("src/shaders/shadow_depth_shader.vs", "src/shaders/shadow_depth_shader.fs", "src/shaders/shadow_depth_shader.gs");
-    assert(pass->shadow.depth_shader > 0);
-
-    pass->shadow.blur_shader = ComputeShader_CompileFromFile("src/render/shaders/screen/gaussian_blur.comp");
-
-    glUseProgram(pass->shadow.blur_shader);
-    Shader_SetInteger(pass->shadow.blur_shader, "source_texture", 0);
-
     //SETUP FRAMEBUFFER
     glGenFramebuffers(1, &pass->shadow.FBO);
     glGenTextures(1, &pass->shadow.depth_maps);
@@ -1079,8 +942,6 @@ static void Init_ShadowMappingData()
 
 static void Init_WaterData()
 {
-    pass->water.blurring_shader = ComputeShader_CompileFromFile("src/render/shaders/screen/anisotropic_blur.comp");
-
     glGenFramebuffers(1, &pass->water.reflection_fbo);
     glGenRenderbuffers(1, &pass->water.reflection_rbo);
 
@@ -1123,10 +984,10 @@ static void Init_WaterData()
 
 }
 
-static void Init_GodrayData()
+static bool Init_GodrayData()
 {
     bool result;
-    pass->godray.shader = Shader_ComputeCreate("src/render/shaders/screen/godray.comp", GODRAY_DEFINE_MAX, GODRAY_UNIFORM_MAX, 4, GODRAY_DEFINES_STR, GODRAY_UNIFORMS_STR, GODRAY_TEXTURES_STR, &result);
+    pass->godray.shader = Shader_ComputeCreate("assets/shaders/screen/godray.comp", GODRAY_DEFINE_MAX, GODRAY_UNIFORM_MAX, 4, GODRAY_DEFINES_STR, GODRAY_UNIFORMS_STR, GODRAY_TEXTURES_STR, &result);
 
     glGenTextures(1, &pass->godray.godray_fog_texture);
     glGenTextures(1, &pass->godray.back_texture);
@@ -1145,58 +1006,27 @@ static void Init_GodrayData()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-
-    unsigned char* noise = malloc(sizeof(unsigned char) * 64 * 64 * 64);
-
-    for (int x = 0; x < 64; x++)
-    {
-        for (int y = 0; y < 64; y++)
-        {
-            for (int z = 0; z < 64; z++)
-            {
-                noise[x + y * 64] = (stb_perlin_noise3(x / 8.0, y / 8.0, z / 8.0, 0, 0, 0) + 1) / 2.0 * 256;
-            }
-        }
-    }
-
-    glBindTexture(GL_TEXTURE_3D, pass->godray.noise_texture);
-    glTexImage3D(GL_TEXTURE_3D, 0, GL_R8, 64, 64, 64, 0, GL_RED, GL_UNSIGNED_BYTE, noise);
-    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-
-    free(noise);
+    
+    return result;
 }
 
-static void Init_SSILData()
-{
-    pass->ssil.shader = ComputeShader_CompileFromFile("src/render/shaders/screen/ssil.comp");
-    glGenTextures(1, &pass->ssil.output_texture);
 
-    glBindTexture(GL_TEXTURE_2D, pass->ssil.output_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, INIT_WIDTH, INIT_HEIGHT, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-}
-
-static void Init_PassData()
+static bool Init_PassData()
 {
-    Init_PostProcessData();
-    Init_GeneralPassData();
-    Init_LCSpecificData();
-    Init_DeferredData();
-    Init_MainSceneData();
-    Init_AoData();
-    Init_BloomData();
-    Init_DofData();
-    Init_IBLData();
+    if(!Init_PostProcessData()) return false;
+    if(!Init_GeneralPassData()) return false;
+    if(!Init_LCSpecificData()) return false;
+    if(!Init_DeferredData()) return false;
+    if(!Init_MainSceneData()) return false;
+    if(!Init_AoData()) return false;
+    if(!Init_BloomData()) return false;
+    if(!Init_DofData()) return false;
+    if(!Init_IBLData()) return false;
     Init_ShadowMappingData();
     Init_WaterData();
-    Init_GodrayData();
-    Init_SSILData();
+    if(!Init_GodrayData()) return false;
+
+    return true;
 }
 
 static void Init_SceneData()
@@ -1258,6 +1088,7 @@ static void Init_SceneData()
 
 static bool _initRenderThread()
 {
+    /*
     backend_data->thread.handle = CreateThread
     (
         NULL,
@@ -1285,6 +1116,7 @@ static bool _initRenderThread()
     ResetEvent(backend_data->thread.event_active);
     ResetEvent(backend_data->thread.event_completed);
     ResetEvent(backend_data->thread.event_work_permssion);
+    */
 
     return true;
 }
@@ -1457,8 +1289,6 @@ int Renderer_Init(int p_initWidth, int p_initHeight)
     memset(&r_cvars, 0, sizeof(r_cvars));
     Init_registerCvars();
 
-    //TRY TO LOAD A CVAR CONFIG FILE, (if we have one)
-
 
     //ALLOCATE AND MEMSET DATA
     if (!Init_Mem())
@@ -1467,7 +1297,7 @@ int Renderer_Init(int p_initWidth, int p_initHeight)
     }
     //INIT GL DATA
     Init_DrawData();
-    Init_PassData();
+    if(!Init_PassData()) return false;
     Init_SceneData();
 
     Init_RendererResources();
@@ -1529,7 +1359,20 @@ void Renderer_Exit()
     //destroy shaders
     Shader_Destruct(&pass->dof.shader);
     Shader_Destruct(&pass->post.post_process_shader);
+    Shader_Destruct(&pass->post.debug_shader);
     Shader_Destruct(&pass->godray.shader);
+    Shader_Destruct(&pass->general.blur_shader);
+    Shader_Destruct(&pass->ao.shader);
+    Shader_Destruct(&pass->scene.shader_3d_forward);
+    Shader_Destruct(&pass->scene.shader_3d_deferred);
+    Shader_Destruct(&pass->scene.screen_shader);
+    Shader_Destruct(&pass->bloom.shader);
+    Shader_Destruct(&pass->lc.world_shader);
+    Shader_Destruct(&pass->lc.water_shader);
+    Shader_Destruct(&pass->lc.occlusion_box_shader);
+    Shader_Destruct(&pass->lc.process_chunks_shader);
+    Shader_Destruct(&pass->ibl.cubemap_shader);
+    Shader_Destruct(&pass->deferred.shading_shader);
 
     //Mem clean up
     free(cmdBuffer->cmds_data);

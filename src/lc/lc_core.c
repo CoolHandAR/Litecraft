@@ -1,4 +1,4 @@
-#include "lc_core.h"
+#include "lc/lc_core.h"
 
 #include "core/core_common.h"
 

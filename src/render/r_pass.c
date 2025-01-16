@@ -1,7 +1,7 @@
-#include "r_core.h"
+#include "render/r_core.h"
 
 #include "core/core_common.h"
-#include "render/shaders/shader_info.h"
+
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -53,7 +53,6 @@ static void Pass_shadowMap()
 	glEnable(GL_DEPTH_CLAMP);
 	glEnable(GL_DEPTH_TEST);
 	glViewport(0, 0, pass->shadow.shadow_map_size, pass->shadow.shadow_map_size);
-	glDisable(GL_BLEND);
 	glCullFace(GL_FRONT);
 	glEnable(GL_POLYGON_OFFSET_FILL);
 
@@ -90,14 +89,18 @@ static void Pass_shadowMap()
 
 static void Pass_DepthPrepass()
 {
-	glDepthFunc(GL_LESS);
 	glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+
+	glDrawBuffer(GL_NONE);
 
 	//draw opaque scene
 	Render_OpaqueScene(RPass__DEPTH_PREPASS);
 
 	//draw semi opaque scene
 	Render_SemiOpaqueScene(RPass__DEPTH_PREPASS);
+
+	static const ATTACHMENTS[3] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2 };
+	glDrawBuffers(3, ATTACHMENTS);
 
 	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 }
@@ -228,23 +231,6 @@ static void Pass_SSAO()
 	}
 }
 
-static void Pass_SSIL()
-{
-	glUseProgram(pass->ssil.shader);
-	
-	Shader_SetInteger(pass->ssil.shader, "depth_texture", 0);
-	Shader_SetInteger(pass->ssil.shader, "light_buffer", 1);
-	Shader_SetVector2f(pass->ssil.shader, "u_viewportSize", backend_data->screenSize[0], backend_data->screenSize[1]);
-	
-	glBindTextureUnit(0, pass->deferred.depth_texture);
-	glBindTextureUnit(1, pass->water.refraction_texture);
-
-	glBindImageTexture(0, pass->ssil.output_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
-
-	Pass_DispatchScreenCompute(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8);
-}
-
-
 static void Pass_BloomTextureSample()
 {
 	if (!r_cvars.r_useBloom->int_value)
@@ -254,10 +240,17 @@ static void Pass_BloomTextureSample()
 
 	glClear(GL_COLOR_BUFFER_BIT);
 	//Downsample
-	glUseProgram(pass->general.downsample_shader);
+	Shader_ResetDefines(&pass->bloom.shader);
+	Shader_SetDefine(&pass->bloom.shader, BLOOM_DEFINE_DOWNSAMPLE_PASS, true);
 
-	Shader_SetVector2f(pass->general.downsample_shader, "u_srcResolution", backend_data->screenSize[0], backend_data->screenSize[1]);
-	Shader_SetInteger(pass->general.downsample_shader, "u_mipLevel", 0);
+	Shader_Use(&pass->bloom.shader);
+
+	Shader_SetFloat2(&pass->bloom.shader, BLOOM_UNIFORM_SRCRESOLUTION, backend_data->screenSize[0], backend_data->screenSize[1]);
+	Shader_SetInt(&pass->bloom.shader, BLOOM_UNIFORM_MIPLEVEL, 0);
+	Shader_SetFloaty(&pass->bloom.shader, BLOOM_UNIFORM_GAMMA, r_cvars.r_Gamma->float_value);
+	Shader_SetFloaty(&pass->bloom.shader, BLOOM_UNIFORM_SOFTTHRESHOLD, r_cvars.r_bloomSoftThreshold->float_value);
+	Shader_SetFloaty(&pass->bloom.shader, BLOOM_UNIFORM_THRESHOLD, r_cvars.r_bloomThreshold->float_value);
+
 
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, pass->scene.MainSceneColorBuffer);
@@ -271,16 +264,20 @@ static void Pass_BloomTextureSample()
 
 		Render_Quad();
 
-		Shader_SetVector2f(pass->general.downsample_shader, "u_srcResolution", pass->bloom.mip_sizes[i][0], pass->bloom.mip_sizes[i][1]);
+		Shader_SetFloat2(&pass->bloom.shader, BLOOM_UNIFORM_SRCRESOLUTION, pass->bloom.mip_sizes[i][0], pass->bloom.mip_sizes[i][1]);
 
 		glBindTexture(GL_TEXTURE_2D, pass->bloom.mip_textures[i]);
 
-		if (i == 0) Shader_SetInteger(pass->general.downsample_shader, "u_mipLevel", 1);
+		if (i == 0) Shader_SetInt(&pass->bloom.shader, BLOOM_UNIFORM_MIPLEVEL, 1);
 	}
 
 	//Upsample
-	glUseProgram(pass->general.upsample_shader);
-	Shader_SetFloat(pass->general.upsample_shader, "u_filterRadius", 0.01);
+	Shader_ResetDefines(&pass->bloom.shader);
+	Shader_SetDefine(&pass->bloom.shader, BLOOM_DEFINE_UPSAMPLE_PASS, true);
+
+	Shader_Use(&pass->bloom.shader);
+
+	Shader_SetFloaty(&pass->bloom.shader, BLOOM_UNIFORM_FILTERRADIUS, 0.01);
 
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_ONE, GL_ONE);
@@ -476,83 +473,81 @@ static void Pass_Godrays()
 }
 
 static void Pass_deferredShading()
-{	
+{
 	//make sure ao finishes
 	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-	glDisable(GL_DEPTH_TEST);
-	glDisable(GL_BLEND);
-	glDisable(GL_STENCIL_TEST);
+	Shader_SetDefine(&pass->deferred.shading_shader, DEFERRED_SCENE_DEFINE_USE_DIR_SHADOWS, r_cvars.r_useDirShadowMapping->int_value == 1);
+	Shader_SetDefine(&pass->deferred.shading_shader, DEFERRED_SCENE_DEFINE_USE_SSAO, r_cvars.r_useSsao->int_value == 1);
 
-	//use shader
-	glUseProgram(pass->deferred.shading_shader);
+	Shader_Use(&pass->deferred.shading_shader);
 
 	bool use_simple_cubemap_for_reflection = true;
 
 	//setup textures
 	glBindTextureUnit(0, pass->deferred.gNormalMetal_texture);
 	glBindTextureUnit(1, pass->deferred.gColorRough_texture);
-	glBindTextureUnit(2, pass->deferred.depth_texture);
-	glBindTextureUnit(3, (r_cvars.r_ssaoHalfSize->int_value == 0) ? pass->ao.ao_texture : pass->ao.back_ao_texture);
-	glBindTextureUnit(4, pass->shadow.depth_maps);
-	
+	glBindTextureUnit(2, pass->deferred.gEmissive_texture);
+	glBindTextureUnit(3, pass->deferred.depth_texture);
+	glBindTextureUnit(4, (r_cvars.r_ssaoHalfSize->int_value == 0) ? pass->ao.ao_texture : pass->ao.back_ao_texture);
+	glBindTextureUnit(5, pass->shadow.depth_maps);
+
 	//IBL Textures
-	glBindTextureUnit(5, pass->ibl.brdfLutTexture);
-	glBindTextureUnit(6, pass->ibl.irradianceCubemapTexture);
-	glBindTextureUnit(7, (use_simple_cubemap_for_reflection) ? pass->ibl.envCubemapTexture : pass->ibl.prefilteredCubemapTexture);
+	glBindTextureUnit(6, pass->ibl.brdfLutTexture);
+	glBindTextureUnit(7, pass->ibl.irradianceCubemapTexture);
+	glBindTextureUnit(8, (use_simple_cubemap_for_reflection) ? pass->ibl.envCubemapTexture : pass->ibl.prefilteredCubemapTexture);
 
 	//draw quad
 	Render_Quad();
-
-	glEnable(GL_DEPTH_TEST);
 }
 
 static void Pass_ProcessCubemap()
-{
-	glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
-	glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
-	glViewport(0, 0, 512, 512);
-	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 512, 512);
+{	
+	//Compute skybox dynamically
 
-	glUseProgram(pass->ibl.sky_compute_shader);
-	glBindTextureUnit(0, pass->general.perlin_noise_texture);
-	glBindTextureUnit(1, pass->ibl.nightTexture);
-	Shader_SetMatrix4(pass->ibl.sky_compute_shader, "u_proj", pass->ibl.cube_proj);
+	glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.env_FBO);
+	glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.env_RBO);
+	glViewport(0, 0, pass->ibl.env_size, pass->ibl.env_size);
 
-	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_skyColor", scene.environment.sky_color);
-	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_skyHorizonColor", scene.environment.sky_horizon_color);
-	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_groundHorizonColor", scene.environment.ground_horizon_color);
-	Shader_SetVector3f_2(pass->ibl.sky_compute_shader, "u_groundColor", scene.environment.ground_bottom_color);
+	glBindTextureUnit(2, pass->general.perlin_noise_texture);
+	glBindTextureUnit(3, pass->ibl.nightTexture);
 
-	static float time = 0;
-	time += Core_getDeltaTime();
+	Shader_ResetDefines(&pass->ibl.cubemap_shader);
+	Shader_SetDefine(&pass->ibl.cubemap_shader, CUBEMAP_DEFINE_COMPUTE_SKY_PASS, true);
 
-	Shader_SetFloat(pass->ibl.sky_compute_shader, "u_time", time);
+	Shader_Use(&pass->ibl.cubemap_shader);
+
+	Shader_SetMat4(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_PROJ, pass->ibl.cube_proj);
+
+	Shader_SetVec3(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_SKYCOLOR, scene.environment.sky_color);
+	Shader_SetVec3(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_SKYHORIZONCOLOR, scene.environment.sky_horizon_color);
+	Shader_SetVec3(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_GROUNDHORIZONCOLOR, scene.environment.ground_horizon_color);
+	Shader_SetVec3(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_GROUNDCOLOR, scene.environment.ground_bottom_color);
+
 	for (int i = 0; i < 6; i++)
 	{
 		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.envCubemapTexture, 0);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-		Shader_SetMatrix4(pass->ibl.sky_compute_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
+		Shader_SetMat4(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_VIEW, pass->ibl.cube_view_matrixes[i]);
 		Render_Cube();
 	}
-	static bool dirty = true;
-	if(dirty)
-	{
-		RInternal_ProcessIBLCubemap(false, true, true, true);
-		dirty = false;
-	}
-	else
-	{
-		RInternal_ProcessIBLCubemap(true, true, false, false);
-	}
-	if (pass->ibl.update_brdf || pass->ibl.update_irradiance || pass->ibl.update_prefilter)
-	{
-		RInternal_ProcessIBLCubemap(false, pass->ibl.update_irradiance, pass->ibl.update_prefilter, pass->ibl.update_brdf);
+	
 
-		pass->ibl.update_brdf = false;
-		pass->ibl.update_irradiance = false;
-		pass->ibl.update_prefilter = false;
+	//temp hack!! processing ibl is very expensive, so for now, do this way
+	//TODO: implement fast irradiance update
+	static float prev_ambient = 0;
+	static uint64_t prev_update_tick = 0;
+	uint64_t tick_diff = Core_getTicks() - prev_update_tick;
+
+	if (scene.scene_data.dirLightAmbientIntensity != prev_ambient || tick_diff > 240) 
+	{
+		RInternal_ProcessIBLCubemap(true, true, true, true);
+
+		prev_ambient = scene.scene_data.dirLightAmbientIntensity;
+		prev_update_tick = Core_getTicks();
+
+		//printf("updated ibl\n");
 	}
 
 	//RESET VIEWPROT
@@ -565,6 +560,7 @@ static void Pass_Skybox()
 		return;
 
 	Pass_ProcessCubemap();
+
 	glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
 
 	mat4 view_no_translation;
@@ -576,12 +572,16 @@ static void Pass_Skybox()
 	view_no_translation[2][2] = scene.camera.view[2][2];
 	view_no_translation[2][3] = scene.camera.view[2][3];
 
-	glUseProgram(pass->scene.skybox_shader);
-	Shader_SetMatrix4(pass->scene.skybox_shader, "u_proj", scene.camera.proj);
-	Shader_SetMatrix4(pass->scene.skybox_shader, "u_view", view_no_translation);
+	Shader_ResetDefines(&pass->ibl.cubemap_shader);
+	Shader_SetDefine(&pass->ibl.cubemap_shader, CUBEMAP_DEFINE_RENDER_SKYBOX_PASS, true);
 
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.envCubemapTexture);
+	Shader_Use(&pass->ibl.cubemap_shader);
+
+	Shader_SetMat4(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_PROJ, scene.camera.proj);
+	Shader_SetMat4(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_VIEW, view_no_translation);
+
+	glBindTextureUnit(1, pass->ibl.envCubemapTexture);
+
 	glDepthFunc(GL_LEQUAL);
 	glDepthMask(GL_FALSE);
 
@@ -607,18 +607,23 @@ static void Pass_Transparents()
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 	glDepthMask(GL_TRUE);
-	Render_WorldWaterChunks();
+	//Render_WorldWaterChunks();
 
-
-
-	//render particles
-	//glUseProgram(drawData->particles.particle_render_shader);
-	//Render_Particles();
 
 	glDisable(GL_BLEND);
 	glDepthMask(GL_TRUE);
 	glDepthFunc(GL_LESS);
 
+}
+
+static void Pass_Water()
+{
+	glDisable(GL_CULL_FACE);
+
+	//glDepthMask(GL_TRUE);
+	Render_WorldWaterChunks();
+
+	glEnable(GL_CULL_FACE);
 }
 
 static void Pass_WaterPrePass()
@@ -629,24 +634,22 @@ static void Pass_WaterPrePass()
 		return;
 	}
 
-	//copy main scene's buffer to the refraction texture
-	glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
-	glReadBuffer(GL_COLOR_ATTACHMENT0);
+	//blur main' scene color buffer by a small amount and output to refraction texture
+	Shader_Use(&pass->general.blur_shader);
 
-	glBindTexture(GL_TEXTURE_2D, pass->water.refraction_texture);
-	//glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, backend_data->screenSize[0], backend_data->screenSize[1]);
+	Shader_SetInt(&pass->general.blur_shader, BOX_BLUR_UNIFORM_SIZE, 4);
+	Shader_SetFloat2(&pass->general.blur_shader, BOX_BLUR_UNIFORM_DIR, 1.0, 1.0);
+	Shader_SetFloaty(&pass->general.blur_shader, BOX_BLUR_UNIFORM_BLURSCALE, 0.2);
 
-	//Render into the reflection texture
-	glBindFramebuffer(GL_FRAMEBUFFER, pass->water.reflection_fbo);
-	glBindRenderbuffer(GL_RENDERBUFFER, pass->water.reflection_rbo);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-	glUseProgram(pass->shadow.blur_shader);
 	glBindTextureUnit(0, pass->scene.MainSceneColorBuffer);
 	glBindImageTexture(0, pass->water.refraction_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
 
 	Pass_DispatchScreenCompute(backend_data->screenSize[0], backend_data->screenSize[1], 8, 8);
 
+	//Render into the reflection texture
+	glBindFramebuffer(GL_FRAMEBUFFER, pass->water.reflection_fbo);
+	glBindRenderbuffer(GL_RENDERBUFFER, pass->water.reflection_rbo);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	bool viewport_change = (r_cvars.r_waterReflectionQuality->int_value < 2);
 	if (viewport_change)
@@ -664,18 +667,21 @@ static void Pass_WaterPrePass()
 	view_no_translation[2][2] = pass->water.reflection_view_matrix[2][2];
 	view_no_translation[2][3] = pass->water.reflection_view_matrix[2][3];
 
-	glUseProgram(pass->scene.skybox_shader);
-	Shader_SetMatrix4(pass->scene.skybox_shader, "u_proj", scene.camera.proj);
-	Shader_SetMatrix4(pass->scene.skybox_shader, "u_view", view_no_translation);
+	Shader_ResetDefines(&pass->ibl.cubemap_shader);
+	Shader_SetDefine(&pass->ibl.cubemap_shader, CUBEMAP_DEFINE_RENDER_SKYBOX_PASS, true);
 
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.envCubemapTexture);
+	Shader_Use(&pass->ibl.cubemap_shader);
+
+	Shader_SetMat4(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_PROJ, scene.camera.proj);
+	Shader_SetMat4(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_VIEW, view_no_translation);
+
+	glBindTextureUnit(1, pass->ibl.envCubemapTexture);
+
 	glDepthFunc(GL_LEQUAL);
 	glDepthMask(GL_FALSE);
 
 	Render_Cube();
 	
-	glDrawBuffer(GL_COLOR_ATTACHMENT0);	
 	glDepthFunc(GL_LESS);
 	glDepthMask(GL_TRUE);
 
@@ -692,23 +698,23 @@ static void Pass_WaterPrePass()
 		glViewport(0, 0, backend_data->screenSize[0], backend_data->screenSize[1]);
 	}
 
-	//Blur the reflection texture
-	glUseProgram(pass->general.box_blur_shader);
+	//Blur the reflection texture vertically
+	Shader_Use(&pass->general.blur_shader);
+
+	Shader_SetInt(&pass->general.blur_shader, BOX_BLUR_UNIFORM_SIZE, 4);
+	Shader_SetFloat2(&pass->general.blur_shader, BOX_BLUR_UNIFORM_DIR, 0.0, 1.0);
+	Shader_SetFloaty(&pass->general.blur_shader, BOX_BLUR_UNIFORM_BLURSCALE, 1.0);
+
 	glBindTextureUnit(0, pass->water.reflection_texture);
 	glBindImageTexture(0, pass->water.reflection_back_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
 
-	Shader_SetInteger(pass->general.box_blur_shader, "u_size", 4);
-	Shader_SetVector2f(pass->general.box_blur_shader, "u_dir", 0.0, 1.0);
-	Shader_SetFloat(pass->general.box_blur_shader, "u_blurScale", 1);
-
 	Pass_DispatchScreenCompute(pass->water.reflection_size[0], pass->water.reflection_size[1], 8, 8);
-
-	glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
 }
 
 static void Pass_OcclussionBoxes()
 {
-	glUseProgram(pass->lc.occlussion_boxes_shader);
+	Shader_Use(&pass->lc.occlusion_box_shader);
+
 	glDisable(GL_CULL_FACE); //always disable cull face, causes lots of issues otherwise
 	glEnable(GL_DEPTH_TEST);
 	glDepthMask(GL_FALSE);
@@ -736,9 +742,8 @@ static void Pass_PostProcess()
 	if (r_cvars.r_drawDebugTexture->int_value > -1)
 	{
 		//-1 disabled, 0 = Normal, 1 = Albedo, 2 = Depth, 3 = Metal, 4 = Rough, 5 = AO
-		glUseProgram(pass->post.debug_shader);
-
-		Shader_SetInteger(pass->post.debug_shader, "u_selection", r_cvars.r_drawDebugTexture->int_value);
+		Shader_Use(&pass->post.debug_shader);
+		Shader_SetInt(&pass->post.debug_shader, DEBUG_SCREEN_UNIFORM_SELECTION, r_cvars.r_drawDebugTexture->int_value);
 
 		glBindTextureUnit(0, pass->deferred.gNormalMetal_texture);
 		glBindTextureUnit(1, pass->deferred.gColorRough_texture);
@@ -782,9 +787,11 @@ static void Pass_PostProcess()
 		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_DEPTHFOGCURVE, scene.environment.depthFogCurve);
 		Shader_SetFloaty(&pass->post.post_process_shader, POST_PROCESS_UNIFORM_DEPTHFOGDENSITY, scene.environment.depthFogDensity);
 	}
+
 	glDisable(GL_DEPTH_TEST);
 	glDisable(GL_BLEND);
 	glDisable(GL_STENCIL_TEST);
+
 	Render_Quad();
 }
 
@@ -818,24 +825,28 @@ void Pass_Main()
 	//shadow mapping pass
 	Pass_shadowMap();
 
-	glDisable(GL_CULL_FACE);
-
 	//Downsample depth and normal(if needed)
 	Pass_downsampleDepthNormal();
 	
 	//SSAO pass, blur pass
 	Pass_SSAO();
-
-	//Pass_SSIL();
-
+	
 	//Draw into the main's screen buffer
 	//The scene's framebuffer uses deferred's depth texture
 	glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
 	glClear(GL_COLOR_BUFFER_BIT);
 
+	glDisable(GL_CULL_FACE);
+
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_BLEND);
+	glDisable(GL_STENCIL_TEST);
+
 	//Deferred shading pass
 	Pass_deferredShading();
 	
+	glEnable(GL_DEPTH_TEST);
+
 	//Render skybox
 	Pass_Skybox();
 
@@ -845,12 +856,14 @@ void Pass_Main()
 	//Water render prepass stuff
 	Pass_WaterPrePass();
 
-	//Render all transparent objects
-	Pass_Transparents();
-
 	glBindFramebuffer(GL_FRAMEBUFFER, pass->scene.FBO);
+
+	//Render water
+	Pass_Water();
+
+	//Render all transparent objects
+	//Pass_Transparents();
 	
-	glEnable(GL_DEPTH_TEST);
 	//Draw simple scene
 	Pass_SimpleGeoPass();
 	

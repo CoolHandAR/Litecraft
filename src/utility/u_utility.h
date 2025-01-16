@@ -4,8 +4,9 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "utility/dynamic_array.h"
 #include <cglm/cglm.h>
+
+#include "utility/dynamic_array.h"
 
 /*
 ~~~~~~~~~~~~~

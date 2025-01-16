@@ -1,4 +1,5 @@
-#include "BVH_Tree.h"
+#include "utility/BVH_Tree.h"
+
 #include <assert.h>
 #include "utility/u_math.h"
 #include "render/r_public.h"

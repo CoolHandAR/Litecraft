@@ -7,7 +7,7 @@ INIT GAME RESOURCES, GAME WORLD, PHYSICS WORLD, ETC...
 #include "core/input.h"
 #include "core/sound.h"
 #include "core/resource_manager.h"
-#include "lc_core.h"
+#include "lc/lc_core.h"
 #include "render/r_public.h"
 
 
@@ -15,6 +15,8 @@ LC_ResourceList lc_resources;
 LC_SoundGroups lc_sound_groups;
 LC_Emitters lc_emitters;
 LC_CoreData lc_core_data;
+
+extern void PL_initPlayer(vec3 p_spawnPos);
 
 static int Init_loadResources()
 {
@@ -79,6 +81,30 @@ static int Init_loadResources()
 	lc_resources.wood_dig_sounds[1] = Resource_get("assets/sounds/player/dig/wood2.wav", RESOURCE__SOUND);
 	lc_resources.wood_dig_sounds[2] = Resource_get("assets/sounds/player/dig/wood3.wav", RESOURCE__SOUND);
 	lc_resources.wood_dig_sounds[3] = Resource_get("assets/sounds/player/dig/wood4.wav", RESOURCE__SOUND);
+
+	if (!lc_resources.fall_sound || !lc_resources.big_fall_sound)
+	{
+		return -1;
+	}
+	for (int i = 0; i < 6; i++) if (!lc_resources.grass_step_sounds[i]) return -1;
+	for (int i = 0; i < 5; i++) if (!lc_resources.sand_step_sounds[i]) return -1;
+	for (int i = 0; i < 6; i++) if (!lc_resources.stone_step_sounds[i]) return -1;
+	for (int i = 0; i < 6; i++) if (!lc_resources.wood_step_sounds[i]) return -1;
+	for (int i = 0; i < 4; i++) if (!lc_resources.gravel_step_sounds[i]) return -1;
+	for (int i = 0; i < 4; i++) if (!lc_resources.grass_dig_sounds[i]) return -1;
+	for (int i = 0; i < 4; i++) if (!lc_resources.sand_dig_sounds[i]) return -1;
+	for (int i = 0; i < 4; i++) if (!lc_resources.stone_dig_sounds[i]) return -1;
+	for (int i = 0; i < 4; i++) if (!lc_resources.wood_dig_sounds[i]) return -1;
+
+	if (!Resource_get("assets/cube_textures/simple_block_atlas.png", RESOURCE__TEXTURE) || !Resource_get("assets/cube_textures/simple_block_atlas_normal.png", RESOURCE__TEXTURE)
+		|| !Resource_get("assets/cube_textures/simple_block_atlas_mer.png", RESOURCE__TEXTURE) || !Resource_get("assets/cube_textures/simple_block_atlas_heightmap.png", RESOURCE__TEXTURE)
+		 || !Resource_get("assets/water/water_displacement.png", RESOURCE__TEXTURE) || !Resource_get("assets/water/gradient_map.png", RESOURCE__TEXTURE) || !Resource_get("assets/ui/hotbar.png", RESOURCE__TEXTURE)
+		|| !Resource_get("assets/ui/water_overlay.png", RESOURCE__TEXTURE) || !Resource_get("assets/ui/crosshair.png", RESOURCE__TEXTURE) || !Resource_get("assets/cubemaps/hdr/night_sky.hdr", RESOURCE__TEXTURE_HDR))
+	{
+		return -1;
+	}
+	
+	return 1;
 }
 
 void Init_SoundGroups()
@@ -198,10 +224,14 @@ void Init_Emitters()
 	}
 	
 }
-extern void PL_initPlayer(vec3 p_spawnPos);
-void LC_Init()
+
+int LC_Init()
 {
-	if (!Init_loadResources()) return false;
+	if (!Init_loadResources())
+	{
+		printf("Failed to load resources");
+		return -1;
+	}
 	Init_Emitters();
 
 	memset(&lc_core_data, 0, sizeof(lc_core_data));
@@ -209,13 +239,17 @@ void LC_Init()
 	lc_core_data.cam = Camera_Init();
 	Camera_setCurrent(&lc_core_data.cam);
 
-	LC_World_Create(16, 7, 16);
+	const int X_CHUNKS = 8;
+	const int Y_CHUNKS = 8;
+	const int Z_CHUNKS = 8;
+
+	LC_World_Create(X_CHUNKS, Y_CHUNKS, Z_CHUNKS);
 
 	vec3 player_pos;
-	player_pos[0] = -5;
-	player_pos[1] = 16;
-	player_pos[2] = 5;
+	player_pos[0] = X_CHUNKS / 2;
+	player_pos[1] = 0;
+	player_pos[2] = Z_CHUNKS / 2;
 	PL_initPlayer(player_pos);
 
-	
+	return 1;
 }

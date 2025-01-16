@@ -1,10 +1,9 @@
-#include "resource_manager.h"
+#include "core/resource_manager.h"
 
 #include "utility/u_object_pool.h"
 #include "utility/u_utility.h"
 #include "utility/Custom_Hashmap.h"
 #include "render/r_texture.h"
-#include "render/r_model.h"
 #include "core/sound.h"
 
 typedef struct
@@ -91,13 +90,13 @@ void* Resource_get(const char* p_path, ResourceType p_resType)
 	}
 	case RESOURCE__MODEL:
 	{
-		R_Model model = Model_Load(p_path, NULL);
+		//R_Model model = Model_Load(p_path, NULL);
 
-		data = malloc(sizeof(R_Model));
+		//data = malloc(sizeof(R_Model));
 
 		if (data)
 		{
-			memcpy(data, &model, sizeof(R_Model));
+			//memcpy(data, &model, sizeof(R_Model));
 		}
 		break;
 	}
@@ -230,8 +229,8 @@ static void Resource_destroy(Resource* res)
 	}
 	case RESOURCE__MODEL:
 	{
-		R_Model* model_data = res->data;
-		Model_Destruct(model_data);
+		//R_Model* model_data = res->data;
+		//Model_Destruct(model_data);
 		break;
 	}
 	default:

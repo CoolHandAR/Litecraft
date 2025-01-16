@@ -1,4 +1,4 @@
-#include "lc_common.h"
+#include "lc/lc_common.h"
 
 #include <assert.h>
 #include <glad/glad.h>
@@ -132,12 +132,12 @@ unsigned LC_generateBlockInfoGLBuffer()
 	for (int i = 0; i < LC_BT__MAX; i++)
 	{
 		LC_Block_Texture_Offset_Data texture_data = LC_BLOCK_TEX_OFFSET_DATA[i];
-		data[i].texture_offsets[0] = (25 * texture_data.side_face[1]) + texture_data.side_face[0];
-		data[i].texture_offsets[1] = (25 * texture_data.side_face[1]) + texture_data.side_face[0];
-		data[i].texture_offsets[2] = (25 * texture_data.side_face[1]) + texture_data.side_face[0];
-		data[i].texture_offsets[3] = (25 * texture_data.side_face[1]) + texture_data.side_face[0];
-		data[i].texture_offsets[4] = (25 * texture_data.bottom_face[1]) + texture_data.bottom_face[0];
-		data[i].texture_offsets[5] = (25 * texture_data.top_face[1]) + texture_data.top_face[0];
+		data[i].texture_offsets[0] = (LC_BLOCK_ATLAS_WIDTH_DIVIDED * texture_data.side_face[1]) + texture_data.side_face[0];
+		data[i].texture_offsets[1] = (LC_BLOCK_ATLAS_WIDTH_DIVIDED * texture_data.side_face[1]) + texture_data.side_face[0];
+		data[i].texture_offsets[2] = (LC_BLOCK_ATLAS_WIDTH_DIVIDED * texture_data.side_face[1]) + texture_data.side_face[0];
+		data[i].texture_offsets[3] = (LC_BLOCK_ATLAS_WIDTH_DIVIDED * texture_data.side_face[1]) + texture_data.side_face[0];
+		data[i].texture_offsets[4] = (LC_BLOCK_ATLAS_WIDTH_DIVIDED * texture_data.bottom_face[1]) + texture_data.bottom_face[0];
+		data[i].texture_offsets[5] = (LC_BLOCK_ATLAS_WIDTH_DIVIDED * texture_data.top_face[1]) + texture_data.top_face[0];
 
 		data[i].position_offset = (LC_isBlockProp(i)) ? 0.5 : 0.0;
 	}

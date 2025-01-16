@@ -1,9 +1,9 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio/miniaudio.h"
 
-#include "sound.h"
+#include "core/sound.h"
+#include "core/cvar.h"
 #include "utility/u_utility.h"
-
 
 ma_engine sound_engine;
 
@@ -62,6 +62,11 @@ bool Sound_createGroup(uint32_t p_flags, ma_sound_group* r_group)
 	}
 
 	return true;
+}
+
+void Sound_setMasterVolume(float volume)
+{
+	ma_engine_set_volume(&sound_engine, volume);
 }
 
 int Sound_Init()

@@ -6,7 +6,7 @@
 
 void Core_Printf(const char* fmt, ...)
 {
-	assert(!strchr(fmt, '\n') && "New line character not allowed in C_Printf(..)");
+	assert(!strchr(fmt, '\n') && "New line character not allowed in Core_Printf(..)");
 
 	//print to std out
 	printf("%s \n", fmt);
@@ -15,7 +15,7 @@ void Core_Printf(const char* fmt, ...)
 }
 void Core_ErrorPrintf(ErrorType p_errorType, const char* fmt, ...)
 {
-	assert(!strchr(fmt, '\n') && "New line character not allowed in C_ErrorPrintf(..)");
+	assert(!strchr(fmt, '\n') && "New line character not allowed in Core_ErrorPrintf(..)");
 	switch (p_errorType)
 	{
 	case ET__MALLOC_FAILURE:

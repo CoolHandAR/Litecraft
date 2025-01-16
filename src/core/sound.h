@@ -9,3 +9,5 @@ void Sound_play(const char* p_soundName);
 void Sound_stop(const char* p_soundName);
 
 bool Sound_createGroup(uint32_t p_flags, ma_sound_group* r_group);
+
+void Sound_setMasterVolume(float volume);

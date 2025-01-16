@@ -8,13 +8,13 @@
 
 #include "utility/u_math.h"
 #include "utility/u_utility.h"
-#include "r_shader.h"
-#include "r_model.h"
 #include "core/cvar.h"
-#include "lc/lc_world2.h"
+#include "lc/lc_world.h"
 #include "utility/u_object_pool.h"
 #include "utility/BVH_Tree.h"
-#include "r_shader2.h"
+#include "render/r_shader.h"
+#include "render/shaders/shader_info.h"
+
 
 /*
 * ~~~~~~~~~~~~~~~~~~~~
@@ -145,7 +145,7 @@ typedef struct
 
 typedef struct R_CMD_DrawModel
 {
-	R_Model* model;
+	//R_Model* model;
 	R_CMD__PolygonMode polygon_mode;
 } R_CMD_DrawModel;
 
@@ -202,8 +202,8 @@ typedef struct
 #define SCREEN_QUAD_MAX_TEXTURES_IN_ARRAY 32
 
 typedef struct
-{
-	R_Shader shader;
+{	
+	mat4 ortho;
 	ScreenVertex vertices[SCREEN_QUAD_VERTICES_BUFFER_SIZE];
 	size_t vertices_count;
 	size_t indices_count;
@@ -220,7 +220,6 @@ typedef struct
 	BasicVertex vertices[LINE_VERTICES_BUFFER_SIZE];
 	size_t vertices_count;
 	unsigned vao, vbo;
-	R_Shader shader;
 } RDraw_LineData;
 
 #define TRIANGLE_VERTICES_BUFFER_SIZE 1024
@@ -239,7 +238,6 @@ typedef struct
 
 typedef struct
 {
-	R_Shader shader;
 	TextVertex vertices[TEXT_VERTICES_BUFFER_SIZE];
 	size_t vertices_count;
 	size_t indices_count;
@@ -252,7 +250,6 @@ typedef struct
 	unsigned instance_vbo;
 	int instance_count;
 	dynamic_array* vertices_buffer;
-	R_Shader shader;
 	unsigned texture_ids[32];
 	int texture_index;
 	size_t allocated_size;
@@ -288,11 +285,6 @@ typedef struct
 
 typedef struct
 {	
-	R_Shader particle_render_shader;
-	R_Shader particle_shadow_map_shader;
-	R_Shader particle_depthPrepass_shader;
-	R_Shader particle_gBuffer_shader;
-
 	int total_particle_amount;
 	int total_emitter_amount;
 
@@ -328,24 +320,15 @@ typedef struct
 
 typedef struct
 {
-	R_Shader depthPrepass_shader;
-	R_Shader depthPrepass_semi_transparents_shader;
-	R_Shader gBuffer_shader;
-	R_Shader shadow_map_shader;
-	R_Shader transparents_forward_shader;
-	R_Shader chunk_process_shader;
-	R_Shader occlussion_boxes_shader;
-	R_Shader transparents_shadow_map_shader;
-	R_Shader transparents_gBuffer_shader;
-	R_Shader water_shader;
-	R_Shader clip_distance_shader;
+	RShader process_chunks_shader;
+	RShader water_shader;
+	RShader occlusion_box_shader;
+	RShader world_shader;
 } RPass_LCSpecificData;
 
 typedef struct
 {
-	R_Shader depthPrepass_shader;
-	R_Shader gBuffer_shader;
-	R_Shader shading_shader;
+	RShader shading_shader;
 	unsigned FBO;
 	unsigned depth_texture;
 	unsigned gNormalMetal_texture;
@@ -357,7 +340,9 @@ typedef struct
 {
 	unsigned FBO;
 	unsigned MainSceneColorBuffer;
-	R_Shader skybox_shader;
+	RShader shader_3d_forward;
+	RShader shader_3d_deferred;
+	RShader screen_shader;
 } RPass_MainScene;
 
 typedef struct
@@ -375,6 +360,8 @@ typedef struct
 	unsigned FBO;
 	unsigned mip_textures[BLOOM_MIP_COUNT];
 	vec2 mip_sizes[BLOOM_MIP_COUNT];
+
+	RShader shader;
 } RPass_Bloom;
 
 typedef struct
@@ -385,6 +372,15 @@ typedef struct
 
 typedef struct
 {
+	unsigned env_FBO;
+	unsigned env_RBO;
+
+	unsigned irr_FBO;
+	unsigned irr_RBO;
+
+	unsigned filter_FBO;
+	unsigned filter_depth_mipmaps[5];
+
 	unsigned FBO;
 	unsigned RBO;
 	unsigned envCubemapTexture;
@@ -392,12 +388,13 @@ typedef struct
 	unsigned irradianceCubemapTexture;
 	unsigned brdfLutTexture;
 	unsigned nightTexture;
-	R_Shader equirectangular_to_cubemap_shader;
-	R_Shader irradiance_convulution_shader;
-	R_Shader prefilter_cubemap_shader;
-	R_Shader brdf_shader;
-	R_Shader single_image_cubemap_convert_shader;
-	R_Shader sky_compute_shader;
+
+	RShader brdf_shader;
+	RShader cubemap_shader;
+
+	float env_size;
+	float irr_size;
+	float filter_size;
 
 	mat4 cube_view_matrixes[6];
 	mat4 cube_proj;
@@ -420,8 +417,6 @@ typedef struct
 	mat4 reflection_projView_matrix;
 
 	vec2 reflection_size;
-
-	R_Shader blurring_shader;
 } RPass_Water;
 
 typedef struct
@@ -434,19 +429,8 @@ typedef struct
 
 typedef struct
 {
-	R_Shader shader;
-	unsigned output_texture;
-} RPass_SSIL;
-
-typedef struct
-{
-	R_Shader box_blur_shader;
-	R_Shader upsample_shader;
-	R_Shader copy_shader;
-	R_Shader downsample_shader;
-	R_Shader depth_downsample_shader;
-
 	RShader sample_shader;
+	RShader blur_shader;
 
 	unsigned halfsize_fbo;
 	unsigned depth_halfsize_texture;
@@ -456,7 +440,7 @@ typedef struct
 
 typedef struct
 {
-	R_Shader debug_shader;
+	RShader debug_shader;
 	RShader post_process_shader;
 } RPass_ProcessData;
 
@@ -465,8 +449,6 @@ typedef struct
 #define SHADOW_MAP_SIZE 2048
 typedef struct
 {
-	R_Shader depth_shader;
-	R_Shader blur_shader;
 	unsigned FBO;
 	unsigned depth_maps;
 	vec4 cascade_levels;
@@ -493,7 +475,6 @@ typedef struct
 	RPass_ShadowMappingData shadow;
 	RPass_Water water;
 	RPass_Godray godray;
-	RPass_SSIL ssil;
 } RPass_PassData;
 
 /*
@@ -639,6 +620,8 @@ typedef struct
 //Must match GL struct
 typedef struct
 {	
+	float time;
+
 	vec4 dirLightColor;
 	vec4 dirLightDirection;
 	vec4 fogColor;
@@ -833,7 +816,6 @@ typedef struct
 	r_internal.c
 * ~~~~~~~~~~~~~~~~~~~
 */
-void RInternal_UpdateDeferredShadingShader(bool p_recompile);
 void RInternal_GetShadowQualityData(int p_qualityLevel, int p_blurLevel, float* r_shadowMapSize, float* r_kernels, int* r_numKernels, float* r_qualityRadius);
 void RInternal_ProcessIBLCubemap(bool p_fast, bool p_irradiance, bool p_prefilter, bool p_brdf);
 

@@ -6,9 +6,9 @@
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
 
-#include "r_core.h"
+#include "render/r_core.h"
 
-#include "r_public.h"
+#include "render/r_public.h"
 #include "utility/u_math.h"
 #include "core/core_common.h"
 

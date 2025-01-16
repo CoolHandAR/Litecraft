@@ -1,9 +1,10 @@
+#include "utility/u_utility.h"
+
 #include <glad/glad.h>
 
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>
-#include "utility/u_utility.h"
 
 static const char* GL_sourceChar(GLenum source)
 {
@@ -727,7 +728,9 @@ void DRB_ChangeData(DynamicRenderBuffer* const drb, size_t p_len, const void* p_
 				}
 			}
 		}
-		drb->used_bytes += to_offset;
+		//hack!!
+		if(p_len > 0)
+			drb->used_bytes += to_offset;
 		
 	}
 	//copy the data
@@ -872,7 +875,7 @@ DRB_Item DRB_GetItem(DynamicRenderBuffer* const drb, unsigned p_drbItemIndex)
 
 	DRB_Item* drb_item = &array[p_drbItemIndex];
 
-	//assert(drb_item->offset + drb_item->count <= drb->used_bytes && "Invalid item offset and count");
+	assert(drb_item->offset + drb_item->count <= drb->used_bytes && "Invalid item offset and count");
 
 	return *drb_item;
 }

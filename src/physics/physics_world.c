@@ -1,14 +1,13 @@
-#include "physics_world.h"
+#include "physics/physics_world.h"
 
-#include "lc/lc_world2.h"
 #include <stdio.h>
 
-
+#include "lc/lc_world.h"
 #include "core/core_common.h"
 
 
 PhysicsWorld* phys_world = NULL;
-float g_delta;
+static float g_delta = 0;
 #define	OVERCLIP 1.001f
 static void Calc_KinematicVel(vec3 wish_dir, vec3 current_vel, float wish_speed, float accel, float delta, vec3 out)
 {

@@ -1,13 +1,13 @@
-#include "cvar.h"
+#include "core/cvar.h"
 
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <assert.h>
 
 #include "utility/u_utility.h"
-#include <assert.h>
 
 /*
 	Code inspired by quake3 cvar system
@@ -278,15 +278,12 @@ void Cvar_ResetAllToDefault()
 
 bool Cvar_PrintAllToFile(const char* p_filePath)
 {
-	FILE* out_file = NULL;
-	fopen_s(&out_file, p_filePath, "w");
+	FILE* out_file = fopen(p_filePath, "w");;
 	if (!out_file)
 	{
 		printf("Failed to open file!\n");
 		return false;
 	}
-	//use this since since fwrite causes error when using directly
-	const char quote_char = '"';
 
 	for (int i = 0; i < s_cvarCore.index_count; i++)
 	{
@@ -303,21 +300,65 @@ bool Cvar_PrintAllToFile(const char* p_filePath)
 			continue;
 		}
 
-		fprintf(out_file, "%s \"%s\" \n", cvar->name, cvar->str_value);
+		fprintf(out_file, "%s %s \n", cvar->name, cvar->str_value);
 	}
 
 	return fclose(out_file) == 0;
 }
 
-bool Cvar_LoadAllFromFile(const char* p_filePath)
+static bool Cvar_LoadAllFromFile2(const char* p_filePath)
 {
-	char* parsed_string = File_Parse(p_filePath, NULL);
+	FILE* in_file = fopen(p_filePath, "r");
+
+	if (!in_file)
+	{
+		return false;
+	}
+
+
+	char buf[MAX_CVAR_CHAR_SIZE];
+	char value_buf[MAX_CVAR_CHAR_SIZE];
+
+	memset(buf, 0, sizeof(buf));
+	memset(value_buf, 0, sizeof(value_buf));
+	
+	while (fscanf(in_file, "%s %s \n", buf, value_buf) == 2)
+	{
+		if (_validateString(buf) && _validateString(value_buf))
+		{
+			Cvar* cvar = Cvar_get(buf);
+
+			if (cvar)
+			{
+				Cvar_setValueDirect(cvar, value_buf);
+			}
+			else
+			{
+				printf("Invalid cvar %s \n", buf);
+			}
+		}
+		else
+		{
+			printf("Failed to read cvar %s from file \n", buf);
+		}
+	}
+
+	return fclose(in_file) == 0;
+}
+
+bool Cvar_LoadAllFromFile(const char* p_filePath)
+{	
+	return Cvar_LoadAllFromFile2(p_filePath);
+
+	int str_len = 0;
+
+	char* parsed_string = File_Parse(p_filePath, &str_len);
 
 	if (!parsed_string)
 	{
 		return false;
 	}
-	const int str_len = strlen(parsed_string);
+	
 
 	char name_buf[MAX_CVAR_CHAR_SIZE];
 	char value_buf[MAX_CVAR_CHAR_SIZE];

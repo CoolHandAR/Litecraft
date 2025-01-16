@@ -1,3 +1,5 @@
+#ifndef UTILITY_MATH
+#define UTILITY_MATH
 #pragma once
 
 #include <cglm/cglm.h>
@@ -9,10 +11,6 @@
 #define CMP_EPSILON 0.00001
 
 static unsigned long long Math_rng_seed = 1;
-
-void Math_Proj_ReverseZInfinite(float fovy, float aspect, float nearZ, float farZ, mat4 dest);
-
-void Math_GLM_FrustrumPlanes_ReverseZ(mat4 m, vec4 dest[6]);
 
 static void Math_srand(unsigned long long p_seed)
 {
@@ -99,8 +97,6 @@ inline float Math_move_towardf(float from, float to, float delta)
 	return fabsf(to - from) <= delta ? to : from + Math_sign_float(to - from) * delta;
 }
 
-long double Math_fract(long double x);
-
 inline long double Math_fract2(long double x)
 {
 	return x - floor(x);
@@ -122,22 +118,6 @@ inline void Math_vec3_dir_to(vec3 from, vec3 to, vec3 dest)
 	glm_vec3_copy(v, dest);
 };
 
-inline void Math_vec3_slerp(vec3 from, vec3 to, float weight, vec3 dest)
-{
-	
-}
-
-inline void Math_mat4_mulv2(mat4 m, vec2 v, float third, float last, vec2 dest)
-{
-	vec4 res;
-	res[0] = v[0];
-	res[1] = v[1];
-	res[2] = third;
-	res[3] = last;
-	glm_mat4_mulv(m, res, res);
-	glm_vec2(res, dest);
-}
-
 inline void Math_vec3_scaleadd(vec3 va, vec3 vb, float scale, vec3 dest)
 {
 	dest[0] = va[0] + scale * vb[0];
@@ -156,15 +136,6 @@ inline bool Math_vec3_is_zero(vec3 v)
 	}
 	return true;
 }
-
-void Math_calcLightSpaceMatrix(const float p_cameraFov, const float p_screenWidth, const float p_screenHeight, const float p_nearPlane, const float p_farPlane, const float p_zMult,
-	vec3 p_lightDir, mat4 p_cameraView, mat4 dest);
-
-void Math_getLightSpacesMatrixesForFrustrum(const R_Camera* const p_camera, const float p_screenWidth, const float p_screenHeight, 
-	const float p_zMult, vec4 p_shadowCascadeLevels, vec3 p_lightDir, mat4 dest[5], vec4 frustrum_planes[5][6]);
-
-
-
 
 typedef struct M_Rect2Df
 {
@@ -193,7 +164,6 @@ float AABB_GetSurfaceArea(AABB* aabb);
 AABB AABB_getMinkDiff(AABB* first, AABB* other);
 AABB AABB_ExpandedTo(AABB* first, vec3 to);
 float AABB_getFirstRayIntersection(AABB const aabb, vec3 p_dir, vec3 r_intersection, vec3 r_normal);
-float AABB_checkPlaneIntersection(AABB const p_aabb, vec3 p_dir, vec3 p_normal);
 void AABB_CLOSESTBOUDNS(AABB* first, vec3 point, vec3 dest);
 void AABB_getPenerationDepth(AABB* first, vec3 dest);
 bool AABB_MinkIntersectionCheck(AABB* mink);
@@ -214,11 +184,4 @@ bool Plane_IntersectsSegment(Plane* const p_plane, vec3 begin, vec3 end, vec3 r_
 void Math_Model(vec3 position, vec3 size, float rotation, mat4 dest);
 void Math_Model2D(vec2 position, vec2 size, float rotation, mat4 dest);
 
-
-typedef struct
-{
-	mat4 projView;
-	float splitDist;
-} CascadeShadow;
-
-void CascadeShadow_genMatrix(vec3 p_lightDir, float nearPlane, float farPlane, mat4 view, mat4 proj, mat4 dest[5], float cascades[5]);
+#endif // !UTILITY_MATH

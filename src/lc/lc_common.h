@@ -16,8 +16,8 @@
 #define LC_BLOCK_ATLAS_WIDTH 400
 #define LC_BLOCK_ATLAS_HEIGHT 400
 #define LC_BLOCK_ATLAS_TEX_SIZE 16
-#define LC_BLOCK_ATLAS_WIDTH_DIVIDED 64
-#define LC_BLOCK_ATLAS_HEIGHT_DIVIDED 32
+#define LC_BLOCK_ATLAS_WIDTH_DIVIDED LC_BLOCK_ATLAS_WIDTH / LC_BLOCK_ATLAS_TEX_SIZE
+#define LC_BLOCK_ATLAS_HEIGHT_DIVIDED LC_BLOCK_ATLAS_HEIGHT / LC_BLOCK_ATLAS_TEX_SIZE
 #define LC_CHUNK_WIDTH 16
 #define LC_CHUNK_HEIGHT 16
 #define LC_CHUNK_LENGTH 16
@@ -418,7 +418,7 @@ static const LC_Block_LightData LC_BLOCK_LIGHTING_DATA[] =
 	0.95, 0.06, 0.12,
 	32.0,
 	12.4,
-	0.72,
+	8.72,
 	0.20,
 
 	//OBSIDIAN 
@@ -426,7 +426,7 @@ static const LC_Block_LightData LC_BLOCK_LIGHTING_DATA[] =
 	0.51, 0.03, 0.89,
 	12.0,
 	0.4,
-	0.22,
+	9.22,
 	0.20,
 
 	//TORCH
@@ -434,8 +434,8 @@ static const LC_Block_LightData LC_BLOCK_LIGHTING_DATA[] =
 	0.95, 0.56, 0.01,
 	4.0,
 	0.4,
-	0.22,
-	0.20,
+	3.22,
+	1.20,
 };
 
 static const char* LC_BLOCK_CHAR_NAME[] =
@@ -521,13 +521,13 @@ static const char* LC_BLOCK_CHAR_NAME[] =
 
 typedef enum
 {
-	LC_Biome_None2,
-	LC_Biome_SnowyMountains2,
-	LC_Biome_RockyMountains2,
-	LC_Biome_GrassyPlains2,
-	LC_Biome_SnowyPlains2,
-	LC_Biome_Desert2,
-	LC_Biome_Max2
+	LC_Biome_None,
+	LC_Biome_SnowyMountains,
+	LC_Biome_RockyMountains,
+	LC_Biome_GrassyPlains,
+	LC_Biome_SnowyPlains,
+	LC_Biome_Desert,
+	LC_Biome_Max
 } LC_BiomeType2;
 
 
@@ -547,6 +547,7 @@ unsigned LC_generateBlockInfoGLBuffer();
 float LC_CalculateContinentalness(float p_x, float p_z);
 float LC_CalculateSurfaceHeight(float p_x, float p_y, float p_z);
 LC_BlockType LC_Generate_Block(float p_x, float p_y, float p_z);
+void LC_Generate_SetSeed(unsigned seed);
 
 
 typedef struct

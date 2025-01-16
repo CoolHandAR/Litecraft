@@ -2,8 +2,8 @@
 #define PHYSICS_WORLD_H
 #pragma once
 
-#include "lc_common.h"
-#include "p_physics_defs.h"
+#include "lc/lc_common.h"
+#include "physics/physics_defs.h"
 #include "utility/forward_list.h"
 
 

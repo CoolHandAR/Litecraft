@@ -1,56 +1,14 @@
-#include "r_core.h"
+#include "render/r_core.h"
 
 #include "core/core_common.h"
+#include "shaders/shader_info.h"
 
 extern RPass_PassData* pass;
 extern R_Cvars r_cvars;
 extern R_Scene scene;
 
 extern void Render_Cube();
-
-
-void RInternal_UpdateDeferredShadingShader(bool p_recompile)
-{
-    if (p_recompile)
-    {
-        if (pass->deferred.shading_shader > 0)
-        {
-            glDeleteProgram(pass->deferred.shading_shader);
-        }
-
-        const char* DEFINES[2] =
-        {
-            (r_cvars.r_useDirShadowMapping->int_value) ? "USE_DIR_SHADOWS" : "",
-            (r_cvars.r_useSsao->int_value) ? "USE_SSAO" : "",
-        };
-        pass->deferred.shading_shader = Shader_CompileFromFileDefine("src/render/shaders/screen/base_screen.vert", "src/render/shaders/screen/deferred_scene.frag", NULL, DEFINES, 2);
-
-        Core_Printf("Deferred shading shader recompiled!");   
-    }
-
-    glUseProgram(pass->deferred.shading_shader);
-    Shader_SetInteger(pass->deferred.shading_shader, "gNormalMetal", 0);
-    Shader_SetInteger(pass->deferred.shading_shader, "gColorRough", 1);
-    Shader_SetInteger(pass->deferred.shading_shader, "depth_texture", 2);
-    Shader_SetInteger(pass->deferred.shading_shader, "SSAO_texture", 3);
-    Shader_SetInteger(pass->deferred.shading_shader, "shadowMapsDepth", 4);
-    Shader_SetInteger(pass->deferred.shading_shader, "brdfLUT", 5);
-    Shader_SetInteger(pass->deferred.shading_shader, "irradianceMap", 6);
-    Shader_SetInteger(pass->deferred.shading_shader, "preFilterMap", 7);
-
-    Shader_SetInteger(pass->deferred.shading_shader, "u_shadowSampleAmount", pass->shadow.num_shadow_sample_kernels);
-    Shader_SetFloat(pass->deferred.shading_shader, "u_shadowQualityRadius", pass->shadow.quality_radius_scale);
-    if (pass->shadow.num_shadow_sample_kernels > 0)
-    {
-        char buf[64];
-        for (int i = 0; i < pass->shadow.num_shadow_sample_kernels; i++)
-        {
-            memset(buf, 0, sizeof(buf));
-            sprintf(buf, "u_shadowSampleKernels[%i]", i);
-            Shader_SetVector2f(pass->deferred.shading_shader, buf, pass->shadow.shadow_sample_kernels[i][0], pass->shadow.shadow_sample_kernels[i][1]);
-        }
-    }
-}
+extern void Render_Quad();
 
 void RInternal_GetShadowQualityData(int p_qualityLevel, int p_blurLevel, float* r_shadowMapSize, float* r_kernels, int* r_numKernels, float* r_qualityRadius)
 {
@@ -120,60 +78,70 @@ void RInternal_GetShadowQualityData(int p_qualityLevel, int p_blurLevel, float* 
 
 void RInternal_ProcessIBLCubemap(bool p_fast, bool p_irradiance, bool p_prefilter, bool p_brdf)
 {
-    float irradiance_sample_delta = (p_fast) ? (0.025 * 24.0) : (0.025);
-    int prefilter_brdf_sample_count = (p_fast) ? (12) : (1024);
+    float irradiance_sample_delta = (p_fast) ? (0.025 * 12.0) : (0.025);
+    int prefilter_brdf_sample_count = (p_fast) ? (24) : (1024);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
-    glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
     if (p_irradiance)
     {
         //CONVULUTE CUBEMAP
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 32, 32);
-        glUseProgram(pass->ibl.irradiance_convulution_shader);
-        Shader_SetInteger(pass->ibl.irradiance_convulution_shader, "environmentMap", 0);
-        Shader_SetMatrix4(pass->ibl.irradiance_convulution_shader, "u_proj", pass->ibl.cube_proj);
-        Shader_SetFloat(pass->ibl.irradiance_convulution_shader, "u_sampleDelta", irradiance_sample_delta);
+        Shader_ResetDefines(&pass->ibl.cubemap_shader);
+        Shader_SetDefine(&pass->ibl.cubemap_shader, CUBEMAP_DEFINE_IRRADIANCE_PASS, true);
 
-        glActiveTexture(GL_TEXTURE0);
+        Shader_Use(&pass->ibl.cubemap_shader);
+
+        Shader_SetMat4(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_PROJ, pass->ibl.cube_proj);
+        Shader_SetFloaty(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_IRRADIANCESAMPLEDELTA, irradiance_sample_delta);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.irr_FBO);
+        glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.irr_RBO);
+
+        glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.envCubemapTexture);
 
-        glViewport(0, 0, 32, 32);
+        glViewport(0, 0, pass->ibl.irr_size, pass->ibl.irr_size);
         for (int i = 0; i < 6; i++)
         {
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.irradianceCubemapTexture, 0);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 
-            Shader_SetMatrix4(pass->ibl.irradiance_convulution_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
+            Shader_SetMat4(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_VIEW, pass->ibl.cube_view_matrixes[i]);
             Render_Cube();
         }
     }
     if (p_prefilter)
     {
-        //PREFILTER CUBEMAP
-        glUseProgram(pass->ibl.prefilter_cubemap_shader);
-        Shader_SetInteger(pass->ibl.prefilter_cubemap_shader, "environmentMap", 0);
-        Shader_SetMatrix4(pass->ibl.prefilter_cubemap_shader, "u_proj", pass->ibl.cube_proj);
-        Shader_SetInteger(pass->ibl.prefilter_cubemap_shader, "u_sampleCount", prefilter_brdf_sample_count);
-        glActiveTexture(GL_TEXTURE0);
+        glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.filter_FBO);
+
+        Shader_ResetDefines(&pass->ibl.cubemap_shader);
+        Shader_SetDefine(&pass->ibl.cubemap_shader, CUBEMAP_DEFINE_PREFILTER_PASS, true);
+
+        Shader_Use(&pass->ibl.cubemap_shader);
+
+        Shader_SetMat4(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_PROJ, pass->ibl.cube_proj);
+        Shader_SetInt(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_PREFILTERSAMPLECOUNT, prefilter_brdf_sample_count);
+
+        //PREFILTER 
+        glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.envCubemapTexture);
 
         unsigned int maxMipLevels = 5;
         for (unsigned int mip = 0; mip < maxMipLevels; ++mip)
         {
-            unsigned int mipWidth = (unsigned)(128 * pow(0.5, mip));
-            unsigned int mipHeight = (unsigned)(128 * pow(0.5, mip));
+            unsigned int mipWidth = (unsigned)(pass->ibl.filter_size * pow(0.5, mip));
+            unsigned int mipHeight = (unsigned)(pass->ibl.filter_size * pow(0.5, mip));
 
-            glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
-            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, mipWidth, mipHeight);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, pass->ibl.filter_depth_mipmaps[mip], 0);
+
             glViewport(0, 0, mipWidth, mipHeight);
 
             float roughness = (float)mip / (float)(maxMipLevels - 1);
-            Shader_SetFloat(pass->ibl.prefilter_cubemap_shader, "u_roughness", roughness);
+
+            Shader_SetFloaty(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_PREFILTERROUGHNESS, roughness);
 
             for (unsigned int i = 0; i < 6; ++i)
             {
-                Shader_SetMatrix4(pass->ibl.prefilter_cubemap_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
+                Shader_SetMat4(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_VIEW, pass->ibl.cube_view_matrixes[i]);
                 glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.prefilteredCubemapTexture, mip);
 
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -183,11 +151,13 @@ void RInternal_ProcessIBLCubemap(bool p_fast, bool p_irradiance, bool p_prefilte
     }
     if (p_brdf)
     {
+        glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
+
         //BRDF GENERATION
-        glUseProgram(pass->ibl.brdf_shader);
-        Shader_SetInteger(pass->ibl.brdf_shader, "u_sampleCount", prefilter_brdf_sample_count);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 512, 512);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->ibl.brdfLutTexture, 0);
+        Shader_Use(&pass->ibl.brdf_shader);
+
+        Shader_SetInt(&pass->ibl.brdf_shader, BRDF_UNIFORM_SAMPLECOUNT, prefilter_brdf_sample_count);
+
         glViewport(0, 0, 512, 512);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 

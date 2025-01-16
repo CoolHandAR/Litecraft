@@ -3,11 +3,11 @@
 #pragma once
 
 #include "render/r_texture.h"
+#include "render/r_public.h"
 #include "core/sound.h"
 #include "lc/lc_chunk.h"
-#include "render/r_public.h"
-#include "lc/lc_world2.h"
-#include "lc_common.h"
+#include "lc/lc_world.h"
+#include "lc/lc_common.h"
 
 
 /*
@@ -19,7 +19,7 @@ void LC_StartFrame();
 void LC_EndFrame();
 void LC_Draw();
 void LC_PhysUpdate(float delta);
-void LC_Init();
+int LC_Init();
 void LC_Exit();
 
 typedef struct

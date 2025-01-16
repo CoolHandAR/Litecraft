@@ -1,5 +1,7 @@
-#include "r_core.h"
-#include "r_public.h"
+#include "render/r_core.h"
+#include "render/r_public.h"
+
+#include "render/shaders/shader_info.h"
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -296,14 +298,6 @@ void Draw_Triangle(vec3 p1, vec3 p2, vec3 p3, vec4 p_color)
 	_copyToCmdBuffer(R_CMD__TRIANGLE, &cmd, sizeof(R_CMD_DrawTriangle));
 }
 
-void Draw_Model(R_Model* const p_model, vec3 p_position)
-{
-
-}
-
-void Draw_ModelWires(R_Model* const p_model, vec3 p_position)
-{
-}
 
 void Draw_LCWorld()
 {
@@ -496,66 +490,8 @@ void RScene_SetRenderInstancePosition(RenderInstanceID p_id, vec3 position)
 
 static void RScene_CubemapCompute()
 {
-	//CONVULUTE CUBEMAP
-	glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
-	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 32, 32);
-	glUseProgram(pass->ibl.irradiance_convulution_shader);
-	Shader_SetInteger(pass->ibl.irradiance_convulution_shader, "environmentMap", 0);
-	Shader_SetMatrix4(pass->ibl.irradiance_convulution_shader, "u_proj", pass->ibl.cube_proj);
 
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.envCubemapTexture);
-
-	glViewport(0, 0, 32, 32);
-	for (int i = 0; i < 6; i++)
-	{
-		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.irradianceCubemapTexture, 0);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-
-		Shader_SetMatrix4(pass->ibl.irradiance_convulution_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
-		Render_Cube();
-	}
-
-	//PREFILTER CUBEMAP
-	glUseProgram(pass->ibl.prefilter_cubemap_shader);
-	Shader_SetInteger(pass->ibl.prefilter_cubemap_shader, "environmentMap", 0);
-	Shader_SetMatrix4(pass->ibl.prefilter_cubemap_shader, "u_proj", pass->ibl.cube_proj);
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_CUBE_MAP, pass->ibl.envCubemapTexture);
-
-	unsigned int maxMipLevels = 5;
-	for (unsigned int mip = 0; mip < maxMipLevels; ++mip)
-	{
-		unsigned int mipWidth = (unsigned)(128 * pow(0.5, mip));
-		unsigned int mipHeight = (unsigned)(128 * pow(0.5, mip));
-
-		glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
-		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, mipWidth, mipHeight);
-		glViewport(0, 0, mipWidth, mipHeight);
-
-		float roughness = (float)mip / (float)(maxMipLevels - 1);
-		Shader_SetFloat(pass->ibl.prefilter_cubemap_shader, "u_roughness", roughness);
-
-		for (unsigned int i = 0; i < 6; ++i)
-		{
-			Shader_SetMatrix4(pass->ibl.prefilter_cubemap_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
-			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.prefilteredCubemapTexture, mip);
-
-			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-			Render_Cube();
-		}
-	}
-
-	//BRDF GENERATION
-	glUseProgram(pass->ibl.brdf_shader);
-	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 512, 512);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pass->ibl.brdfLutTexture, 0);
-	glViewport(0, 0, 512, 512);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-	glDisable(GL_BLEND);
-	Render_Quad();
+	RInternal_ProcessIBLCubemap(false, true, true, true);
 
 	//RESET VIEWPROT
 	glViewport(0, 0, backend_data->screenSize[0], backend_data->screenSize[1]);
@@ -563,6 +499,7 @@ static void RScene_CubemapCompute()
 
 void RScene_SetSkyboxTexturePanorama(R_Texture* p_tex)
 {
+	/*
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, p_tex->id);
 	glUseProgram(pass->ibl.equirectangular_to_cubemap_shader);
@@ -584,10 +521,12 @@ void RScene_SetSkyboxTexturePanorama(R_Texture* p_tex)
 	}
 
 	RScene_CubemapCompute();
+	*/
 }
 
 void RScene_SetSkyboxTextureSingleImage(const char* p_path)
 {
+	/*
 	R_Texture skybox_tex = HDRTexture_Load(p_path, NULL);
 
 	glActiveTexture(GL_TEXTURE0);
@@ -596,19 +535,11 @@ void RScene_SetSkyboxTextureSingleImage(const char* p_path)
 	Shader_SetInteger(pass->ibl.single_image_cubemap_convert_shader, "skyboxTextureMap", 0);
 	Shader_SetMatrix4(pass->ibl.single_image_cubemap_convert_shader, "u_proj", pass->ibl.cube_proj);
 
-	glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
-	glViewport(0, 0, 512, 512);
-	for (int i = 0; i < 6; i++)
-	{
-		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, pass->ibl.envCubemapTexture, 0);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-
-		Shader_SetMatrix4(pass->ibl.single_image_cubemap_convert_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
-		Render_Cube();
-	}
+	
 
 	RScene_CubemapCompute();
+
+	*/
 }
 
 void RScene_SetAmbientLightInfluence(float p_ratio)
@@ -647,13 +578,17 @@ void RScene_SetNightTexture(R_Texture* p_tex)
 {
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, p_tex->id);
-	glUseProgram(pass->ibl.equirectangular_to_cubemap_shader);
-	Shader_SetInteger(pass->ibl.equirectangular_to_cubemap_shader, "equirectangularMap", 0);
-	Shader_SetMatrix4(pass->ibl.equirectangular_to_cubemap_shader, "u_proj", pass->ibl.cube_proj);
-	glBindRenderbuffer(GL_RENDERBUFFER, pass->ibl.RBO);
-	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 512, 512);
-	glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.FBO);
-	glViewport(0, 0, 512, 512);
+
+	//CONVULUTE CUBEMAP
+	Shader_ResetDefines(&pass->ibl.cubemap_shader);
+	Shader_SetDefine(&pass->ibl.cubemap_shader, CUBEMAP_DEFINE_CONVERT_TO_CUBEMAP_PASS, true);
+
+	Shader_Use(&pass->ibl.cubemap_shader);
+
+	Shader_SetMat4(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_PROJ, pass->ibl.cube_proj);
+
+	glBindFramebuffer(GL_FRAMEBUFFER, pass->ibl.env_FBO);
+	glViewport(0, 0, pass->ibl.env_size, pass->ibl.env_size);
 	//CONVERT PANORAMA TO A CUBEMAP
 	for (int i = 0; i < 6; i++)
 	{
@@ -661,11 +596,11 @@ void RScene_SetNightTexture(R_Texture* p_tex)
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 
-		Shader_SetMatrix4(pass->ibl.equirectangular_to_cubemap_shader, "u_view", pass->ibl.cube_view_matrixes[i]);
+		Shader_SetMat4(&pass->ibl.cubemap_shader, CUBEMAP_UNIFORM_VIEW, pass->ibl.cube_view_matrixes[i]);
 		Render_Cube();
 	}
 
-	RScene_CubemapCompute();
+	//RScene_CubemapCompute();
 
 }
 

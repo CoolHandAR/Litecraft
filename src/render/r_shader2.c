@@ -1,4 +1,4 @@
-#include "r_shader2.h"
+#include "render/r_shader.h"
 
 #include <string.h>
 #include <glad/glad.h>
@@ -353,6 +353,18 @@ static bool Shader_SetupUniformLocations(RShader* const shader, ShaderVariant* c
 			}
 		}
 	}
+	int loc = glGetUniformLocation(variant->program_id, "texture_arr");
+
+	if (loc != -1)
+	{
+		int32_t samplers[32];
+
+		for (int j = 0; j < 32; j++)
+		{
+			samplers[j] = j;
+		}
+		glProgramUniform1iv(variant->program_id, loc, 32, samplers);
+	}
 
 	return true;
 }
@@ -379,7 +391,7 @@ static bool Shader_CreateVariant(RShader* const shader, uint64_t key, ShaderVari
 		memcpy(compute_buf, shader->compute_code, shader->compute_length + 1);
 	}
 	else
-	{
+	{	
 		assert((shader->vertex_length > 0 && shader->fragment_length > 0));
 
 		vertex_buf = malloc(shader->vertex_length + 1);
@@ -685,6 +697,13 @@ RShader Shader_ComputeCreate(const char* comp_src, int max_defines, int max_unif
 	return shader;
 }
 
+RShader Shader_PixelCreateStatic(const char* vert_src, const char* frag_src)
+{	
+	RShader shader;
+
+	return shader;
+}
+
 void Shader_Destruct(RShader* const shader)
 {
 	for (int i = 0; i < dA_size(shader->variant_map.item_data); i++)
@@ -804,8 +823,7 @@ void Shader_SetInt(RShader* const shader, int uniform, int value)
 	glUniform1i(loc, value);
 }
 
-/*
-void Shader_SetUnsigned(RShader* const shader, int uniform, unsigned value)
+void Shader_SetUint(RShader* const shader, int uniform, unsigned value)
 {
 	int loc = Shader_GetUniformLocation(shader, uniform);
 
@@ -816,7 +834,6 @@ void Shader_SetUnsigned(RShader* const shader, int uniform, unsigned value)
 
 	glUniform1ui(loc, value);
 }
-*/
 
 void Shader_SetFloaty(RShader* const shader, int uniform, float value)
 {

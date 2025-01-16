@@ -1,28 +1,94 @@
-#ifndef R_SHADER_H
-#define R_SHADER_H
+#ifndef RSHADER_H
+#define RSHADER_H
+#pragma once
 
+#include <stdint.h>
 #include <cglm/cglm.h>
 
-typedef unsigned int R_Shader;
+#include "utility/Custom_Hashmap.h"
+
+typedef struct
+{
+	uint64_t key;
+	int* uniforms_locations;
+
+	unsigned program_id;
+} ShaderVariant;
+
+typedef struct
+{
+	unsigned char* vertex_code;
+	unsigned char* fragment_code;
+	unsigned char* geo_code;
+	unsigned char* compute_code;
+	
+	int vertex_length;
+	int fragment_length;
+	int geo_length;
+	int compute_length;
+
+	uint64_t current_variant_key;
+	uint64_t new_variant_key;
+	
+	int max_uniforms;
+	int max_defines;
+	int max_tex_units;
+
+	CHMap variant_map;
+
+	bool is_compute;
+	bool is_loaded;
+
+	const char** define_names;
+	const char** uniform_names;
+	const char** tex_unit_names;
+
+	ShaderVariant* active_variant;
+
+} RShader;
+
+RShader Shader_PixelCreate(const char* vert_src, const char* frag_src, int max_defines, int max_uniforms, int max_texunits, const char** defines, const char** uniforms, const char** tex_units, bool* r_result);
+RShader Shader_ComputeCreate(const char* comp_src, int max_defines, int max_uniforms, int max_texunits, const char** defines, const char** uniforms, const char** tex_units, bool* r_result);
+
+RShader Shader_PixelCreateStatic(const char* comp_src, int max_defines, int max_uniforms, int max_texunits, const char** defines, const char** uniforms, const char** tex_units, bool* r_result);
 
 
-R_Shader Shader_CompileFromMemory(const char* p_vertexShader, const char* p_fragmentShader, const char* p_geometryShader);
-R_Shader Shader_CompileFromFile(const char* p_vertexShaderPath, const char* p_fragmentShaderPath, const char* p_geometryShaderPath);
-R_Shader Shader_CompileFromFileDefine(const char* p_vertexShaderPath, const char* p_fragmentShaderPath, const char* p_geometryShaderPath, const char** p_defines, int p_defineCount);
-R_Shader ComputeShader_CompileFromMemory(const char* p_computeShader);
-R_Shader ComputeShader_CompileFromFile(const char* p_computeShaderPath);
-R_Shader ComputeShader_CompileFromFileDefine(const char* p_computeShaderPath, const char** p_defines, int p_defineCount);
+void Shader_Destruct(RShader* const shader);
 
-void Shader_SetFloat(R_Shader shader, const char* name, float value);
-void Shader_SetInteger(R_Shader shader, const char* name, int value);
-void Shader_SetUnsigned(R_Shader shader, const char* name, unsigned value);
-void Shader_SetVector2f(R_Shader shader, const char* name, float x, float y);
-void Shader_SetVector2f_2(R_Shader shader, const char* name, vec2* const value);
-void Shader_SetVector3f(R_Shader shader, const char* name, float x, float y, float z);
-void Shader_SetVector3f_2(R_Shader shader, const char* name, vec3 const value);
-void Shader_SetVector4f(R_Shader shader, const char* name, float x, float y, float z, float w);
-void Shader_SetVector4f_2(R_Shader shader, const char* name, vec4* const value);
-void Shader_SetMatrix4(R_Shader shader, const char* name, mat4 const matrix);
+void Shader_Use(RShader* const shader);
 
+int Shader_GetUniformLocation(RShader* const shader, int uniform);
+
+void Shader_SetInt(RShader* const shader, int uniform, int value);
+void Shader_SetUint(RShader* const shader, int uniform, unsigned value);
+void Shader_SetFloaty(RShader* const shader, int uniform, float value);
+
+void Shader_SetFloat2(RShader* const shader, int uniform, float x, float y);
+void Shader_SetFloat3(RShader* const shader, int uniform, float x, float y, float z);
+void Shader_SetFloat4(RShader* const shader, int uniform, float x, float y, float z, float w);
+
+void Shader_SetVec2(RShader* const shader, int uniform, vec2 value);
+void Shader_SetVec3(RShader* const shader, int uniform, vec3 value);
+void Shader_SetVec4(RShader* const shader, int uniform, vec4 value);
+
+void Shader_SetMat4(RShader* const shader, int uniform, mat4 value);
+
+
+inline void Shader_SetDefine(RShader* const shader, int define, bool state)
+{
+	if (state)
+	{
+		shader->new_variant_key |= (1 << define);
+	}
+	else
+	{
+		shader->new_variant_key &= ~(1 << define);
+	}
+}
+
+inline void Shader_ResetDefines(RShader* const shader)
+{
+	shader->new_variant_key = 0;
+}
 
 #endif

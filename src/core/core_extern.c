@@ -4,6 +4,7 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
+#include <Windows.h>
 
 #define DYNAMIC_ARRAY_IMPLEMENTATION
 #include "utility/dynamic_array.h"
@@ -11,9 +12,16 @@
 #define CHM_IMPLEMENTATION
 #include "utility/Custom_Hashmap.h"
 
+#define STB_PERLIN_IMPLEMENTATION
+#include <stb_perlin/stb_perlin.h>
 
-#include "cvar.h"
+#include "core/cvar.h"
 #include "core/core_common.h"
+
+#define NK_GLFW_GL3_IMPLEMENTATION
+#define NK_IMPLEMENTATION
+#include <nuklear/nuklear.h>
+#include <nuklear/nuklear_glfw_gl3.h>
 
 
 /*
@@ -106,7 +114,12 @@ bool Core_init()
 	if (!Sound_Init()) return false;
 	if (!Cvar_Init()) return false;
 	if (!Input_Init()) return false;
-	if (!Renderer_Init(0, 0)) return false;
+	if (!Renderer_Init(0, 0))
+	{
+		MessageBox(NULL, (LPCWSTR)L"Failed to load renderer shaders.\nMake sure there is asset folder", (LPCWSTR)L"Failure to load!", MB_ICONWARNING);
+
+		return false;
+	}
 	if (!ThreadCore_Init()) return false;
 	if (!Con_Init()) return false;
 	

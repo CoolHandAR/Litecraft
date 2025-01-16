@@ -5,9 +5,9 @@
 #include "core/cvar.h"
 #include "core/input.h"
 #include "core/core_common.h"
-#include "physics/p_physics_defs.h"
+#include "physics/physics_defs.h"
 #include "physics/physics_world.h"
-#include "lc/lc_world2.h"
+#include "lc/lc_world.h"
 #include "render/r_camera.h"
 #include "render/r_public.h"
 #include "core/sound.h"
@@ -1209,9 +1209,6 @@ void PL_Update()
 		//PL_spawnCorrect();
 		//printf(" spawn corecting %f \n", player.alive_timer);
 	}
-
-	//printf("%f \n", LC_CalculateSurfaceHeight(player.k_body->box.position[0], player.k_body->box.position[2], ));
-
 }
 
 void LC_Player_getPosition(vec3 dest)

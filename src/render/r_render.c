@@ -5,10 +5,11 @@
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
 
-#include "r_core.h"
+#include "render/r_core.h"
 
-#include "r_public.h"
+#include "render/r_public.h"
 #include "core/core_common.h"
+
 
 extern RDraw_DrawData* drawData;
 extern R_RendererResources resources;
@@ -26,14 +27,14 @@ static void Render_ScreenQuadBatch()
         return;
     }
 
-	glUseProgram(data->shader);
-
+    Shader_Use(&pass->scene.screen_shader);
+   
     //bind texture units
     for (int i = 0; i < 32; i++)
     {
         if (data->tex_array[i] == 0)
         {
-           // break;
+            break;
         }
 
         unsigned texture_index = data->tex_array[i];
@@ -41,13 +42,7 @@ static void Render_ScreenQuadBatch()
         glBindTextureUnit(i, texture_index);
     }
 
-   // glBindTexture(GL_TEXTURE_2D, data->tex_array[0]);
-
-    mat4 ortho;
-    glm_ortho(0.0f, 1280, 720, 0.0f, -1.0f, 1.0f, ortho);
-
-   // Shader_SetVector2f(data->shader, "u_windowScale", 1, 1);
-    Shader_SetMatrix4(data->shader, "u_projection", ortho);
+    Shader_SetMat4(&pass->scene.screen_shader, SCREEN_SHADER_UNIFORM_PROJECTION, data->ortho);
 
     glBindVertexArray(data->vao);
     glDrawElements(GL_TRIANGLES, data->indices_count, GL_UNSIGNED_INT, 0);
@@ -66,7 +61,11 @@ static void Render_LineBatch()
         return;
     }
 
-    glUseProgram(drawData->lines.shader);
+    Shader_ResetDefines(&pass->scene.shader_3d_forward);
+    Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_COLOR_ATTRIB, true);
+    Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_COLOR_8BIT, true);
+
+    Shader_Use(&pass->scene.shader_3d_forward);
 
     glBindVertexArray(data->vao);
     glDrawArrays(GL_LINES, 0, data->vertices_count);
@@ -99,13 +98,25 @@ static void Render_CubeInstances()
         return;
     }
 
+    Shader_ResetDefines(&pass->scene.shader_3d_forward);
+    Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_TEXCOORD_ATTRIB, true);
+    Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_INSTANCE_MAT3, true);
+    Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_INSTANCE_UV, true);
+    Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_INSTANCE_COLOR, true);
+    Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_INSTANCE_CUSTOM, true);
+    Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_USE_TEXTURE_ARR, true);
+    Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_SEMI_TRANSPARENT_PASS, true);
+
+    Shader_Use(&pass->scene.shader_3d_forward);
+
+    glDisable(GL_CULL_FACE);
     glBindVertexArray(drawData->cube.vao);
     
     glBindTextures(0, data->texture_index, data->texture_ids);
 
-    glUseProgram(drawData->cube.shader);
-    glEnable(GL_BLEND);
     glDrawArraysInstanced(GL_TRIANGLES, 0, 36, drawData->cube.instance_count);
+
+    glEnable(GL_CULL_FACE);
 }
 
 static void Render_Particles()
@@ -144,6 +155,7 @@ static void Render_OpaqueWorldChunks(bool p_TextureDraw, int mode)
     }
     size_t max_chunk_render_amount = scene.cull_data.lc_world.opaque_in_frustrum;
 
+    //hacky but, add little so that won't cause popups 
     if (max_chunk_render_amount > 0)
     {
         max_chunk_render_amount += 20;
@@ -156,7 +168,6 @@ static void Render_OpaqueWorldChunks(bool p_TextureDraw, int mode)
         glBindTextureUnit(2, drawData->lc_world.world_render_data->texture_atlas_mer->id);
     }
     glBindVertexArray(drawData->lc_world.world_render_data->vao);
-    glBindBuffer(GL_ARRAY_BUFFER, drawData->lc_world.world_render_data->opaque_buffer.buffer);
     glBindVertexBuffer(0, drawData->lc_world.world_render_data->opaque_buffer.buffer, 0, sizeof(ChunkVertex));
       
     //Normal rendering
@@ -167,7 +178,6 @@ static void Render_OpaqueWorldChunks(bool p_TextureDraw, int mode)
         int offset = 0;
         if (max_chunk_render_amount > 0)
         {
-            glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_ATOMIC_COUNTER_BUFFER);
             glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->draw_cmds_sorted_buffer);
             glBindBuffer(GL_PARAMETER_BUFFER, drawData->lc_world.world_render_data->atomic_counters[0]);
 
@@ -197,7 +207,6 @@ static void Render_OpaqueWorldChunks(bool p_TextureDraw, int mode)
         draw_count = scene.cull_data.lc_world.shadow_cull_count[shadow_split];
         if (draw_count > 0)
         {
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 35, drawData->lc_world.world_render_data->visibles_sorted_buffer);
             glMultiDrawArrays(GL_TRIANGLES, first, count, draw_count);
         } 
     }
@@ -214,7 +223,6 @@ static void Render_OpaqueWorldChunks(bool p_TextureDraw, int mode)
             glBindTextureUnit(3, pass->ibl.envCubemapTexture);
             glBindTextureUnit(4, pass->ibl.brdfLutTexture);
 
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 35, drawData->lc_world.world_render_data->visibles_sorted_buffer);
             glMultiDrawArrays(GL_TRIANGLES, first, count, draw_count);
         }
     }
@@ -236,13 +244,13 @@ static void Render_SemiTransparentWorldChunks(bool p_TextureDraw, int mode)
 
     size_t max_chunk_render_amount = scene.cull_data.lc_world.transparent_in_frustrum;
 
+    //hacky but, add little so that won't cause popups 
     if (max_chunk_render_amount > 0)
     {
         max_chunk_render_amount += 20;
     }
 
     glBindVertexArray(drawData->lc_world.world_render_data->vao);
-    glBindBuffer(GL_ARRAY_BUFFER, drawData->lc_world.world_render_data->semi_transparent_buffer.buffer);
     glBindVertexBuffer(0, drawData->lc_world.world_render_data->semi_transparent_buffer.buffer, 0, sizeof(ChunkVertex));
 
     if (mode == 0)
@@ -250,16 +258,15 @@ static void Render_SemiTransparentWorldChunks(bool p_TextureDraw, int mode)
         GLenum render_mode = (r_cvars.r_wireframe->int_value == 2) ? GL_LINES : GL_TRIANGLES;
         if (max_chunk_render_amount > 0)
         {
-            glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_ATOMIC_COUNTER_BUFFER | GL_SHADER_STORAGE_BARRIER_BIT);
             glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->draw_cmds_sorted_buffer);
             glBindBuffer(GL_PARAMETER_BUFFER, drawData->lc_world.world_render_data->atomic_counters[1]);
-            glMultiDrawArraysIndirectCount(render_mode, sizeof(DrawArraysIndirectCommand) * 2000, 0, max_chunk_render_amount, 0);
+            glMultiDrawArraysIndirectCount(render_mode, sizeof(DrawArraysIndirectCommand) * LC_WORLD_MAX_CHUNK_LIMIT, 0, max_chunk_render_amount, 0);
 
             //kinda hacky but works(only for debugging)
             if (r_cvars.r_wireframe->int_value == 1)
             {
                 glDisable(GL_DEPTH_TEST);
-                glMultiDrawArraysIndirectCount(GL_LINES, sizeof(DrawArraysIndirectCommand) * 2000, 0, max_chunk_render_amount, 0);
+                glMultiDrawArraysIndirectCount(GL_LINES, sizeof(DrawArraysIndirectCommand) * LC_WORLD_MAX_CHUNK_LIMIT, 0, max_chunk_render_amount, 0);
                 glEnable(GL_DEPTH_TEST);
             }
         }
@@ -279,7 +286,6 @@ static void Render_SemiTransparentWorldChunks(bool p_TextureDraw, int mode)
 
         if (draw_count > 0)
         {
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 35, drawData->lc_world.world_render_data->visibles_sorted_buffer);
             glBindTextureUnit(0, drawData->lc_world.world_render_data->texture_atlas->id);
             glMultiDrawArrays(GL_TRIANGLES, first, count, draw_count);
         }
@@ -311,33 +317,28 @@ void Render_WorldWaterChunks()
 
     size_t max_chunk_render_amount = scene.cull_data.lc_world.water_in_frustrum;
 
-    glUseProgram(pass->lc.water_shader);
+    if (max_chunk_render_amount > 0)
+    {
+        max_chunk_render_amount += 20;
+    }
 
-    static float time = 0;
-    time += 0.9 * Core_getDeltaTime();
-    //time = time - (int)time;
-
-    Shader_SetFloat(pass->lc.water_shader, "u_moveFactor", time);
+    Shader_Use(&pass->lc.water_shader);
 
     glBindTextureUnit(0, pass->ibl.envCubemapTexture);
     glBindTextureUnit(1, drawData->lc_world.world_render_data->water_displacement_texture->id);
-    glBindTextureUnit(3, pass->water.reflection_back_texture);
-    glBindTextureUnit(4, pass->water.refraction_texture);
-    glBindTextureUnit(5, pass->deferred.depth_texture);
-   // glBindTextureUnit(6, drawData->lc_world.world_render_data->water_displacement_texture->id);
-   // glBindTextureUnit(7, drawData->lc_world.world_render_data->water_noise_texture_1->id);
-   // glBindTextureUnit(8, drawData->lc_world.world_render_data->water_noise_texture_2->id);
-    glBindTextureUnit(9, drawData->lc_world.world_render_data->gradient_map->id);
+    glBindTextureUnit(2, pass->water.reflection_back_texture);
+    glBindTextureUnit(3, pass->water.refraction_texture);
+    glBindTextureUnit(4, pass->deferred.depth_texture);
+    glBindTextureUnit(5, drawData->lc_world.world_render_data->gradient_map->id);
 
     glBindVertexArray(drawData->lc_world.world_render_data->water_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, drawData->lc_world.world_render_data->water_buffer.buffer);
 
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, drawData->lc_world.world_render_data->draw_cmds_sorted_buffer);
     glBindBuffer(GL_PARAMETER_BUFFER, drawData->lc_world.world_render_data->atomic_counters[2]);
 
     if (max_chunk_render_amount > 0)
     {
-        glMultiDrawArraysIndirectCount(GL_TRIANGLES, sizeof(DrawArraysIndirectCommand) * 4000, 0, max_chunk_render_amount, 0);
+        glMultiDrawArraysIndirectCount(GL_TRIANGLES, sizeof(DrawArraysIndirectCommand) * LC_WORLD_MAX_CHUNK_LIMIT * 2, 0, max_chunk_render_amount, 0);
     }
 }
 
@@ -350,11 +351,6 @@ void Render_DrawChunkOcclusionBoxes()
 
     glNamedBufferSubData(drawData->lc_world.world_render_data->visibles_sorted_buffer, 0, sizeof(int) * scene.cull_data.lc_world.total_in_frustrum_count, scene.cull_data.lc_world.frustrum_sorted_query_buffer);
     glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
-
-    glUseProgram(pass->lc.occlussion_boxes_shader);
-
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 15, drawData->lc_world.world_render_data->chunk_data_buffer.buffer);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 17, drawData->lc_world.world_render_data->visibles_sorted_buffer);
 
     glBindVertexArray(resources.cubeVAO);
     glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 14, scene.cull_data.lc_world.total_in_frustrum_count);
@@ -379,23 +375,21 @@ static void Compute_WorldChunks()
         return;
     }
 
-    size_t chunk_amount = LC_World_GetDrawCmdAmount();
+    size_t chunk_amount = scene.cull_data.lc_world.total_in_frustrum_count;
     int num_x_groups = ceilf((float)chunk_amount / 16.0f);
 
     drawData->lc_world.world_render_data = LC_World_getRenderData();
 
-    glUseProgram(pass->lc.chunk_process_shader);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 15, drawData->lc_world.world_render_data->chunk_data_buffer.buffer);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 16, drawData->lc_world.world_render_data->draw_cmds_buffer.buffer);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 17, drawData->lc_world.world_render_data->visibles_sorted_buffer);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 19, drawData->lc_world.world_render_data->visibles_buffer);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 20, drawData->lc_world.world_render_data->draw_cmds_sorted_buffer);
+    Shader_Use(&pass->lc.process_chunks_shader);
 
     for (int i = 0; i < 3; i++)
     {
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 21 + i, drawData->lc_world.world_render_data->atomic_counters[i]);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 10 + i, drawData->lc_world.world_render_data->atomic_counters[i]);
     }
 
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 14, drawData->lc_world.world_render_data->draw_cmds_buffer.buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 15, drawData->lc_world.world_render_data->prev_in_frustrum_bitset_buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 17, drawData->lc_world.world_render_data->draw_cmds_sorted_buffer);
 
     glDispatchCompute(num_x_groups, 1, 1);
 }
@@ -412,9 +406,7 @@ void Compute_DispatchAll()
 
 void Compute_Sync()
 {
-    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-
-
+    glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_ATOMIC_COUNTER_BUFFER | GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
 void Render_OpaqueScene(RenderPassState rpass_state)
@@ -424,8 +416,12 @@ void Render_OpaqueScene(RenderPassState rpass_state)
     case RPass__DEPTH_PREPASS:
     {
         //Render opaque world chunks
-        glUseProgram(pass->lc.depthPrepass_shader);
-        Render_OpaqueWorldChunks(true, 0);
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_DEPTH_PASS, true);
+
+        Shader_Use(&pass->lc.world_shader);
+
+        Render_OpaqueWorldChunks(false, 0);
 
         //Render other opaque stuff
 
@@ -433,8 +429,14 @@ void Render_OpaqueScene(RenderPassState rpass_state)
     }
     case RPass__GBUFFER:
     {
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_TBN_MATRIX, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_TEXCOORDS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_GBUFFER_PASS, true);
+
+        Shader_Use(&pass->lc.world_shader);
+
         //Render opaque world chunks
-        glUseProgram(pass->lc.gBuffer_shader);
         Render_OpaqueWorldChunks(true, 0);
 
         //Render other opaque stuff
@@ -444,9 +446,16 @@ void Render_OpaqueScene(RenderPassState rpass_state)
     case RPass__SHADOW_MAPPING_SPLIT1:
     {
         //Render opaque world chunks
-        glUseProgram(pass->lc.shadow_map_shader);
-        Shader_SetMatrix4(pass->lc.shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[0]);
-        Shader_SetInteger(pass->lc.shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_offsets[0]);
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_DEPTH_PASS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_CHUNK_INDEX_USE_OFFSET, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_UNIFORM_MATRIX, true);
+
+        Shader_Use(&pass->lc.world_shader);
+
+        Shader_SetMat4(&pass->lc.world_shader, LC_WORLD_UNIFORM_MATRIX, scene.scene_data.shadow_matrixes[0]);
+        Shader_SetInt(&pass->lc.world_shader, LC_WORLD_UNIFORM_CHUNKOFFSET, drawData->lc_world.shadow_sorted_chunk_offsets[0]);
+        
         Render_OpaqueWorldChunks(false, 1);
 
 
@@ -456,11 +465,16 @@ void Render_OpaqueScene(RenderPassState rpass_state)
     }
     case RPass__SHADOW_MAPPING_SPLIT2:
     {
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_DEPTH_PASS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_CHUNK_INDEX_USE_OFFSET, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_UNIFORM_MATRIX, true);
+
+        Shader_Use(&pass->lc.world_shader);
 
         //Render opaque world chunks
-        glUseProgram(pass->lc.shadow_map_shader);
-        Shader_SetMatrix4(pass->lc.shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[1]);
-        Shader_SetInteger(pass->lc.shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_offsets[1]);
+        Shader_SetMat4(&pass->lc.world_shader, LC_WORLD_UNIFORM_MATRIX, scene.scene_data.shadow_matrixes[1]);
+        Shader_SetInt(&pass->lc.world_shader, LC_WORLD_UNIFORM_CHUNKOFFSET, drawData->lc_world.shadow_sorted_chunk_offsets[1]);
         Render_OpaqueWorldChunks(false, 2);
 
         //Render other opaque stuff
@@ -470,9 +484,16 @@ void Render_OpaqueScene(RenderPassState rpass_state)
     case RPass__SHADOW_MAPPING_SPLIT3:
     {
         //Render opaque world chunks
-        glUseProgram(pass->lc.shadow_map_shader);
-        Shader_SetMatrix4(pass->lc.shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[2]);
-        Shader_SetInteger(pass->lc.shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_offsets[2]);
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_DEPTH_PASS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_CHUNK_INDEX_USE_OFFSET, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_UNIFORM_MATRIX, true);
+
+        Shader_Use(&pass->lc.world_shader);
+
+        //Render opaque world chunks
+        Shader_SetMat4(&pass->lc.world_shader, LC_WORLD_UNIFORM_MATRIX, scene.scene_data.shadow_matrixes[2]);
+        Shader_SetInt(&pass->lc.world_shader, LC_WORLD_UNIFORM_CHUNKOFFSET, drawData->lc_world.shadow_sorted_chunk_offsets[2]);
         Render_OpaqueWorldChunks(false, 3);
 
         //Render other opaque stuff
@@ -481,11 +502,17 @@ void Render_OpaqueScene(RenderPassState rpass_state)
     }
     case RPass__SHADOW_MAPPING_SPLIT4:
     {
+        //Render opaque world chunks
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_DEPTH_PASS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_CHUNK_INDEX_USE_OFFSET, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_UNIFORM_MATRIX, true);
+
+        Shader_Use(&pass->lc.world_shader);
 
         //Render opaque world chunks
-        glUseProgram(pass->lc.shadow_map_shader);
-        Shader_SetMatrix4(pass->lc.shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[3]);
-        Shader_SetInteger(pass->lc.shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_offsets[3]);
+        Shader_SetMat4(&pass->lc.world_shader, LC_WORLD_UNIFORM_MATRIX, scene.scene_data.shadow_matrixes[3]);
+        Shader_SetInt(&pass->lc.world_shader, LC_WORLD_UNIFORM_CHUNKOFFSET, drawData->lc_world.shadow_sorted_chunk_offsets[3]);
         Render_OpaqueWorldChunks(false, 4);
 
         //Render other opaque stuff
@@ -499,12 +526,21 @@ void Render_OpaqueScene(RenderPassState rpass_state)
 
         glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
 
-        glUseProgram(pass->lc.clip_distance_shader);
-        Shader_SetMatrix4(pass->lc.clip_distance_shader, "u_matrix", pass->water.reflection_projView_matrix);
-        Shader_SetFloat(pass->lc.clip_distance_shader, "u_clipDistance", -LC_WORLD_WATER_HEIGHT);
-        Shader_SetInteger(pass->lc.clip_distance_shader, "u_dataOffset", 0);
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_CHUNK_INDEX_USE_OFFSET, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_UNIFORM_MATRIX, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_TEXCOORDS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_CLIP_DISTANCE, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_FORWARD_PASS, true);
+        
+        Shader_Use(&pass->lc.world_shader);
+
+        Shader_SetMat4(&pass->lc.world_shader, LC_WORLD_UNIFORM_MATRIX, pass->water.reflection_projView_matrix);
+        Shader_SetInt(&pass->lc.world_shader, LC_WORLD_UNIFORM_CHUNKOFFSET, 0);
+        Shader_SetFloaty(&pass->lc.world_shader, LC_WORLD_UNIFORM_CLIPDISTANCE, -LC_WORLD_WATER_HEIGHT);
 
         Render_OpaqueWorldChunks(true, 5);
+
         break;
     }
     case RPass__DEBUG_PASS:
@@ -522,28 +558,32 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
     unsigned shadow_data_offset = dA_size(drawData->lc_world.shadow_sorted_chunk_indexes);
 
     const int MAX_PARTICLE_SHADOW_SPLITS = 1; //adjust if needed
-
-    static float delta = 0;
-    static uint64_t prev_tick = 0;
-
-    if (Core_getTicks() != prev_tick)
-    {
-        delta += Core_getDeltaTime() * 0.5;
-        prev_tick = Core_getTicks();
-    }
   
-
     switch (rpass_state)
     {
     case RPass__DEPTH_PREPASS:
     {
         //Render world chunks
-        glUseProgram(pass->lc.depthPrepass_semi_transparents_shader);
-        Shader_SetFloat(pass->lc.depthPrepass_semi_transparents_shader, "frameTimeCounter", delta);
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_DEPTH_PASS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_SEMI_TRANSPARENT, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_TEXCOORDS, true);
+
+        Shader_Use(&pass->lc.world_shader);
+
         Render_SemiTransparentWorldChunks(true, 0);
+     
+        Shader_ResetDefines(&pass->scene.shader_3d_forward);
+        Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_TEXCOORD_ATTRIB, true);
+        Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_SEMI_TRANSPARENT_PASS, true);
+        Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_INSTANCE_MAT3, true);
+        Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_INSTANCE_UV, true);
+        Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_INSTANCE_CUSTOM, true);
+        Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_USE_TEXTURE_ARR, true);
+        Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_RENDER_DEPTH, true);
 
+        Shader_Use(&pass->scene.shader_3d_forward);
 
-        glUseProgram(drawData->particles.particle_depthPrepass_shader);
         glDisable(GL_CULL_FACE);
         Render_Particles();
         glEnable(GL_CULL_FACE);
@@ -552,12 +592,26 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
     }
     case RPass__GBUFFER:
     {
-        glUseProgram(pass->lc.transparents_gBuffer_shader);
-        Shader_SetFloat(pass->lc.transparents_gBuffer_shader, "frameTimeCounter", delta);
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_GBUFFER_PASS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_SEMI_TRANSPARENT, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_TEXCOORDS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_TBN_MATRIX, true);
+
+        Shader_Use(&pass->lc.world_shader);
         Render_SemiTransparentWorldChunks(true, 0);
         
+        Shader_ResetDefines(&pass->scene.shader_3d_deferred);
+        Shader_SetDefine(&pass->scene.shader_3d_deferred, SCENE_3D_DEFINE_TEXCOORD_ATTRIB, true);
+        Shader_SetDefine(&pass->scene.shader_3d_deferred, SCENE_3D_DEFINE_SEMI_TRANSPARENT_PASS, true);
+        Shader_SetDefine(&pass->scene.shader_3d_deferred, SCENE_3D_DEFINE_INSTANCE_MAT3, true);
+        Shader_SetDefine(&pass->scene.shader_3d_deferred, SCENE_3D_DEFINE_INSTANCE_UV, true);
+        Shader_SetDefine(&pass->scene.shader_3d_deferred, SCENE_3D_DEFINE_INSTANCE_CUSTOM, true);
+        Shader_SetDefine(&pass->scene.shader_3d_deferred, SCENE_3D_DEFINE_USE_TEXTURE_ARR, true);
+        Shader_SetDefine(&pass->scene.shader_3d_deferred, SCENE_3D_DEFINE_NORMAL_ATTRIB, true);
 
-        glUseProgram(drawData->particles.particle_gBuffer_shader);
+        Shader_Use(&pass->scene.shader_3d_deferred);
+
         glDisable(GL_CULL_FACE);
         Render_Particles();
         glEnable(GL_CULL_FACE);
@@ -566,17 +620,37 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
     }
     case RPass__SHADOW_MAPPING_SPLIT1:
     {
-        glUseProgram(pass->lc.transparents_shadow_map_shader);
-        Shader_SetMatrix4(pass->lc.transparents_shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[0]);
-        Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_transparent_offsets[0] + shadow_data_offset);
-        Shader_SetFloat(pass->lc.transparents_shadow_map_shader, "frameTimeCounter", delta);
-        Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_enableWave", 1);
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_DEPTH_PASS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_CHUNK_INDEX_USE_OFFSET, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_UNIFORM_MATRIX, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_SEMI_TRANSPARENT, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_TEXCOORDS, true);
+
+        Shader_Use(&pass->lc.world_shader);
+
+        Shader_SetMat4(&pass->lc.world_shader, LC_WORLD_UNIFORM_MATRIX, scene.scene_data.shadow_matrixes[0]);
+        Shader_SetInt(&pass->lc.world_shader, LC_WORLD_UNIFORM_CHUNKOFFSET, drawData->lc_world.shadow_sorted_chunk_transparent_offsets[0] + shadow_data_offset);
+
         Render_SemiTransparentWorldChunks(false, 1);
 
         if (allow_particle_shadows && MAX_PARTICLE_SHADOW_SPLITS >= 1)
         {
-            glUseProgram(drawData->particles.particle_shadow_map_shader);
-            Shader_SetMatrix4(drawData->particles.particle_shadow_map_shader, "u_cameraMatrix", scene.scene_data.shadow_matrixes[0]);
+
+            Shader_ResetDefines(&pass->scene.shader_3d_forward);
+            Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_TEXCOORD_ATTRIB, true);
+            Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_SEMI_TRANSPARENT_PASS, true);
+            Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_INSTANCE_MAT3, true);
+            Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_INSTANCE_UV, true);
+            Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_INSTANCE_CUSTOM, true);
+            Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_USE_TEXTURE_ARR, true);
+            Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_RENDER_DEPTH, true);
+            Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_BILLBOARD_SHADOWS, true);
+            Shader_SetDefine(&pass->scene.shader_3d_forward, SCENE_3D_DEFINE_USE_UNIFORM_CAMERA_MATRIX, true);
+            
+            Shader_Use(&pass->scene.shader_3d_forward);
+
+            Shader_SetMat4(&pass->scene.shader_3d_forward, SCENE_3D_UNIFORM_CAMERAMATRIX, scene.scene_data.shadow_matrixes[0]);
             Render_Particles();
         }
         break;
@@ -584,57 +658,63 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
     case RPass__SHADOW_MAPPING_SPLIT2:
     {
         //Render transparent world chunks
-        glUseProgram(pass->lc.transparents_shadow_map_shader);
-        Shader_SetMatrix4(pass->lc.transparents_shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[1]);
-        Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_transparent_offsets[1] + shadow_data_offset);
-        Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_enableWave", 1);
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_DEPTH_PASS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_CHUNK_INDEX_USE_OFFSET, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_UNIFORM_MATRIX, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_SEMI_TRANSPARENT, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_TEXCOORDS, true);
+
+        Shader_Use(&pass->lc.world_shader);
+
+        Shader_SetMat4(&pass->lc.world_shader, LC_WORLD_UNIFORM_MATRIX, scene.scene_data.shadow_matrixes[1]);
+        Shader_SetInt(&pass->lc.world_shader, LC_WORLD_UNIFORM_CHUNKOFFSET, drawData->lc_world.shadow_sorted_chunk_transparent_offsets[1] + shadow_data_offset);
+
         Render_SemiTransparentWorldChunks(false, 2);
 
-        if (allow_particle_shadows && MAX_PARTICLE_SHADOW_SPLITS >= 2)
-        {
-            glUseProgram(drawData->particles.particle_shadow_map_shader);
-            Shader_SetMatrix4(drawData->particles.particle_shadow_map_shader, "u_cameraMatrix", scene.scene_data.shadow_matrixes[1]);
-            Render_Particles();
-        }
-
+      
         break;
     }
     case RPass__SHADOW_MAPPING_SPLIT3:
     {
         //Render transparent world chunks
-        glUseProgram(pass->lc.transparents_shadow_map_shader);
-        Shader_SetMatrix4(pass->lc.transparents_shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[2]);
-        Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_transparent_offsets[2] + shadow_data_offset);
-        Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_enableWave", 0);
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_DEPTH_PASS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_CHUNK_INDEX_USE_OFFSET, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_UNIFORM_MATRIX, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_SEMI_TRANSPARENT, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_TEXCOORDS, true);
+
+        Shader_Use(&pass->lc.world_shader);
+
+        Shader_SetMat4(&pass->lc.world_shader, LC_WORLD_UNIFORM_MATRIX, scene.scene_data.shadow_matrixes[2]);
+        Shader_SetInt(&pass->lc.world_shader, LC_WORLD_UNIFORM_CHUNKOFFSET, drawData->lc_world.shadow_sorted_chunk_transparent_offsets[2] + shadow_data_offset);
+
         Render_SemiTransparentWorldChunks(false, 3);
 
         //Render other transparent stuff
-        if (allow_particle_shadows && MAX_PARTICLE_SHADOW_SPLITS >= 3)
-        {
-            glUseProgram(drawData->particles.particle_shadow_map_shader);
-            Shader_SetMatrix4(drawData->particles.particle_shadow_map_shader, "u_cameraMatrix", scene.scene_data.shadow_matrixes[2]);
-            Render_Particles();
-        }
-
+      
         break;
     }
     case RPass__SHADOW_MAPPING_SPLIT4:
     {
         //Render transparent world chunks
-        glUseProgram(pass->lc.transparents_shadow_map_shader);
-        Shader_SetMatrix4(pass->lc.transparents_shadow_map_shader, "u_matrix", scene.scene_data.shadow_matrixes[3]);
-        Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_dataOffset", drawData->lc_world.shadow_sorted_chunk_transparent_offsets[3] + shadow_data_offset);
-        Shader_SetInteger(pass->lc.transparents_shadow_map_shader, "u_enableWave", 0);
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_DEPTH_PASS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_CHUNK_INDEX_USE_OFFSET, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_UNIFORM_MATRIX, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_SEMI_TRANSPARENT, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_TEXCOORDS, true);
+
+        Shader_Use(&pass->lc.world_shader);
+
+        Shader_SetMat4(&pass->lc.world_shader, LC_WORLD_UNIFORM_MATRIX, scene.scene_data.shadow_matrixes[3]);
+        Shader_SetInt(&pass->lc.world_shader, LC_WORLD_UNIFORM_CHUNKOFFSET, drawData->lc_world.shadow_sorted_chunk_transparent_offsets[3] + shadow_data_offset);
+
         Render_SemiTransparentWorldChunks(false, 4);
 
         //Render other transparent stuff
-        if (allow_particle_shadows && MAX_PARTICLE_SHADOW_SPLITS >= 4)
-        {
-            glUseProgram(drawData->particles.particle_shadow_map_shader);
-            Shader_SetMatrix4(drawData->particles.particle_shadow_map_shader, "u_cameraMatrix", scene.scene_data.shadow_matrixes[3]);
-            Render_Particles();
-        }
-
+        
         break;
     }
     case RPass__REFLECTION_CLIP:
@@ -645,10 +725,19 @@ void Render_SemiOpaqueScene(RenderPassState rpass_state)
 
         glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
 
-        glUseProgram(pass->lc.clip_distance_shader);
-        Shader_SetMatrix4(pass->lc.clip_distance_shader, "u_matrix", pass->water.reflection_projView_matrix);
-        Shader_SetFloat(pass->lc.clip_distance_shader, "u_clipDistance", -LC_WORLD_WATER_HEIGHT);
-        Shader_SetInteger(pass->lc.clip_distance_shader, "u_dataOffset", drawData->lc_world.reflection_pass_chunk_indexes->elements_size);
+        Shader_ResetDefines(&pass->lc.world_shader);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_CHUNK_INDEX_USE_OFFSET, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_UNIFORM_MATRIX, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_TEXCOORDS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_USE_CLIP_DISTANCE, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_FORWARD_PASS, true);
+        Shader_SetDefine(&pass->lc.world_shader, LC_WORLD_DEFINE_SEMI_TRANSPARENT, true);
+
+        Shader_Use(&pass->lc.world_shader);
+
+        Shader_SetMat4(&pass->lc.world_shader, LC_WORLD_UNIFORM_MATRIX, pass->water.reflection_projView_matrix);
+        Shader_SetInt(&pass->lc.world_shader, LC_WORLD_UNIFORM_CHUNKOFFSET, drawData->lc_world.reflection_pass_chunk_indexes->elements_size);
+        Shader_SetFloaty(&pass->lc.world_shader, LC_WORLD_UNIFORM_CLIPDISTANCE, -LC_WORLD_WATER_HEIGHT);
 
         Render_SemiTransparentWorldChunks(true, 5);
         break;

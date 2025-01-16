@@ -1,16 +1,79 @@
+#ifndef LC_WORLD_H
+#define LC_WORLD_H
 #pragma once
 
-//#include "lc/lc_block_defs.h"
 #include "lc/lc_chunk.h"
+#include "lc/lc_common.h"
+
 #include "utility/Custom_Hashmap.h"
+#include "utility/dynamic_array.h"
 #include "utility/u_utility.h"
-#include "render/r_shader.h"
-#include "utility/forward_list.h"
-#include "physics/physics_world.h"
 #include "utility/BVH_Tree.h"
+#include "physics/physics_world.h"
 #include "render/r_texture.h"
 
-#define LC_WORLD_WATER_HEIGHT 12
+typedef struct
+{
+	DynamicRenderBuffer opaque_buffer;
+	DynamicRenderBuffer semi_transparent_buffer;
+	DynamicRenderBuffer water_buffer;
+
+	RenderStorageBuffer draw_cmds_buffer;
+	RenderStorageBuffer chunk_data_buffer;
+
+	BVH_Tree bvh_tree;
+
+	unsigned vao;
+	unsigned water_vao;
+	unsigned prev_in_frustrum_bitset_buffer;
+	unsigned visibles_sorted_buffer;
+	unsigned atomic_counters[3];
+	unsigned block_data_buffer;
+	unsigned draw_cmds_sorted_buffer;
+
+	R_Texture* texture_atlas;
+	R_Texture* texture_atlas_normals;
+	R_Texture* texture_atlas_mer;
+	R_Texture* texture_atlas_height;
+
+	R_Texture* water_displacement_texture;
+	R_Texture* gradient_map;
+} LC_WorldRenderData;
+
+typedef struct
+{
+	uint64_t seed;
+	CHMap chunk_map;
+	CHMap light_block_map;
+
+	size_t num_alive_chunks;
+
+	LC_WorldRenderData render_data;
+
+	dynamic_array* draw_cmd_backbuffer;
+
+	bool require_draw_cmd_update;
+	bool player_action_this_frame;
+	float time;
+
+	PhysicsWorld* phys_world;
+
+	bool creative_mode_on;
+} LC_World;
+
+typedef struct
+{
+	int chunk_data_index;
+	int opaque_index;
+	int transparent_index;
+	int water_index;
+} LC_TreeData;
+
+typedef struct
+{
+	vec4 min_point;
+	unsigned vis_flags;
+}  LC_ChunkData;
 
 typedef struct
 {
@@ -25,109 +88,33 @@ typedef struct
 	//WATER
 	unsigned w_count;
 	unsigned w_first;
-} CombinedChunkDrawCmdData;
+} LC_CombinedChunkDrawCmdData;
 
-
-typedef struct
-{
-	vec4 min_point;
-	unsigned vis_flags;
-}  ChunkData;
-
-typedef struct
-{
-	int chunk_data_index;
-	int opaque_index;
-	int transparent_index;
-	int water_index;
-} LCTreeData;
-
-typedef struct
-{
-	unsigned opaque_update_offset;
-	int opaque_update_move_by;
-
-	unsigned transparent_update_offset;
-	int transparent_update_move_by;
-
-	unsigned water_update_offset;
-	int water_update_move_by;
-
-	int skip_opaque_owner;
-	int skip_transparent_owner;
-	int skip_water_owner;
-
-	unsigned chunk_amount;
-} LC_WorldUniformBuffer;
-
-typedef struct
-{
-	DynamicRenderBuffer vertex_buffer;
-	DynamicRenderBuffer transparents_vertex_buffer;
-	DynamicRenderBuffer water_vertex_buffer;
-	RenderStorageBuffer draw_cmds_buffer;
-	RenderStorageBuffer chunk_data;
-	RenderStorageBuffer sorted_draw_cmds_buffer;
-	unsigned draw_cmds_counters_buffers[3];
-	unsigned block_data_buffer;
-	unsigned visibles_ssbo;
-	unsigned visibles_sorted_ssbo;
-	unsigned shadow_chunk_indexes_ssbo;
-	unsigned vao;
-	unsigned water_vao;
-		
-	int chunks_in_frustrum_count;
-
-	LC_WorldUniformBuffer ubo_data;
-	unsigned ubo_id;
-
-	R_Texture* texture_atlas;
-	R_Texture* texture_atlas_normals;
-	R_Texture* texture_atlas_mer;
-	R_Texture* texture_atlas_height;
-
-	R_Texture* texture_dudv;
-	R_Texture* water_normal_map;
-	R_Texture* water_displacement_texture;
-	R_Texture* water_noise_texture_1;
-	R_Texture* water_noise_texture_2;
-	R_Texture* gradient_map;
-	R_Texture* foam_map;
-	
-	BVH_Tree bvh_tree;
-} WorldRenderData;
-
-typedef struct
-{
-	PhysicsWorld* phys_world;
-	WorldRenderData render_data;
-	CHMap chunk_map;
-	CHMap light_hash_map;
-
-	size_t chunk_count;
-	size_t chunks_vertex_loaded;
-
-	size_t total_num_blocks;
-
-	dynamic_array* draw_cmds_backbuffer;
-} LC_World;
-
-
-void LC_World_Create(int p_initWidth, int p_initHeight, int p_initLength);
-void LC_World_Destruct();
 LC_Chunk* LC_World_GetChunk(float p_x, float p_y, float p_z);
-LC_Chunk* LC_World_GetChunkByIndex(size_t p_index);
-LC_Chunk* LC_World_GetChunkByNormalizedPosition(ivec3 pos);
 LC_Block* LC_World_GetBlock(float p_x, float p_y, float p_z, ivec3 r_relativePos, LC_Chunk** r_chunk);
-LC_Block* LC_World_getBlockByRay(vec3 from, vec3 dir, int p_maxSteps, ivec3 r_pos, ivec3 r_face, LC_Chunk** r_chunk);
-bool LC_World_addBlock(int p_gX, int p_gY, int p_gZ, ivec3 p_addFace, int p_bType);
+LC_Block* LC_World_getBlockByRay(vec3 from, vec3 dir, int max_steps, ivec3 r_pos, ivec3 r_face, LC_Chunk** r_chunk);
+bool LC_World_addBlock(int p_gX, int p_gY, int p_gZ, ivec3 p_addFace, LC_BlockType block_type);
 bool LC_World_mineBlock(int p_gX, int p_gY, int p_gZ);
-bool LC_World_setBlock(int p_gX, int p_gY, int p_gZ, LC_BlockType p_bType);
-int LC_World_calcWaterLevelFromPoint(float p_x, float p_y, float p_z);
-WorldRenderData* LC_World_getRenderData();
-size_t LC_World_GetChunkAmount();
-size_t LC_World_GetDrawCmdAmount();
+
+bool LC_World_ChunkExists(float p_x, float p_y, float p_z);
+void LC_World_UpdateChunk(LC_Chunk* const p_chunk, GeneratedChunkVerticesResult* vertices_result);
+void LC_World_UpdateChunkIndexes(LC_Chunk* const p_chunk);
+bool LC_World_UpdateChunkVertices(LC_Chunk* const p_chunk, GeneratedChunkVerticesResult* p_vertices_result);
+void LC_World_DeleteChunk(LC_Chunk* const p_chunk);
+
+void LC_World_Create(int x_chunks, int y_chunks, int z_chunks);
+void LC_World_Exit();
+
+void LC_World_StartFrame();
+void LC_World_EndFrame();
+
+LC_WorldRenderData* LC_World_getRenderData();
 PhysicsWorld* LC_World_GetPhysWorld();
-void LC_World_getSunDirection(vec3 v);
+
+int LC_World_calcWaterLevelFromPoint(float p_x, float p_y, float p_z);
+
+size_t LC_World_GetDrawCmdAmount();
 int LC_World_getPrevMinedBlockHP();
-void LC_World_Draw();
+bool LC_World_IsCreativeModeOn();
+
+#endif

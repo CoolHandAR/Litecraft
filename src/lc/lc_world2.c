@@ -1,17 +1,23 @@
-#include "lc_world2.h"
+#include "lc/lc_world.h"
 
 #include <Windows.h>
 #include <glad/glad.h>
+#include <time.h>
 
 #include "utility/u_math.h"
 #include "render/r_public.h"
 #include "core/core_common.h"
 #include "core/resource_manager.h"
-//#include "lc_chunk2.h"
+#include "core/cvar.h"
 
-#define LC_MAX_ACTIVE_TASKS 64
+#define LC_MAX_ACTIVE_TASKS 32
 
 extern void LC_Player_getPosition(vec3 dest);
+
+typedef struct
+{
+	Cvar* lc_static_world;
+} LC_WorldCvars;
 
 typedef enum
 {
@@ -47,12 +53,27 @@ typedef struct
 	float cooldown_timer;
 } LC_PrevMinedBlock;
 
+static LC_WorldCvars lc_cvars;
 static LC_World lc_world;
 static LC_TaskQueue lc_task_queue;
 static LC_Thread lc_thread;
 static LC_PrevMinedBlock lc_prev_mined_block;
 
-static bool player_action_this_frame;
+static void LC_World_UpdateDrawCmds()
+{
+	static int counter = 0;
+	if (lc_world.require_draw_cmd_update)
+	{
+		glNamedBufferSubData(lc_world.render_data.draw_cmds_buffer.buffer, 0,
+			dA_size(lc_world.draw_cmd_backbuffer) * sizeof(LC_CombinedChunkDrawCmdData), dA_getFront(lc_world.draw_cmd_backbuffer));
+
+		glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+
+		lc_world.require_draw_cmd_update = false;
+		counter++;
+		printf("draw cmd update %i \n", counter);
+	}
+}
 
 static LC_Chunk* LC_World_getNeighbourChunk(LC_Chunk* const p_chunk, int p_side)
 {
@@ -246,8 +267,9 @@ static void LC_World_CalcSunColor(float sun_angle, vec3 dest, float* r_ambientIn
 	float b = 0;
 	if (sun_angle > 0)
 	{
+		r = glm_lerp(0.0, 1.0, abs_angle);
 		g = glm_lerp(0.0, 1.0, abs_angle);
-		b = glm_lerp(0.0, 0.5, abs_angle);
+		b = glm_lerp(0.0, 0.8, abs_angle);
 	}
 	else
 	{
@@ -260,7 +282,7 @@ static void LC_World_CalcSunColor(float sun_angle, vec3 dest, float* r_ambientIn
 	dest[1] = g;
 	dest[2] = b;
 
-	*r_ambientIntensity = glm_lerp(0.0, 10, abs_angle);
+	*r_ambientIntensity = glm_lerp(0.0, 7, abs_angle);
 
 	//its night
 	if (sun_angle < 0)
@@ -349,9 +371,9 @@ static void LC_World_ThreadProcess()
 
 		if (task->status == LC_TASK_STATUS__READY)
 		{
-			WaitForSingleObject(lc_thread.mutex_handle, INFINITY);
+			//WaitForSingleObject(lc_thread.mutex_handle, INFINITY);
 
-			lc_thread.mutex_handle = CreateMutex(NULL, true, "LC_MUTEX");
+			//lc_thread.mutex_handle = CreateMutex(NULL, true, "LC_MUTEX");
 
 			//set status
 			task->status = LC_TASK_STATUS__WORKING;
@@ -362,7 +384,7 @@ static void LC_World_ThreadProcess()
 			//generate vertices
 			if (task->chunk.alive_blocks > 0)
 			{
-				//task->vertices_result = LC_Chunk_GenerateVerticesTest(&task->chunk);
+				//task->vertices_result = LC_Chunk_GenerateVertices(&task->chunk);
 			}
 		
 			//set as completed
@@ -370,7 +392,7 @@ static void LC_World_ThreadProcess()
 
 			if (lc_thread.mutex_handle)
 			{
-				ReleaseMutex(lc_thread.mutex_handle);
+				//ReleaseMutex(lc_thread.mutex_handle);
 			}
 		}
 
@@ -381,13 +403,6 @@ static void LC_World_ThreadProcess()
 static bool LC_World_CreateChunkAsync(int p_x, int p_y, int p_z)
 {	
 	bool result = false;
-
-	if (WaitForSingleObject(lc_thread.mutex_handle, 0.01) == WAIT_TIMEOUT)
-	{
-		return false;
-	}
-	
-	lc_thread.mutex_handle = CreateMutex(NULL, true, "LC_MUTEX");
 
 	LC_Task* task = &lc_task_queue.task_list[lc_task_queue.lookup_index];
 
@@ -403,11 +418,6 @@ static bool LC_World_CreateChunkAsync(int p_x, int p_y, int p_z)
 
 	lc_task_queue.lookup_index = (lc_task_queue.lookup_index + 1) % LC_MAX_ACTIVE_TASKS;
 
-	if (lc_thread.mutex_handle)
-	{
-		ReleaseMutex(lc_thread.mutex_handle);
-	}
-	
 	return result;
 }
 
@@ -417,12 +427,12 @@ static void LC_World_ProcessTaskQueue()
 	{
 		return;
 	}
-	if (WaitForSingleObject(lc_thread.mutex_handle, 0.01) == WAIT_TIMEOUT)
-	{
-		return;
-	}
+	//if (WaitForSingleObject(lc_thread.mutex_handle, 0.01) == WAIT_TIMEOUT)
+	//{
+	//	return;
+	//}
 
-	lc_thread.mutex_handle = CreateMutex(NULL, true, "LC_MUTEX");
+	//lc_thread.mutex_handle = CreateMutex(NULL, true, "LC_MUTEX");
 
 	for (int i = 0; i < LC_MAX_ACTIVE_TASKS; i++)
 	{
@@ -438,14 +448,18 @@ static void LC_World_ProcessTaskQueue()
 				task->status = LC_TASK_STATUS__INACTIVE;
 				continue;
 			}
-
 			if (task->chunk.alive_blocks <= 0)
 			{
 				task->status = LC_TASK_STATUS__INACTIVE;
 				continue;
 			}
 
-			if (task->chunk.alive_blocks > 0 && !player_action_this_frame)
+			if (!task->vertices_result)
+			{
+				//continue;
+			}
+
+			if (task->chunk.alive_blocks > 0 && !lc_world.player_action_this_frame)
 			{
 				//GeneratedChunkVerticesResult* result = LC_Chunk_GenerateVerticesTest(chunk);
 				LC_World_UpdateChunk(chunk, NULL);
@@ -458,7 +472,7 @@ static void LC_World_ProcessTaskQueue()
 	}
 	if (lc_thread.mutex_handle)
 	{
-		ReleaseMutex(lc_thread.mutex_handle);
+		//ReleaseMutex(lc_thread.mutex_handle);
 	}
 }
 
@@ -486,15 +500,17 @@ static void LC_World_IterateChunks()
 		ivec3 normalized_chunk_pos;
 		LC_getNormalizedChunkPosition(chunk->global_position[0], chunk->global_position[1], chunk->global_position[2], normalized_chunk_pos);
 
-		bool deleted = false;
-		//Delete chunk if it falls outside the min and max
-		if (normalized_chunk_pos[0] < min_max_bounds[0][0] || normalized_chunk_pos[0] > min_max_bounds[1][0] || normalized_chunk_pos[1] < min_max_bounds[0][1] || normalized_chunk_pos[1] > min_max_bounds[1][1]
-			|| normalized_chunk_pos[2] < min_max_bounds[0][2] || normalized_chunk_pos[2] > min_max_bounds[1][2])
+		if (lc_cvars.lc_static_world->int_value == 0)
 		{
-			LC_World_DeleteChunk(chunk);
-			//deleted = true;
+			//Delete chunk if it falls outside the min and max
+			if (normalized_chunk_pos[0] < min_max_bounds[0][0] || normalized_chunk_pos[0] > min_max_bounds[1][0] || normalized_chunk_pos[1] < min_max_bounds[0][1] || normalized_chunk_pos[1] > min_max_bounds[1][1]
+				|| normalized_chunk_pos[2] < min_max_bounds[0][2] || normalized_chunk_pos[2] > min_max_bounds[1][2])
+			{
+				LC_World_DeleteChunk(chunk);
+				continue;
+			}
 		}
-		else if (lc_world.require_draw_cmd_update && chunk->draw_cmd_index >= 0)
+		if (lc_world.require_draw_cmd_update && chunk->draw_cmd_index >= 0)
 		{
 			LC_CombinedChunkDrawCmdData* cmd = dA_at(lc_world.draw_cmd_backbuffer, chunk->draw_cmd_index);
 
@@ -887,7 +903,7 @@ bool LC_World_addBlock(int p_gX, int p_gY, int p_gZ, ivec3 p_addFace, LC_BlockTy
 		lc_world.num_alive_chunks++;
 	}
 
-	player_action_this_frame = true;
+	lc_world.player_action_this_frame = true;
 
 	return true;
 }
@@ -944,7 +960,7 @@ bool LC_World_mineBlock(int p_gX, int p_gY, int p_gZ)
 		lc_prev_mined_block.block = NULL;
 		lc_prev_mined_block.hp = LC_BLOCK_STARTING_HP;
 
-		player_action_this_frame = true;
+		lc_world.player_action_this_frame = true;
 	}
 
 	return true;
@@ -980,7 +996,7 @@ void LC_World_UpdateChunk(LC_Chunk* const p_chunk, GeneratedChunkVerticesResult*
 		}
 		else
 		{
-			vertices = LC_Chunk_GenerateVerticesTest(p_chunk);
+			vertices = LC_Chunk_GenerateVertices(p_chunk);
 		}
 	}
 	if (LC_World_UpdateChunkVertices(p_chunk, vertices))
@@ -1307,12 +1323,6 @@ void LC_World_DeleteChunk(LC_Chunk* const p_chunk)
 static void LC_World_SetupGLBindingPoints()
 {
 	glBindBufferBase(GL_UNIFORM_BUFFER, 5, lc_world.render_data.block_data_buffer);
-
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 15, lc_world.render_data.chunk_data_buffer.buffer);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 16, lc_world.render_data.draw_cmds_buffer.buffer);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 17, lc_world.render_data.visibles_sorted_buffer);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 19, lc_world.render_data.visibles_buffer);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 20, lc_world.render_data.draw_cmds_sorted_buffer);
 }
 
 void LC_World_Create(int x_chunks, int y_chunks, int z_chunks)
@@ -1321,6 +1331,16 @@ void LC_World_Create(int x_chunks, int y_chunks, int z_chunks)
 	memset(&lc_task_queue, 0, sizeof(lc_task_queue));
 	memset(&lc_thread, 0, sizeof(lc_thread));
 	memset(&lc_prev_mined_block, 0, sizeof(lc_prev_mined_block));
+	memset(&lc_cvars, 0, sizeof(lc_cvars));
+
+	lc_cvars.lc_static_world = Cvar_Register("lc_static_world", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+
+	lc_world.seed = 2;
+	Math_srand(lc_world.seed);
+
+	LC_Generate_SetSeed(lc_world.seed);
+
+	RScene_SetNightTexture(Resource_get("assets/cubemaps/hdr/night_sky.hdr", RESOURCE__TEXTURE_HDR));
 
 	//init the phys world
 	lc_world.phys_world = PhysicsWorld_Create(1.1);
@@ -1375,8 +1395,8 @@ void LC_World_Create(int x_chunks, int y_chunks, int z_chunks)
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lc_world.render_data.visibles_sorted_buffer);
 	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned) * LC_WORLD_MAX_CHUNK_LIMIT * 10, NULL, GL_STREAM_DRAW);
 
-	glGenBuffers(1, &lc_world.render_data.visibles_buffer);
-	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lc_world.render_data.visibles_buffer);
+	glGenBuffers(1, &lc_world.render_data.prev_in_frustrum_bitset_buffer);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lc_world.render_data.prev_in_frustrum_bitset_buffer);
 	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned) * (LC_WORLD_MAX_CHUNK_LIMIT), NULL, GL_STREAM_DRAW);
 
 	for (int i = 0; i < 3; i++)
@@ -1388,7 +1408,7 @@ void LC_World_Create(int x_chunks, int y_chunks, int z_chunks)
 
 	glGenBuffers(1, &lc_world.render_data.draw_cmds_sorted_buffer);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lc_world.render_data.draw_cmds_sorted_buffer);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(LC_CombinedChunkDrawCmdData) * (LC_WORLD_MAX_CHUNK_LIMIT * 10000), NULL, GL_STATIC_DRAW);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(LC_CombinedChunkDrawCmdData) * (LC_WORLD_MAX_CHUNK_LIMIT * 5), NULL, GL_STATIC_DRAW);
 
 	lc_world.render_data.block_data_buffer = LC_generateBlockInfoGLBuffer();
 
@@ -1409,7 +1429,7 @@ void LC_World_Create(int x_chunks, int y_chunks, int z_chunks)
 				//add to the hash map
 				if (stack_chunk.alive_blocks > 0)
 				{	
-					printf("Generated chunk: %i :opaque blocks, %i :transparent blocks %i water blocks\n", stack_chunk.opaque_blocks, stack_chunk.transparent_blocks, stack_chunk.water_blocks);
+					//printf("Generated chunk: %i :opaque blocks, %i :transparent blocks %i water blocks\n", stack_chunk.opaque_blocks, stack_chunk.transparent_blocks, stack_chunk.water_blocks);
 
 					LC_Chunk* chunk = LC_World_InsertChunk(&stack_chunk, x * LC_CHUNK_WIDTH, y * LC_CHUNK_HEIGHT, z * LC_CHUNK_LENGTH);
 					if (chunk)
@@ -1423,22 +1443,6 @@ void LC_World_Create(int x_chunks, int y_chunks, int z_chunks)
 		}
 	}
 
-	for (int x = 0; x < x_chunks; x++)
-	{
-		for (int z = 0; z < z_chunks; z++)
-		{
-			for (int y = 0; y < y_chunks; y++)
-			{
-				LC_Chunk* chunk = LC_World_GetChunk(x * LC_CHUNK_WIDTH, y * LC_CHUNK_HEIGHT, z * LC_CHUNK_LENGTH);
-
-				if (chunk && chunk->water_blocks > 0)
-				{
-					LC_World_FloodWater(chunk);
-					LC_World_UpdateChunk(chunk, NULL);
-				}
-			}
-		}
-	}
 
 
 	DRB_WriteDataToGpu(&lc_world.render_data.opaque_buffer);
@@ -1533,6 +1537,8 @@ void LC_World_Exit()
 	DRB_Destruct(&lc_world.render_data.water_buffer);
 	RSB_Destruct(&lc_world.render_data.draw_cmds_buffer);
 	RSB_Destruct(&lc_world.render_data.chunk_data_buffer);
+
+	BVH_Tree_Destruct(&lc_world.render_data.bvh_tree);
 }
 
 
@@ -1544,10 +1550,13 @@ void LC_World_StartFrame()
 	LC_World_UpdateWorldEnviroment();
 	
 	//create chunks nearby player
-	LC_World_CreateNearbyChunks();
-	
-	//process finished tasks
-	LC_World_ProcessTaskQueue();
+	if (lc_cvars.lc_static_world->int_value == 0)
+	{
+		LC_World_CreateNearbyChunks();
+
+		//process finished tasks
+		LC_World_ProcessTaskQueue();
+	}
 
 	//remove far away chunks and update the draw cmd backbuffer
 	LC_World_IterateChunks();
@@ -1568,26 +1577,9 @@ void LC_World_EndFrame()
 	DRB_WriteDataToGpu(&lc_world.render_data.semi_transparent_buffer);
 	DRB_WriteDataToGpu(&lc_world.render_data.water_buffer);
 
-	static int t = 0;
-	if (lc_world.require_draw_cmd_update)
-	{
+	LC_World_UpdateDrawCmds();
 
-		
-
-		glNamedBufferSubData(lc_world.render_data.draw_cmds_buffer.buffer, 0,
-			dA_size(lc_world.draw_cmd_backbuffer) * sizeof(LC_CombinedChunkDrawCmdData), dA_getFront(lc_world.draw_cmd_backbuffer));
-
-		
-
-		glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
-
-
-		lc_world.require_draw_cmd_update = false;
-		t++;
-		printf("draw cmd update %i \n", t);
-	}
-
-	player_action_this_frame = false;
+	lc_world.player_action_this_frame = false;
 }
 
 LC_WorldRenderData* LC_World_getRenderData()

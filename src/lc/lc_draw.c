@@ -4,11 +4,12 @@ Process all draw calls, UI drawing associated with the game
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
 
-#include "core/core_common.h"
 #include <cglm/cglm.h>
-#include "lc_core.h"
+
+#include "core/core_common.h"
 #include "core/resource_manager.h"
-#include "lc/lc_world2.h"
+#include "lc/lc_core.h"
+#include "lc/lc_world.h"
 
 extern NK_Data nk;
 
@@ -148,22 +149,22 @@ void LC_Draw_Hotbar(LC_Hotbar* const hotbar, int block_amounts[LC_BT__MAX])
 	float y_position = LC_BASE_RESOLUTION_HEIGHT - 35;
 	float scale = 2;
 	
-	R_Texture* gui_texture = Resource_get("assets/ui/gui_atlas.png", RESOURCE__TEXTURE);
+	R_Texture* gui_texture = Resource_get("assets/ui/hotbar.png", RESOURCE__TEXTURE);
 
 	M_Rect2Df texture_region;
 	texture_region.width = 182;
 	texture_region.height = 22;
-	texture_region.x = 48;
-	texture_region.y = 606;
+	texture_region.x = 24;
+	texture_region.y = 0;
 
 	Draw_ScreenTexture(gui_texture, &texture_region, x_position, y_position, scale, scale, 0);
 
 	texture_region.width = 24;
 	texture_region.height = 24;
-	texture_region.x = 24;
-	texture_region.y = 604;
+	texture_region.x = 207;
+	texture_region.y = 1;
 
-	Draw_ScreenTexture(gui_texture, &texture_region, (x_position - 160) + (40 * hotbar->active_index), y_position - 1, scale, scale, 0);
+	Draw_ScreenTexture(gui_texture, &texture_region, (x_position - 160) + (40 * hotbar->active_index), y_position + 1, scale, scale, 0);
 
 	R_Texture* block_atlas_texture = Resource_get("assets/cube_textures/simple_block_atlas.png", RESOURCE__TEXTURE);
 
@@ -205,7 +206,7 @@ void LC_Draw_Inventory(LC_BlockType blocks[21][6], int block_amounts[LC_BT__MAX]
 	Draw_ScreenTexture(Resource_get("assets/ui/new_inventory.png", RESOURCE__TEXTURE), NULL, x_position, y_position, 3, 3, 0);
 
 	const int NUM_X_TILES = 20;
-	const int NUM_Y_TILES = 5;
+	const int NUM_Y_TILES = 2;
 
 	const float X_OFFSET = 100;
 	const float Y_OFFSET = 195;

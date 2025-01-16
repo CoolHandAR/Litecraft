@@ -1,3 +1,5 @@
+#ifndef OBJECT_POOL_H
+#define OBJECT_POOL_H
 #pragma once
 
 #include "utility/dynamic_array.h"
@@ -17,3 +19,5 @@ unsigned Object_Pool_Request(Object_Pool* const p_pool);
 void Object_Pool_Free(Object_Pool* const p_pool, unsigned p_index, bool p_zeroMem);
 void Object_Pool_ClearAll(Object_Pool* const p_pool);
 void Object_Pool_Destruct(Object_Pool* p_pool);
+
+#endif // !OBJECT_POOL_H
