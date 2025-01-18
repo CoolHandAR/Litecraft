@@ -1,6 +1,9 @@
 # Litecraft
 
 ## A simple "recreation" of minecraft in c and openGL.
+https://www.youtube.com/watch?v=M8mwkadGiJQ
+
+## Video
 
 ## Renderer
 The renderer uses deferred shading. This allows to handle way more lights than a forward one would.
