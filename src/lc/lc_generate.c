@@ -86,9 +86,13 @@ static LC_BlockType LC_GenerateBlockBasedOnBiome(LC_BiomeType2 biome, float p_x,
 	}
 	case LC_Biome_RockyMountains:
 	{
-		if (both > 35)
+		if (both > 5)
 		{
 			return  LC_BT__STONE;
+		}
+		else if (both > 4)
+		{
+			return LC_BT__SNOW;
 		}
 		else
 		{
@@ -122,24 +126,6 @@ static LC_BlockType LC_GenerateBlockBasedOnBiome(LC_BiomeType2 biome, float p_x,
 	}
 
 	return LC_BT__GRASS;
-}
-static bool LC_Chunk_CanTreeGrowInto(LC_BlockType p_bt)
-{
-	switch (p_bt)
-	{
-	case LC_BT__NONE:
-	case LC_BT__TREELEAVES:
-	case LC_BT__GRASS:
-	case LC_BT__DIRT:
-	case LC_BT__TRUNK:
-	{
-		return true;
-	}
-	default:
-		break;
-	}
-
-	return false;
 }
 
 void LC_GenerateAdditionalBlocks(LC_Chunk* _chunk, int p_x, int p_y, int p_z, int p_gX, int p_gY, int p_gZ)
@@ -300,6 +286,8 @@ LC_BlockType LC_Generate_Block(float p_x, float p_y, float p_z)
 	if (block == LC_BT__STONE)
 	{
 		LC_BiomeType2 biome = LC_DetermineBiome(p_x, p_y, p_z);
+
+		biome = LC_Biome_GrassyPlains;
 
 		block = LC_GenerateBlockBasedOnBiome(biome, p_x, p_y, p_z);
 	}

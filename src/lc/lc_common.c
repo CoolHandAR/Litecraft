@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <glad/glad.h>
+#include <string.h>
 
 static void LC_AssertBoundType(uint8_t block_type)
 {

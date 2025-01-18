@@ -1,0 +1,30 @@
+#define CHUNK_WIDTH 16
+#define CHUNK_HEIGHT 16
+#define CHUNK_LENGTH 16
+
+#define CHUNK_FLAG_VISIBLE uint(1)
+#define CHUNK_FLAG_IN_FRUSTRUM uint(2)
+#define CHUNK_FLAG_PREV_VISIBLE uint(4)
+
+
+struct ChunkData
+{
+    vec4 min_point;
+    uint vis_flags;
+};
+
+struct BlockMaterialData
+{
+	int texture_offsets[6];
+    float position_offset;
+};
+
+layout (shared, binding = 5) uniform BlockDataBuffer
+{
+    BlockMaterialData data[25];
+} block_info;
+
+layout (std430, binding = 13) restrict buffer ChunkDataBuffer
+{
+    ChunkData data[];
+} chunk_data;

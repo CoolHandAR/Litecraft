@@ -448,7 +448,7 @@ static bool Init_GeneralPassData()
 {
     bool result;
     
-    pass->general.blur_shader = Shader_ComputeCreate("assets/shaders/screen/box_blur.comp", 0, BOX_BLUR_UNIFORM_MAX, 1, NULL, BOX_BLUR_UNIFORMS_STR, BOX_BLUR_TEXTURES_STR, &result);
+    pass->general.blur_shader = Shader_ComputeCreate("shaders/screen/box_blur.comp", 0, BOX_BLUR_UNIFORM_MAX, 1, NULL, BOX_BLUR_UNIFORMS_STR, BOX_BLUR_TEXTURES_STR, &result);
 
     glGenFramebuffers(1, &pass->general.halfsize_fbo);
     glGenTextures(1, &pass->general.depth_halfsize_texture);
@@ -485,11 +485,11 @@ static bool Init_GeneralPassData()
 static bool Init_PostProcessData()
 {
     bool result;
-    pass->post.post_process_shader = Shader_PixelCreate("assets/shaders/screen/base_screen.vert", "assets/shaders/screen/post_process.frag", POST_PROCESS_DEFINE_MAX, POST_PROCESS_UNIFORM_MAX
+    pass->post.post_process_shader = Shader_PixelCreate("shaders/screen/base_screen.vert", "shaders/screen/post_process.frag", POST_PROCESS_DEFINE_MAX, POST_PROCESS_UNIFORM_MAX
         , 4, POST_PROCESS_DEFINES_STR, POST_PROCESS_UNIFORMS_STR, POST_PROCESS_TEXTURES_STR, &result);
 
     bool result2;
-    pass->post.debug_shader = Shader_PixelCreate("assets/shaders/screen/base_screen.vert", "assets/shaders/screen/debug_screen.frag", 0, DEBUG_SCREEN_UNIFORM_MAX, 5, NULL, DEBUG_SCREEN_UNIFORMS_STR, DEBUG_SCREEN_TEXTURES_STR, &result2);
+    pass->post.debug_shader = Shader_PixelCreate("shaders/screen/base_screen.vert", "shaders/screen/debug_screen.frag", 0, DEBUG_SCREEN_UNIFORM_MAX, 5, NULL, DEBUG_SCREEN_UNIFORMS_STR, DEBUG_SCREEN_TEXTURES_STR, &result2);
 
     return result && result2;
 }
@@ -518,16 +518,16 @@ static bool Init_LCSpecificData()
 
 
     bool result = false;
-    pass->lc.world_shader = Shader_PixelCreate("assets/shaders/lc_world/lc_world.vert", "assets/shaders/lc_world/lc_world.frag", LC_WORLD_DEFINE_MAX, LC_WORLD_UNIFORM_MAX, 6, LC_WORLD_DEFINES_STR, LC_WORLD_UNIFORMS_STR, LC_WORLD_TEXTURES_STR, &result);
+    pass->lc.world_shader = Shader_PixelCreate("shaders/lc_world/lc_world.vert", "shaders/lc_world/lc_world.frag", LC_WORLD_DEFINE_MAX, LC_WORLD_UNIFORM_MAX, 6, LC_WORLD_DEFINES_STR, LC_WORLD_UNIFORMS_STR, LC_WORLD_TEXTURES_STR, &result);
     
     bool result2 = false;
-    pass->lc.occlusion_box_shader = Shader_PixelCreate("assets/shaders/lc_world/lc_occlusion_boxes.vert", "assets/shaders/lc_world/lc_occlusion_boxes.frag", 0, 0, 0, NULL, NULL, NULL, &result2);
+    pass->lc.occlusion_box_shader = Shader_PixelCreate("shaders/lc_world/lc_occlusion_boxes.vert", "shaders/lc_world/lc_occlusion_boxes.frag", 0, 0, 0, NULL, NULL, NULL, &result2);
 
     bool result3 = false;
-    pass->lc.water_shader = Shader_PixelCreate("assets/shaders/lc_world/lc_water.vert", "assets/shaders/lc_world/lc_water.frag", 0, 0, 6, NULL, NULL, LC_WATER_TEXTURES_STR, &result3);
+    pass->lc.water_shader = Shader_PixelCreate("shaders/lc_world/lc_water.vert", "shaders/lc_world/lc_water.frag", 0, 0, 6, NULL, NULL, LC_WATER_TEXTURES_STR, &result3);
 
     bool result4 = false;
-    pass->lc.process_chunks_shader = Shader_ComputeCreate("assets/shaders/lc_world/process_chunks.comp", 0, 0, 0, NULL, NULL, NULL, &result4);
+    pass->lc.process_chunks_shader = Shader_ComputeCreate("shaders/lc_world/process_chunks.comp", 0, PROCESS_CHUNKS_UNIFORM_MAX, 0, NULL, PROCESS_CHUNKS_UNIFORMS_STR, NULL, &result4);
 
     return result && result2 && result3 && result4;
 }
@@ -535,7 +535,7 @@ static bool Init_LCSpecificData()
 static bool Init_DeferredData()
 {
     bool result;
-    pass->deferred.shading_shader = Shader_PixelCreate("assets/shaders/screen/base_screen.vert", "assets/shaders/screen/deferred_scene.frag", DEFERRED_SCENE_DEFINE_MAX, DEFERRED_SCENE_UNIFORM_MAX, 9, 
+    pass->deferred.shading_shader = Shader_PixelCreate("shaders/screen/base_screen.vert", "shaders/screen/deferred_scene.frag", DEFERRED_SCENE_DEFINE_MAX, DEFERRED_SCENE_UNIFORM_MAX, 9, 
         DEFERRED_SCENE_DEFINES_STR, DEFERRED_SCENE_UNIFORMS_STR, DEFERRED_SCENE_TEXTURES_STR, &result);
 
     //SETUP FRAMEBUFFER AND TEXTURES
@@ -595,13 +595,13 @@ static bool Init_MainSceneData()
     assert(pass->deferred.depth_texture > 0 && "Init deferred first");
     
     bool result;
-    pass->scene.shader_3d_forward = Shader_PixelCreate("assets/shaders/scene_3d.vert", "assets/shaders/scene_3d_forward.frag", SCENE_3D_DEFINE_MAX, SCENE_3D_UNIFORM_MAX, 2, SCENE_3D_DEFINES_STR, SCENE_3D_UNIFORMS_STR, SCENE_3D_TEXTURES_STR, &result);
+    pass->scene.shader_3d_forward = Shader_PixelCreate("shaders/scene_3d.vert", "shaders/scene_3d_forward.frag", SCENE_3D_DEFINE_MAX, SCENE_3D_UNIFORM_MAX, 2, SCENE_3D_DEFINES_STR, SCENE_3D_UNIFORMS_STR, SCENE_3D_TEXTURES_STR, &result);
 
     bool result2;
-    pass->scene.shader_3d_deferred = Shader_PixelCreate("assets/shaders/scene_3d.vert", "assets/shaders/scene_3d_deferred.frag", SCENE_3D_DEFINE_MAX, SCENE_3D_UNIFORM_MAX, 2, SCENE_3D_DEFINES_STR, SCENE_3D_UNIFORMS_STR, SCENE_3D_TEXTURES_STR, &result2);
+    pass->scene.shader_3d_deferred = Shader_PixelCreate("shaders/scene_3d.vert", "shaders/scene_3d_deferred.frag", SCENE_3D_DEFINE_MAX, SCENE_3D_UNIFORM_MAX, 2, SCENE_3D_DEFINES_STR, SCENE_3D_UNIFORMS_STR, SCENE_3D_TEXTURES_STR, &result2);
 
     bool result3;
-    pass->scene.screen_shader = Shader_PixelCreate("assets/shaders/screen/screen_shader.vert", "assets/shaders/screen/screen_shader.frag", 0, SCREEN_SHADER_UNIFORM_MAX, 1, NULL, SCREEN_SHADER_UNIFORMS_STR, SCREEN_SHADER_TEXTURES_STR, &result3);
+    pass->scene.screen_shader = Shader_PixelCreate("shaders/screen/screen_shader.vert", "shaders/screen/screen_shader.frag", 0, SCREEN_SHADER_UNIFORM_MAX, 1, NULL, SCREEN_SHADER_UNIFORMS_STR, SCREEN_SHADER_TEXTURES_STR, &result3);
 
     glGenFramebuffers(1, &pass->scene.FBO);
 
@@ -635,7 +635,7 @@ static bool Init_AoData()
 {
     //SETUP SHADER
     bool result;
-    pass->ao.shader = Shader_ComputeCreate("assets/shaders/screen/ssao.comp", SSAO_DEFINE_MAX, SSAO_UNIFORM_MAX, 7, SSAO_DEFINES_STR, SSAO_UNIFORMS_STR, SSAO_TEXTURES_STR, &result);
+    pass->ao.shader = Shader_ComputeCreate("shaders/screen/ssao.comp", SSAO_DEFINE_MAX, SSAO_UNIFORM_MAX, 7, SSAO_DEFINES_STR, SSAO_UNIFORMS_STR, SSAO_TEXTURES_STR, &result);
 
     //SETUP TEXTURES 
     glGenTextures(1, &pass->ao.ao_texture);
@@ -683,7 +683,7 @@ static bool Init_AoData()
 static bool Init_BloomData()
 {
     bool result;
-    pass->bloom.shader = Shader_PixelCreate("assets/shaders/screen/base_screen.vert", "assets/shaders/screen/bloom.frag", BLOOM_DEFINE_MAX, BLOOM_UNIFORM_MAX, 1, BLOOM_DEFINES_STR, BLOOM_UNIFORMS_STR, BLOOM_TEXTURES_STR, &result);
+    pass->bloom.shader = Shader_PixelCreate("shaders/screen/base_screen.vert", "shaders/screen/bloom.frag", BLOOM_DEFINE_MAX, BLOOM_UNIFORM_MAX, 1, BLOOM_DEFINES_STR, BLOOM_UNIFORMS_STR, BLOOM_TEXTURES_STR, &result);
 
     glGenFramebuffers(1, &pass->bloom.FBO);
     glBindFramebuffer(GL_FRAMEBUFFER, pass->bloom.FBO);
@@ -726,7 +726,7 @@ static bool Init_BloomData()
 static bool Init_DofData()
 {
     bool result;
-    pass->dof.shader = Shader_ComputeCreate("assets/shaders/screen/dof.comp", DOF_DEFINE_MAX, DOF_UNIFORM_MAX, 3, DOF_DEFINES_STR, DOF_UNIFORMS_STR, DOF_TEXTURES_STR, &result);
+    pass->dof.shader = Shader_ComputeCreate("shaders/screen/dof.comp", DOF_DEFINE_MAX, DOF_UNIFORM_MAX, 3, DOF_DEFINES_STR, DOF_UNIFORMS_STR, DOF_TEXTURES_STR, &result);
 
     glGenTextures(1, &pass->dof.dof_texture);
 
@@ -744,10 +744,10 @@ static bool Init_IBLData()
 {
     //SETUP SHADERS
     bool result;
-    pass->ibl.brdf_shader = Shader_PixelCreate("assets/shaders/screen/base_screen.vert", "assets/shaders/screen/brdf.frag", 0, BRDF_UNIFORM_MAX, 0, NULL, BRDF_UNIFORMS_STR, NULL, &result);
+    pass->ibl.brdf_shader = Shader_PixelCreate("shaders/screen/base_screen.vert", "shaders/screen/brdf.frag", 0, BRDF_UNIFORM_MAX, 0, NULL, BRDF_UNIFORMS_STR, NULL, &result);
 
     bool result2;
-    pass->ibl.cubemap_shader = Shader_PixelCreate("assets/shaders/cubemap/cubemap.vert", "assets/shaders/cubemap/cubemap.frag", CUBEMAP_DEFINE_MAX, CUBEMAP_UNIFORM_MAX, 4, CUBEMAP_DEFINES_STR, CUBEMAP_UNIFORMS_STR, CUBEMAP_TEXTURES_STR, &result2);
+    pass->ibl.cubemap_shader = Shader_PixelCreate("shaders/cubemap/cubemap.vert", "shaders/cubemap/cubemap.frag", CUBEMAP_DEFINE_MAX, CUBEMAP_UNIFORM_MAX, 4, CUBEMAP_DEFINES_STR, CUBEMAP_UNIFORMS_STR, CUBEMAP_TEXTURES_STR, &result2);
     
     pass->ibl.env_size = 512;
     pass->ibl.irr_size = 32;
@@ -930,7 +930,7 @@ static void Init_ShadowMappingData()
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    float z_far = 1500;
+    float z_far = 500;
 
     pass->shadow.cascade_levels[0] = z_far / 350.0f;
     pass->shadow.cascade_levels[1] = z_far / 180.0f;
@@ -987,7 +987,7 @@ static void Init_WaterData()
 static bool Init_GodrayData()
 {
     bool result;
-    pass->godray.shader = Shader_ComputeCreate("assets/shaders/screen/godray.comp", GODRAY_DEFINE_MAX, GODRAY_UNIFORM_MAX, 4, GODRAY_DEFINES_STR, GODRAY_UNIFORMS_STR, GODRAY_TEXTURES_STR, &result);
+    pass->godray.shader = Shader_ComputeCreate("shaders/screen/godray.comp", GODRAY_DEFINE_MAX, GODRAY_UNIFORM_MAX, 4, GODRAY_DEFINES_STR, GODRAY_UNIFORMS_STR, GODRAY_TEXTURES_STR, &result);
 
     glGenTextures(1, &pass->godray.godray_fog_texture);
     glGenTextures(1, &pass->godray.back_texture);

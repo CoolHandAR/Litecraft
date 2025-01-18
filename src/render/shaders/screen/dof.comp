@@ -1,0 +1,211 @@
+#version 460 core
+
+#include "../scene_incl.incl"
+#include "../shader_commons.incl"
+
+//adapted from https://github.com/godotengine/godot/blob/master/servers/rendering/renderer_rd/shaders/effects/bokeh_dof.glsl
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+uniform sampler2D depth_texture;
+
+#ifdef COC_PASS
+layout(rgba16f, binding = 0) restrict uniform image2D cocImage;
+#endif
+
+#if defined(BOKEH_CIRCULAR) || defined(BOKEH_BOX)
+uniform sampler2D scene_texture;
+layout(rgba16f, binding = 0) writeonly restrict uniform image2D blurImage;
+#endif
+
+#ifdef COMPOSITE
+uniform sampler2D blur_texture;
+layout(rgba16f, binding = 0) restrict uniform image2D sceneImage;
+#endif
+
+uniform vec2 u_viewportSize;
+
+uniform bool u_nearBlurEnabled = false;
+uniform float u_nearBegin = 0;
+uniform float u_nearEnd = 2;
+
+uniform bool u_farBlurEnabled = true;
+uniform float u_farBegin = 12;
+uniform float u_farEnd = 24;
+
+uniform float u_blur_size = 32;
+uniform float u_blur_scale = 1.0;
+
+uniform int u_blur_steps = 12;
+uniform bool u_second_Pass = false;
+
+
+const float GOLDEN_ANGLE = 2.39996323;
+
+float get_blur_size(float depth, float center_depth)
+{	
+    float near_end = u_nearBegin - u_nearEnd;
+	float far_end = u_farBegin + u_farEnd;
+
+	if(depth < u_nearBegin)
+	{
+		if(u_nearBlurEnabled)
+		{
+			return -(1.0 - smoothstep(near_end, u_nearBegin, depth)) * u_blur_size; // Near blur is negative.
+		}
+	}
+	if(depth > u_farBegin)
+	{
+		if(u_farBlurEnabled)
+		{
+			return smoothstep(u_farBegin, far_end, abs(depth - center_depth)) * u_blur_size;	
+		}
+	}
+
+	return 0.0;
+}
+
+void main()
+{
+	const ivec2 iCoords = ivec2(gl_GlobalInvocationID.xy);
+
+    //Make sure we are not processing more than we need to
+    if (any(greaterThanEqual(iCoords, u_viewportSize))) 
+    { 
+		return;
+	}
+
+	vec2 coords = (vec2(iCoords) / u_viewportSize);
+	vec2 pixel_size = 1.0 / u_viewportSize;
+	
+#ifdef COC_PASS 
+    coords += pixel_size * 0.5;
+	float depth = texture(depth_texture, coords).r;
+	depth = linearizeDepth(depth, cam.z_near, cam.z_far);
+
+	float center_depth = texture(depth_texture, vec2(0.5)).r;
+	center_depth = linearizeDepth(center_depth, cam.z_near, cam.z_far);
+	center_depth = clamp(center_depth, 0.0, 35.0);
+
+	float coc = get_blur_size(depth, center_depth);
+
+	vec4 src_color = imageLoad(cocImage, iCoords);
+	src_color.a = coc;
+
+	imageStore(cocImage, iCoords, src_color);
+#endif
+	
+#ifdef BOKEH_CIRCULAR
+	
+	pixel_size *= 0.5;
+
+	coords += pixel_size * 0.5;
+
+	vec4 scene_color = texture(scene_texture, coords);
+	float init_blur = scene_color.a;
+
+	vec4 color_accum = scene_color;
+	float accum = 1.0;
+
+	float radius = u_blur_scale;
+	
+	for(float ang = 0.0; radius < u_blur_size; ang += GOLDEN_ANGLE)
+	{
+		vec2 uv_of = coords + vec2(cos(ang), sin(ang)) * pixel_size * radius;
+
+		vec4 sample_color = texture(scene_texture, uv_of);
+	
+		float limit = abs(sample_color.a);
+
+		if(sample_color.a > init_blur)
+		{
+			limit = clamp(limit, 0.0, abs(init_blur) * 2.0);
+		}
+
+		float m = smoothstep(radius - 0.5, radius + 0.5, limit);
+		color_accum += mix(color_accum / accum, sample_color, m);
+		accum += 1.0;
+
+		radius += u_blur_scale / radius;
+	}
+
+	color_accum = color_accum / accum;
+	imageStore(blurImage, iCoords, color_accum);
+#endif
+
+#ifdef BOKEH_BOX
+	
+	vec2 blur_dir = (u_second_Pass ? vec2(0.0, 1.0) : vec2(1.0, 0.0));
+
+	coords += pixel_size * 0.5;
+
+	blur_dir *= pixel_size;
+	
+	vec4 scene_color = texture(scene_texture, coords);	
+	vec4 color_accum = scene_color;
+
+	float blur_scale = u_blur_size / float(u_blur_steps);
+	float total = 1.0;
+
+	for(int i = -u_blur_steps; i <= u_blur_steps; i++)
+	{	
+		if(i == 0)
+		{
+			continue;
+		}
+
+		float radius = float(i) * blur_scale;
+
+		vec2 uv_of = coords + blur_dir * radius;
+
+		radius = abs(radius);
+
+		vec4 sample_color = texture(scene_texture, uv_of);
+
+		float limit = 0;
+
+		if(sample_color.a < scene_color.a)
+		{
+			limit = abs(sample_color.a);
+		}
+		else
+		{
+			limit = abs(scene_color.a);
+		}
+
+		float m = smoothstep(radius - 0.5, radius + 0.5, limit);
+
+		color_accum += mix(scene_color, sample_color, m);
+
+		total += 1.0;
+	}
+
+	color_accum = color_accum / total;
+	imageStore(blurImage, iCoords, color_accum);
+
+#endif
+	
+#ifdef COMPOSITE
+	coords += pixel_size * 0.5;
+
+	vec4 scene_color = imageLoad(sceneImage, iCoords);
+	vec4 blur_color = texture(blur_texture, coords);
+
+	float mix_amount = 0;
+
+	if(blur_color.a < scene_color.a)
+	{
+		mix_amount = min(1.0, max(0.0, max(abs(scene_color.a), abs(blur_color.a))));
+	}
+	else 
+	{
+		mix_amount = min(1.0, max(0.0, abs(scene_color.a)));
+	}
+
+	scene_color.rgb = mix(scene_color.rgb, blur_color.rgb, mix_amount);
+
+	scene_color.a = 0;
+	imageStore(sceneImage, iCoords, scene_color);
+
+#endif
+}

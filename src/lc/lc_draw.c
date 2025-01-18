@@ -206,7 +206,7 @@ void LC_Draw_Inventory(LC_BlockType blocks[21][6], int block_amounts[LC_BT__MAX]
 	Draw_ScreenTexture(Resource_get("assets/ui/new_inventory.png", RESOURCE__TEXTURE), NULL, x_position, y_position, 3, 3, 0);
 
 	const int NUM_X_TILES = 20;
-	const int NUM_Y_TILES = 2;
+	const int NUM_Y_TILES = 5;
 
 	const float X_OFFSET = 100;
 	const float Y_OFFSET = 195;

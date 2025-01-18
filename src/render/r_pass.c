@@ -91,16 +91,11 @@ static void Pass_DepthPrepass()
 {
 	glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
 
-	glDrawBuffer(GL_NONE);
-
 	//draw opaque scene
 	Render_OpaqueScene(RPass__DEPTH_PREPASS);
 
 	//draw semi opaque scene
 	Render_SemiOpaqueScene(RPass__DEPTH_PREPASS);
-
-	static const ATTACHMENTS[3] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2 };
-	glDrawBuffers(3, ATTACHMENTS);
 
 	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 }

@@ -116,11 +116,11 @@ bool Core_init()
 	if (!Input_Init()) return false;
 	if (!Renderer_Init(0, 0))
 	{
-		MessageBox(NULL, (LPCWSTR)L"Failed to load renderer shaders.\nMake sure there is asset folder", (LPCWSTR)L"Failure to load!", MB_ICONWARNING);
+		MessageBox(NULL, (LPCWSTR)L"Failed to load renderer shaders.\nMake sure there is shader folder", (LPCWSTR)L"Failure to load!", MB_ICONWARNING);
 
 		return false;
 	}
-	if (!ThreadCore_Init()) return false;
+	//if (!ThreadCore_Init()) return false;
 	if (!Con_Init()) return false;
 	
 	Init_setGLStates();
@@ -132,7 +132,7 @@ bool Core_init()
 
 void Core_Exit()
 {
-	ThreadCore_Cleanup();
+	//ThreadCore_Cleanup();
 	glfwTerminate();
 	Sound_Cleanup();
 	Cvar_Cleanup();

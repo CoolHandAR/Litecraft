@@ -239,9 +239,9 @@ int LC_Init()
 	lc_core_data.cam = Camera_Init();
 	Camera_setCurrent(&lc_core_data.cam);
 
-	const int X_CHUNKS = 8;
+	const int X_CHUNKS = 16;
 	const int Y_CHUNKS = 8;
-	const int Z_CHUNKS = 8;
+	const int Z_CHUNKS = 16;
 
 	LC_World_Create(X_CHUNKS, Y_CHUNKS, Z_CHUNKS);
 

@@ -17,6 +17,8 @@ extern void LC_Player_getPosition(vec3 dest);
 typedef struct
 {
 	Cvar* lc_static_world;
+	Cvar* lc_dynamic_weather;
+	Cvar* lc_creative;
 } LC_WorldCvars;
 
 typedef enum
@@ -326,6 +328,11 @@ static void LC_World_CalculateEnvColor(float sun_angle, vec3 sky, vec3 sky_horiz
 
 static void LC_World_UpdateWorldEnviroment()
 {
+	if (lc_cvars.lc_dynamic_weather->int_value == 0)
+	{
+		return;
+	}
+
 	static const vec3 axis = { 1, 1, 1 };
 
 	//Calculate sun angle
@@ -1334,6 +1341,8 @@ void LC_World_Create(int x_chunks, int y_chunks, int z_chunks)
 	memset(&lc_cvars, 0, sizeof(lc_cvars));
 
 	lc_cvars.lc_static_world = Cvar_Register("lc_static_world", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+	lc_cvars.lc_dynamic_weather = Cvar_Register("lc_dynamic_weather", "0", NULL, CVAR__SAVE_TO_FILE, 0, 1);
+	lc_cvars.lc_creative = Cvar_Register("lc_creative", "1", NULL, CVAR__SAVE_TO_FILE, 0, 1);
 
 	lc_world.seed = 2;
 	Math_srand(lc_world.seed);
@@ -1393,7 +1402,7 @@ void LC_World_Create(int x_chunks, int y_chunks, int z_chunks)
 
 	glGenBuffers(1, &lc_world.render_data.visibles_sorted_buffer);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lc_world.render_data.visibles_sorted_buffer);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned) * LC_WORLD_MAX_CHUNK_LIMIT * 10, NULL, GL_STREAM_DRAW);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(unsigned) * LC_WORLD_MAX_CHUNK_LIMIT * 100, NULL, GL_STREAM_DRAW);
 
 	glGenBuffers(1, &lc_world.render_data.prev_in_frustrum_bitset_buffer);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lc_world.render_data.prev_in_frustrum_bitset_buffer);
@@ -1408,7 +1417,7 @@ void LC_World_Create(int x_chunks, int y_chunks, int z_chunks)
 
 	glGenBuffers(1, &lc_world.render_data.draw_cmds_sorted_buffer);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lc_world.render_data.draw_cmds_sorted_buffer);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(LC_CombinedChunkDrawCmdData) * (LC_WORLD_MAX_CHUNK_LIMIT * 5), NULL, GL_STATIC_DRAW);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(LC_CombinedChunkDrawCmdData) * (LC_WORLD_MAX_CHUNK_LIMIT * 10), NULL, GL_STATIC_DRAW);
 
 	lc_world.render_data.block_data_buffer = LC_generateBlockInfoGLBuffer();
 
@@ -1495,12 +1504,6 @@ void LC_World_Create(int x_chunks, int y_chunks, int z_chunks)
 	{
 		return false;
 	}
-	lc_thread.mutex_handle = CreateMutex(NULL, false, "LC_MUTEX");
-
-	if (!lc_thread.mutex_handle)
-	{
-		return false;
-	}
 
 	lc_world.creative_mode_on = true;
 
@@ -1516,11 +1519,7 @@ void LC_World_Exit()
 	{
 		CloseHandle(lc_thread.win_handle);
 	}
-	if (lc_thread.mutex_handle)
-	{
-		CloseHandle(lc_thread.mutex_handle);
-	}
-	
+
 	PhysicsWorld_Destruct(lc_world.phys_world);
 
 	//destruct the chunk hash map
@@ -1544,8 +1543,9 @@ void LC_World_Exit()
 
 
 void LC_World_StartFrame()
-{
-	//lc_world.require_draw_cmd_update = true;
+{	
+	lc_world.creative_mode_on = lc_cvars.lc_creative->int_value;
+
 	//update scene enviroment, sun, sky color, etc..
 	LC_World_UpdateWorldEnviroment();
 	
@@ -1568,7 +1568,7 @@ void LC_World_StartFrame()
 
 	if (lc_prev_mined_block.cooldown_timer > 0.3)
 	{
-		lc_prev_mined_block.hp = 7;
+		lc_prev_mined_block.hp = LC_BLOCK_STARTING_HP;
 	}
 }
 void LC_World_EndFrame()

@@ -354,7 +354,6 @@ static ma_sound* PL_getStepSound()
 		return NULL;
 	}
 	case LC_BT__CACTUS:
-	case LC_BT__SNOWYLEAVES:
 	case LC_BT__TREELEAVES:
 	case LC_BT__FLOWER:
 	case LC_BT__GRASS_PROP:
@@ -391,7 +390,9 @@ static ma_sound* PL_getStepSound()
 
 		return lc_resources.gravel_step_sounds[player.step_sound_index];
 	}
+	case LC_BT__SNOWYLEAVES:
 	case LC_BT__SNOW:
+	case LC_BT__GRASS_SNOW:
 	case LC_BT__OBSIDIAN:
 	case LC_BT__IRON:
 	case LC_BT__DIAMOND:
@@ -403,10 +404,8 @@ static ma_sound* PL_getStepSound()
 		{
 			return NULL;
 		}
-		float t = 0.4;
 
-
-		player.step_sound_timer = t;
+		player.step_sound_timer = 0.4;
 		player.step_sound_index = (player.step_sound_index + 1) % 5;
 
 		return lc_resources.stone_step_sounds[player.step_sound_index];
@@ -467,6 +466,7 @@ static ma_sound* PL_getDigSound(LC_BlockType block_type, bool place_destroy)
 		return lc_resources.sand_step_sounds[player.dig_sound_index];
 	}
 	case LC_BT__SNOW:
+	case LC_BT__GRASS_SNOW:
 	case LC_BT__OBSIDIAN:
 	case LC_BT__IRON:
 	case LC_BT__DIAMOND:

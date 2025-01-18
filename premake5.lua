@@ -23,7 +23,8 @@ project "Litecraft"
       symbols "On"
       postbuildcommands 
       { 
-      	 	"{COPYDIR} %[assets] %[bin/Debug/assets]",
+      	 	"{COPYDIR} %[shaders] %[bin/Debug/shaders]",
+		"{COPYDIR} %[assets] %[bin/Debug/assets]",
 		"{COPYFILE} %[LC_Readme.txt] %[bin/Debug/LC_Readme.txt]",
       }
 
@@ -33,6 +34,7 @@ project "Litecraft"
       optimize "On"
       postbuildcommands 
       { 
+		"{COPYDIR} %[shaders] %[bin/Release/shaders]",
       	 	"{COPYDIR} %[assets] %[bin/Release/assets]",
 		"{COPYFILE} %[LC_Readme.txt] %[bin/Release/LC_Readme.txt]",
       }

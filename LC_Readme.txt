@@ -9,6 +9,7 @@ I = OPEN INVENTORY
 TAB = CONSOLE
 P = OPEN RENDERER PANEL
 F6 = TOGGLE FULLSCREEN
+F = TOGGLE FREEFLY
 
 Inventory
 Open with I then, select on a desired block and press 0-9 to assign to a slot

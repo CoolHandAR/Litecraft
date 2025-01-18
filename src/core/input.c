@@ -3,7 +3,6 @@
 #include <string.h>
 #include <GLFW/glfw3.h>
 #include <math.h>
-#include <cJSON/cJSON.h>
 #include <stdio.h>
 
 #include "utility/u_utility.h"

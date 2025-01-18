@@ -158,7 +158,7 @@ static void Render_OpaqueWorldChunks(bool p_TextureDraw, int mode)
     //hacky but, add little so that won't cause popups 
     if (max_chunk_render_amount > 0)
     {
-        max_chunk_render_amount += 20;
+        max_chunk_render_amount += 5;
     }
 
     if (p_TextureDraw)
@@ -247,7 +247,7 @@ static void Render_SemiTransparentWorldChunks(bool p_TextureDraw, int mode)
     //hacky but, add little so that won't cause popups 
     if (max_chunk_render_amount > 0)
     {
-        max_chunk_render_amount += 20;
+        max_chunk_render_amount += 5;
     }
 
     glBindVertexArray(drawData->lc_world.world_render_data->vao);
@@ -319,7 +319,7 @@ void Render_WorldWaterChunks()
 
     if (max_chunk_render_amount > 0)
     {
-        max_chunk_render_amount += 20;
+        max_chunk_render_amount += 5;
     }
 
     Shader_Use(&pass->lc.water_shader);
@@ -381,6 +381,8 @@ static void Compute_WorldChunks()
     drawData->lc_world.world_render_data = LC_World_getRenderData();
 
     Shader_Use(&pass->lc.process_chunks_shader);
+
+    Shader_SetInt(&pass->lc.process_chunks_shader, PROCESS_CHUNKS_UNIFORM_TOTALCHUNKAMOUNT, chunk_amount);
 
     for (int i = 0; i < 3; i++)
     {
