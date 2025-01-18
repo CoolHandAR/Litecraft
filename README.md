@@ -22,7 +22,7 @@ Assets are not my own. Block assets are taken from https://minecraftrtx.net/ and
 Other additional items like sounds and misc are sourced from https://mcasset.cloud/.
 
 ## Building
-You need visual studio 2022 to build. You also need glfw3.lib which you can get from https://www.glfw.org/download.html. Place glfw3.lib in the lib folder,
+You need visual studio 2022 to build. You also need glfw3.lib which you can get from https://www.glfw.org/download.html. Create a lib folder and place glfw3.lib in the lib folder,
 run build_vs2022.bat, go to build/Litecraft and run the solution. Build in either debug or release. Go to bin/release/ and run the exe. The asset and shader folders should be
 copied automatically after building, if it doesn't, copy it manually.
 
