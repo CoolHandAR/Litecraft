@@ -10,6 +10,8 @@ INIT GAME RESOURCES, GAME WORLD, PHYSICS WORLD, ETC...
 #include "lc/lc_core.h"
 #include "render/r_public.h"
 
+#include <string.h>
+
 
 LC_ResourceList lc_resources;
 LC_SoundGroups lc_sound_groups;
@@ -111,7 +113,7 @@ void Init_SoundGroups()
 {
 	memset(&lc_sound_groups, 0, sizeof(lc_sound_groups));
 
-	Sound_createGroup(0, &lc_sound_groups.step);
+	//Sound_createGroup(0, &lc_sound_groups.step);
 }
 
 void Process_ParticleCollideWithWorld(ParticleCpu* const particle, ParticleEmitterSettings* const emitter, float local_delta)
